@@ -56,6 +56,8 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 - [ ] schema reflects the union of indexed fields
 - [ ] delete docs → deleted count; delete index (destructive)
 - [ ] namespace isolation via X-Namespace / ?namespace=
+- [ ] listNamespaces returns namespaces with live indexes (default namespace as "")
+- [ ] invalid namespace (NUL via %00, >100 bytes, non-ASCII) → 400 INVALID_ARGUMENT
 
 ## Channel
 

@@ -48,6 +48,13 @@ export class SearchClient {
     });
   }
 
+  /** Distinct namespaces with live indexes — alphabetical, `q` substring search,
+   * `limit` default 50 (max 100). Instance-wide (not bound to this client's
+   * namespace); the default namespace appears as `""`. */
+  async listNamespaces(opts: { q?: string; limit?: number } = {}): Promise<{ namespaces: string[]; has_more: boolean }> {
+    return this.http.request("GET", `${this.base}/namespaces`, { query: { q: opts.q, limit: opts.limit } });
+  }
+
   /** Delete an index and all its documents. Requires a `full` grant. */
   async deleteIndex(name: string): Promise<{ deleted: boolean }> {
     return this.http.request("DELETE", `${this.base}/indexes/${seg(name)}`, { headers: this.headers() });

@@ -3,6 +3,7 @@ package search
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -22,6 +23,7 @@ func NewHandler(reg *control.Registry, a *auth.Store, mgr *Manager) *Handler {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	p := "/v1/search/{instance}"
+	mux.HandleFunc("GET "+p+"/namespaces", common.Wrap(h.listNamespaces))
 	mux.HandleFunc("GET "+p+"/indexes", common.Wrap(h.listIndexes))
 	mux.HandleFunc("GET "+p+"/indexes/{index}/schema", common.Wrap(h.schema))
 	mux.HandleFunc("DELETE "+p+"/indexes/{index}", common.Wrap(h.dropIndex))
@@ -46,6 +48,9 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	if ns == "" {
 		ns = r.Header.Get("X-Namespace")
 	}
+	if err := validateNamespace(ns); err != nil {
+		return nil, err
+	}
 	stemming := true
 	if v, ok := inst.Config["stemming"].(bool); ok {
 		stemming = v
@@ -59,6 +64,56 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	// service applies instance config.
 	store.ApplyConfig(inst.Config)
 	return store, nil
+}
+
+// validateNamespace enforces the hosted API's namespace rules: printable ASCII,
+// at most 100 bytes; "" (the default namespace) is allowed. Everything keyed on
+// (namespace, name) NUL-joins the pair, so a namespace may never contain NUL.
+func validateNamespace(ns string) error {
+	if ns == "" {
+		return nil
+	}
+	if len(ns) > 100 {
+		return common.BadRequest("namespace must be at most 100 bytes")
+	}
+	for i := 0; i < len(ns); i++ {
+		if ns[i] < 0x20 || ns[i] > 0x7e {
+			return common.BadRequest("namespace must contain only printable ASCII characters")
+		}
+	}
+	return nil
+}
+
+// GET /namespaces — distinct namespaces with live indexes, alphabetical, `q`
+// substring search, `limit` (default 50, max 100). Mirrors datastore's listing.
+func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request) error {
+	name := r.PathValue("instance")
+	id, err := h.Auth.Resolve(r)
+	if err != nil {
+		return err
+	}
+	if err := auth.Require(id, "search", name, auth.Read); err != nil {
+		return err
+	}
+	inst := h.Reg.GetOrCreate("search", name)
+	all := h.Mgr.Namespaces(inst.ID)
+	q := r.URL.Query().Get("q")
+	limit := 50
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v >= 1 && v <= 100 {
+		limit = v
+	}
+	matched := make([]string, 0, len(all))
+	for _, ns := range all {
+		if q == "" || strings.Contains(ns, q) {
+			matched = append(matched, ns)
+		}
+	}
+	hasMore := len(matched) > limit
+	if hasMore {
+		matched = matched[:limit]
+	}
+	common.WriteJSON(w, 200, map[string]any{"namespaces": matched, "has_more": hasMore})
+	return nil
 }
 
 func (h *Handler) listIndexes(w http.ResponseWriter, r *http.Request) error {

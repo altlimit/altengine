@@ -112,7 +112,25 @@ describe("search index management", () => {
     expect(await idx.get("only")).toBeNull();
     const { indexes } = await other.listIndexes();
     expect(indexes.some((ix) => ix.name === "products")).toBe(true);
+
+    // listNamespaces sees both the default namespace ("") and the new one.
+    const page = await s.listNamespaces({ limit: 100 });
+    expect(page.namespaces).toContain(other.namespace);
+    expect(page.namespaces).toContain("");
+    const filtered = await s.listNamespaces({ q: other.namespace.slice(0, 8) });
+    expect(filtered.namespaces).toContain(other.namespace);
+
     if (destructiveOk()) await other.deleteIndex("products");
+  });
+
+  it("rejects invalid namespaces with 400 INVALID_ARGUMENT", async () => {
+    // Via ?namespace= (listIndexes) — a query param survives URL-encoding for all
+    // three cases, including the NUL byte a header could never carry.
+    for (const bad of ["a\u0000b", "x".repeat(101), "café"]) {
+      const err = await s.withNamespace(bad).listIndexes().catch((e) => e);
+      expect(err.status, `namespace ${JSON.stringify(bad)}`).toBe(400);
+      expect(err.code).toBe("INVALID_ARGUMENT");
+    }
   });
 
   it("lists indexes and deletes documents", async () => {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,12 +41,45 @@ var (
 type Manager struct {
 	mu     sync.Mutex
 	dbs    map[string]*sql.DB
+	seen   map[string]map[string]bool // instanceID -> namespaces opened
 	dir    string
 	memory bool
 }
 
 func NewManager(dir string) *Manager {
-	return &Manager{dbs: map[string]*sql.DB{}, dir: dir, memory: dir == ""}
+	return &Manager{dbs: map[string]*sql.DB{}, seen: map[string]map[string]bool{}, dir: dir, memory: dir == ""}
+}
+
+// Namespaces lists namespaces known for an instance (opened this session, plus, in
+// file mode, any *.db already on disk). Mirrors the hosted service's
+// GET /v1/search/{instance}/namespaces (registry of namespaces with live indexes).
+func (m *Manager) Namespaces(instanceID string) []string {
+	m.mu.Lock()
+	set := map[string]bool{}
+	for ns := range m.seen[instanceID] {
+		set[ns] = true
+	}
+	m.mu.Unlock()
+	if !m.memory {
+		instDir := filepath.Join(m.dir, "search", sanitize(instanceID))
+		if entries, err := os.ReadDir(instDir); err == nil {
+			for _, e := range entries {
+				if n := e.Name(); strings.HasSuffix(n, ".db") {
+					ns := strings.TrimSuffix(n, ".db")
+					if ns == "_default" {
+						ns = ""
+					}
+					set[ns] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for ns := range set {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
 }
 
 var sanitizeRe = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
@@ -61,6 +95,10 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := instanceID + "\x00" + namespace
+	if m.seen[instanceID] == nil {
+		m.seen[instanceID] = map[string]bool{}
+	}
+	m.seen[instanceID][namespace] = true
 	if db, ok := m.dbs[key]; ok {
 		return db, nil
 	}
