@@ -1,0 +1,55 @@
+# Publish @altengine/sdk to npm when a js/vX.Y.Z tag is pushed. The tag must match
+# js/package.json's version. Uses npm provenance (OIDC) — requires the package to
+# allow publishing from this repo/workflow on npmjs.com.
+name: Publish JS SDK
+
+on:
+  push:
+    tags:
+      - "js/v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Assert tag matches package.json version
+        working-directory: js
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#js/v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag js/v$TAG_VERSION != package.json $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install
+        working-directory: js
+        run: npm ci
+      - name: Build
+        working-directory: js
+        run: npm run build
+      - name: Test
+        working-directory: js
+        run: npm test
+      - name: Publish
+        working-directory: js
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

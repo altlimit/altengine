@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>altengine — local console</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">⚙</span>
+      <div>
+        <strong>altengine</strong>
+        <span class="sub">local emulator console</span>
+      </div>
+    </div>
+    <nav class="tabs" id="nav" aria-label="Services">
+      <button data-view="overview" class="tab active">Overview</button>
+      <button data-view="datastore" class="tab">Datastore</button>
+      <button data-view="search" class="tab">Search</button>
+      <button data-view="channels" class="tab">Channels</button>
+      <button data-view="keys" class="tab">API keys</button>
+    </nav>
+  </header>
+
+  <main id="main" tabindex="-1"></main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

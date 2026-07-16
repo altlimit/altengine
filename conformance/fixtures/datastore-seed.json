@@ -1,0 +1,89 @@
+{
+  "description": "Shared datastore seed: todos with owners, done flags, priorities, and nested tags.",
+  "collection": "todos",
+  "documents": [
+    {
+      "key": "t1",
+      "data": {
+        "title": "ship SDK",
+        "owner": "ana",
+        "done": false,
+        "priority": 1,
+        "meta": {
+          "tag": "work"
+        }
+      }
+    },
+    {
+      "key": "t2",
+      "data": {
+        "title": "write docs",
+        "owner": "ana",
+        "done": true,
+        "priority": 2,
+        "meta": {
+          "tag": "work"
+        }
+      }
+    },
+    {
+      "key": "t3",
+      "data": {
+        "title": "buy milk",
+        "owner": "bo",
+        "done": false,
+        "priority": 3,
+        "meta": {
+          "tag": "home"
+        }
+      }
+    },
+    {
+      "key": "t4",
+      "data": {
+        "title": "fix bug",
+        "owner": "bo",
+        "done": false,
+        "priority": 4,
+        "meta": {
+          "tag": "work"
+        }
+      }
+    },
+    {
+      "key": "t5",
+      "data": {
+        "title": "water plants",
+        "owner": "cy",
+        "done": true,
+        "priority": 2,
+        "meta": {
+          "tag": "home"
+        }
+      }
+    }
+  ],
+  "owners": [
+    {
+      "key": "ana",
+      "data": {
+        "name": "Ana",
+        "team": "eng"
+      }
+    },
+    {
+      "key": "bo",
+      "data": {
+        "name": "Bo",
+        "team": "eng"
+      }
+    },
+    {
+      "key": "cy",
+      "data": {
+        "name": "Cy",
+        "team": "ops"
+      }
+    }
+  ]
+}

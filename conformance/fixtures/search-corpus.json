@@ -1,0 +1,180 @@
+{
+  "description": "Shared search corpus: products with text/atom/number/date/geo fields and facets.",
+  "documents": [
+    {
+      "id": "p1",
+      "rank": 100,
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "value": "Blue Suede Shoes"
+        },
+        {
+          "name": "desc",
+          "type": "html",
+          "value": "<b>Classic</b> footwear in blue suede"
+        },
+        {
+          "name": "sku",
+          "type": "atom",
+          "value": "BS-001"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 59
+        },
+        {
+          "name": "added",
+          "type": "date",
+          "value": "2026-01-05T00:00:00Z"
+        },
+        {
+          "name": "store",
+          "type": "geo",
+          "value": {
+            "lat": 37.77,
+            "lng": -122.41
+          }
+        },
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        }
+      ],
+      "facets": [
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 59
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "rank": 90,
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "value": "Red Running Shoes"
+        },
+        {
+          "name": "sku",
+          "type": "atom",
+          "value": "RR-002"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 120
+        },
+        {
+          "name": "added",
+          "type": "date",
+          "value": "2026-02-10T00:00:00Z"
+        },
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        }
+      ],
+      "facets": [
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 120
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "rank": 80,
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "value": "Leather Wallet"
+        },
+        {
+          "name": "sku",
+          "type": "atom",
+          "value": "LW-003"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 35
+        },
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "accessories"
+        }
+      ],
+      "facets": [
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "accessories"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 35
+        }
+      ]
+    },
+    {
+      "id": "p4",
+      "rank": 70,
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "value": "Blue Canvas Shoes"
+        },
+        {
+          "name": "sku",
+          "type": "atom",
+          "value": "BC-004"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 45
+        },
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        }
+      ],
+      "facets": [
+        {
+          "name": "category",
+          "type": "atom",
+          "value": "shoes"
+        },
+        {
+          "name": "price",
+          "type": "number",
+          "value": 45
+        }
+      ]
+    }
+  ]
+}

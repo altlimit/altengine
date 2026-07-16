@@ -1,0 +1,129 @@
+import { Http, seg } from "../http.js";
+import type {
+  AggregateRequest,
+  AggregateResult,
+  CreateIndexRequest,
+  DatastoreDocument,
+  IndexSpec,
+  Key,
+  NamespacesPage,
+  PutDocument,
+  QueryRequest,
+  QueryResult,
+  TransactionResult,
+  TxnOp,
+} from "./types.js";
+import { AltEngineError } from "../errors.js";
+
+export interface DatastoreOptions {
+  /** Namespace bound to this client (default `""`). */
+  namespace?: string;
+}
+
+/** Client for one datastore instance, bound to a namespace. */
+export class DatastoreClient {
+  readonly instance: string;
+  readonly namespace: string;
+  /** Namespace administration for the whole instance (not namespace-bound). */
+  readonly namespaces: NamespaceAdmin;
+  private readonly http: Http;
+  private readonly base: string;
+  private readonly nsBase: string;
+
+  constructor(http: Http, instance: string, opts: DatastoreOptions = {}) {
+    this.http = http;
+    this.instance = instance;
+    this.namespace = opts.namespace ?? "";
+    this.base = `/v1/datastore/${seg(instance)}`;
+    this.nsBase = `${this.base}/namespaces/${seg(this.namespace)}`;
+    this.namespaces = new NamespaceAdmin(http, this.base);
+  }
+
+  /** Same instance, different namespace. */
+  withNamespace(namespace: string): DatastoreClient {
+    return new DatastoreClient(this.http, this.instance, { namespace });
+  }
+
+  /** Upsert up to 500 documents; returns their keys in order. */
+  async put<T>(collection: string, documents: PutDocument<T>[]): Promise<{ keys: string[] }> {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents`, {
+      body: { documents },
+    });
+  }
+
+  /** Fetch one document, or `null` when it doesn't exist. */
+  async get<T = unknown>(collection: string, key: Key): Promise<DatastoreDocument<T> | null> {
+    try {
+      const res = await this.http.request<{ document: DatastoreDocument<T> }>(
+        "GET",
+        `${this.nsBase}/collections/${seg(collection)}/documents/${seg(key)}`
+      );
+      return res.document;
+    } catch (err) {
+      if (err instanceof AltEngineError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** Fetch up to 500 documents by key; missing keys are omitted from the result. */
+  async batchGet<T = unknown>(collection: string, keys: Key[]): Promise<{ documents: DatastoreDocument<T>[] }> {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/batchGet`, {
+      body: { keys },
+    });
+  }
+
+  /** Delete up to 500 documents by key; missing keys are no-ops. */
+  async delete(collection: string, keys: Key[]): Promise<{ deleted: number }> {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/delete`, {
+      body: { keys },
+    });
+  }
+
+  /** Run one page of an index-served query. */
+  async query<T = unknown>(collection: string, req: QueryRequest = {}): Promise<QueryResult<T>> {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/query`, { body: req });
+  }
+
+  /** Iterate every matching document across pages (cursor handled for you). */
+  async *queryAll<T = unknown>(collection: string, req: QueryRequest = {}): AsyncGenerator<DatastoreDocument<T>> {
+    let cursor: string | null | undefined = req.cursor;
+    do {
+      const page: QueryResult<T> = await this.query<T>(collection, { ...req, cursor: cursor ?? undefined });
+      for (const doc of page.documents ?? []) yield doc;
+      cursor = page.cursor;
+    } while (cursor);
+  }
+
+  /** Grouped metrics over an index-served filter. */
+  async aggregate(collection: string, req: AggregateRequest): Promise<AggregateResult> {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/aggregate`, { body: req });
+  }
+
+  /** Apply up to 500 operations atomically within this namespace. NOT retried
+   * automatically (increments would double-apply); a failed `check` throws a 409. */
+  async transaction(operations: TxnOp[]): Promise<TransactionResult> {
+    return this.http.request("POST", `${this.nsBase}/transaction`, { body: { operations }, retry: false });
+  }
+
+  readonly indexes = {
+    list: async (collection: string): Promise<{ indexes: IndexSpec[] }> =>
+      this.http.request("GET", `${this.nsBase}/collections/${seg(collection)}/indexes`),
+    create: async (collection: string, req: CreateIndexRequest): Promise<{ index: IndexSpec }> =>
+      this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/indexes`, { body: req }),
+    delete: async (collection: string, id: string): Promise<{ deleted: boolean }> =>
+      this.http.request("DELETE", `${this.nsBase}/collections/${seg(collection)}/indexes/${seg(id)}`),
+  };
+}
+
+export class NamespaceAdmin {
+  constructor(private readonly http: Http, private readonly base: string) {}
+
+  async list(opts: { q?: string; limit?: number } = {}): Promise<NamespacesPage> {
+    return this.http.request("GET", `${this.base}/namespaces`, { query: { q: opts.q, limit: opts.limit } });
+  }
+
+  /** Delete a namespace and everything in it. Requires a `full` grant. */
+  async delete(namespace: string): Promise<{ deleted: boolean }> {
+    return this.http.request("DELETE", `${this.base}/namespaces/${seg(namespace)}`);
+  }
+}

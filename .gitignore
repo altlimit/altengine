@@ -1,0 +1,20 @@
+# build output
+/cli/altengine
+/cli/dist/
+/bin/
+
+# default local data directory (any depth — tests/harnesses may create their own)
+.altengine/
+.altenginedev/
+
+# JS
+node_modules/
+/js/dist/
+/js/test/.bin/
+
+# go.work personal overrides
+go.work.sum
+
+# editor / OS
+.DS_Store
+*.swp
