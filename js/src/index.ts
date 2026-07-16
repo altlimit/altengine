@@ -1,9 +1,11 @@
-/** @altengine/sdk — official JavaScript/TypeScript SDK for altengine.
+/** @altengine/sdk — official JavaScript/TypeScript SDK for altengine
+ * (https://www.altengine.net).
  *
  * ```ts
  * import { AltEngine, f } from "@altengine/sdk";
  *
- * const ae = new AltEngine({ baseUrl: "http://127.0.0.1:9191", apiKey: "dev" });
+ * const ae = new AltEngine({ apiKey: "ae_..." });      // production api.altengine.net
+ * // const ae = new AltEngine({ dev: true, apiKey: "dev" }); // local `altengine dev`
  *
  * const db = ae.datastore("myapp");
  * const { keys } = await db.put("todos", [{ data: { title: "ship SDK" } }]);
@@ -26,7 +28,7 @@ import { ChannelClient } from "./channel/client.js";
 export class AltEngine {
   private readonly http: Http;
 
-  constructor(opts: ClientOptions) {
+  constructor(opts: ClientOptions = {}) {
     this.http = new Http(opts);
   }
 
@@ -47,7 +49,7 @@ export class AltEngine {
 }
 
 export { AltEngineError, AltEngineNetworkError, type ErrorCode } from "./errors.js";
-export type { ClientOptions, RetryOptions, RequestOptions } from "./http.js";
+export { DEFAULT_BASE_URL, DEV_BASE_URL, type ClientOptions, type RetryOptions, type RequestOptions } from "./http.js";
 
 export { DatastoreClient, NamespaceAdmin, type DatastoreOptions } from "./datastore/client.js";
 export * from "./datastore/types.js";

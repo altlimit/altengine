@@ -112,6 +112,60 @@ describe("pagination iterators", () => {
   });
 });
 
+describe("base URL resolution", () => {
+  const capture = () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: any) => {
+      urls.push(String(url));
+      return json(200, { namespaces: [], has_more: false });
+    });
+    return { urls, fetchMock };
+  };
+
+  it("defaults to production", async () => {
+    const { urls, fetchMock } = capture();
+    await new AltEngine({ apiKey: "k", fetch: fetchMock as any }).datastore("app").namespaces.list();
+    expect(urls[0]).toMatch(/^https:\/\/api\.altengine\.net\//);
+  });
+
+  it("dev: true targets the local emulator", async () => {
+    const { urls, fetchMock } = capture();
+    await new AltEngine({ dev: true, apiKey: "k", fetch: fetchMock as any }).datastore("app").namespaces.list();
+    expect(urls[0]).toMatch(/^http:\/\/127\.0\.0\.1:9191\//);
+  });
+
+  it("ALTENGINE_URL env var overrides the default; explicit baseUrl wins over all", async () => {
+    process.env.ALTENGINE_URL = "http://env.local";
+    try {
+      const a = capture();
+      await new AltEngine({ apiKey: "k", fetch: a.fetchMock as any }).datastore("app").namespaces.list();
+      expect(a.urls[0]).toMatch(/^http:\/\/env\.local\//);
+
+      const b = capture();
+      await new AltEngine({ baseUrl: "http://explicit.local", apiKey: "k", fetch: b.fetchMock as any })
+        .datastore("app")
+        .namespaces.list();
+      expect(b.urls[0]).toMatch(/^http:\/\/explicit\.local\//);
+    } finally {
+      delete process.env.ALTENGINE_URL;
+    }
+  });
+
+  it("apiKey falls back to ALTENGINE_API_KEY", async () => {
+    process.env.ALTENGINE_API_KEY = "env-key";
+    try {
+      const fetchMock = vi.fn(async (_url: any, init: any) => {
+        expect(init.headers.authorization).toBe("Bearer env-key");
+        return json(200, { namespaces: [], has_more: false });
+      });
+      await new AltEngine({ dev: true, fetch: fetchMock as any }).datastore("app").namespaces.list();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      delete process.env.ALTENGINE_API_KEY;
+    }
+  });
+});
+
 describe("search namespace routing", () => {
   it("sends X-Namespace on index calls and ?namespace= on list", async () => {
     const fetchMock = vi.fn(async (url: any, init: any) => {

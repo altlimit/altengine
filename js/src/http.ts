@@ -9,10 +9,19 @@ export interface RetryOptions {
   maxDelayMs?: number;
 }
 
+/** Production API origin used when no override is given. */
+export const DEFAULT_BASE_URL = "https://api.altengine.net";
+/** Where `altengine dev` (the local emulator) listens by default. */
+export const DEV_BASE_URL = "http://127.0.0.1:9191";
+
 export interface ClientOptions {
-  /** API origin, e.g. `https://api.example.com` or `http://127.0.0.1:9191`. */
-  baseUrl: string;
-  /** Org API key (`Authorization: Bearer`). Omit only for token-based flows. */
+  /** API origin override. Resolution order: this option → `dev: true` →
+   * `ALTENGINE_URL` env var → `https://api.altengine.net` (production). */
+  baseUrl?: string;
+  /** Target the local emulator (`altengine dev`) at `http://127.0.0.1:9191`. */
+  dev?: boolean;
+  /** Org API key (`Authorization: Bearer`). Falls back to the `ALTENGINE_API_KEY`
+   * env var; omit only for token-based flows. */
   apiKey?: string;
   /** Custom fetch (tests, polyfills). Defaults to `globalThis.fetch`. */
   fetch?: typeof globalThis.fetch;
@@ -20,6 +29,16 @@ export interface ClientOptions {
   timeoutMs?: number;
   /** Default retry policy for retryable failures (429/502/503/504/network). */
   retry?: RetryOptions;
+}
+
+/** Browser-safe env lookup (process is Node/edge-only). */
+const env = (name: string): string | undefined =>
+  typeof process !== "undefined" ? process.env?.[name] : undefined;
+
+export function resolveBaseUrl(opts: ClientOptions): string {
+  if (opts.baseUrl) return opts.baseUrl;
+  if (opts.dev) return DEV_BASE_URL;
+  return env("ALTENGINE_URL") ?? DEFAULT_BASE_URL;
 }
 
 export interface RequestOptions {
@@ -41,9 +60,9 @@ export class Http {
   private readonly timeoutMs: number;
   private readonly retry: Required<RetryOptions>;
 
-  constructor(opts: ClientOptions) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    this.apiKey = opts.apiKey;
+  constructor(opts: ClientOptions = {}) {
+    this.baseUrl = resolveBaseUrl(opts).replace(/\/+$/, "");
+    this.apiKey = opts.apiKey ?? env("ALTENGINE_API_KEY");
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
     if (!this.fetchImpl) throw new Error("no fetch implementation available; pass { fetch }");
     this.timeoutMs = opts.timeoutMs ?? 30_000;

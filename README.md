@@ -27,7 +27,7 @@ Talk to it with the SDK (any non-empty API key works against the emulator):
 ```ts
 import { AltEngine, f } from "@altengine/sdk";
 
-const ae = new AltEngine({ baseUrl: "http://127.0.0.1:9191", apiKey: "dev" });
+const ae = new AltEngine({ dev: true, apiKey: "dev" }); // local emulator
 
 // Datastore: JSON documents with queries, aggregates, transactions
 const db = ae.datastore("myapp");
@@ -45,7 +45,9 @@ const { token } = await ch.createToken({ channels: ["room:1"] });
 await ch.publish("room:1", { hello: "world" });
 ```
 
-Point `baseUrl` at your hosted instance and everything behaves the same.
+Drop `dev: true` and the SDK targets production (`https://api.altengine.net`) —
+get an API key at [www.altengine.net](https://www.altengine.net). Everything
+behaves the same.
 
 ## Development
 

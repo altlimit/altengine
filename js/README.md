@@ -1,6 +1,6 @@
 # @altengine/sdk
 
-Official JavaScript/TypeScript SDK for [altengine](https://github.com/altlimit/altengine) —
+Official JavaScript/TypeScript SDK for [altengine](https://www.altengine.net) —
 managed **datastore**, **search**, and realtime **channels** behind one API key.
 Zero dependencies, fetch-based, works in Node ≥20, browsers, and edge runtimes.
 
@@ -13,10 +13,20 @@ npm i @altengine/sdk
 ```ts
 import { AltEngine } from "@altengine/sdk";
 
-const ae = new AltEngine({
-  baseUrl: "https://your-altengine-host",   // or http://127.0.0.1:9191 for `altengine dev`
-  apiKey: process.env.ALTENGINE_API_KEY,
-});
+const ae = new AltEngine({ apiKey: "ae_..." });   // production: https://api.altengine.net
+```
+
+Everything is overridable, nothing is required:
+
+- `apiKey` — falls back to the `ALTENGINE_API_KEY` env var
+- `dev: true` — target the [local emulator](https://github.com/altlimit/altengine)
+  at `http://127.0.0.1:9191` (`altengine dev`)
+- `baseUrl` — explicit origin; also settable via the `ALTENGINE_URL` env var
+  (resolution: `baseUrl` → `dev` → `ALTENGINE_URL` → production)
+
+```ts
+const local = new AltEngine({ dev: true, apiKey: "dev" });        // emulator
+// ALTENGINE_URL=http://127.0.0.1:9191 node app.js                 // same, via env
 ```
 
 Retryable failures (429 with `Retry-After`, 502/503/504, network errors) are retried
@@ -125,9 +135,11 @@ into client apps.
 
 ## Local development
 
-Run the [altengine emulator](https://github.com/altlimit/altengine) and point the
-SDK at it — any non-empty API key works:
+Run the [altengine emulator](https://github.com/altlimit/altengine) and construct
+the client with `dev: true` (or set `ALTENGINE_URL`) — any non-empty API key works:
 
 ```bash
 alt install altlimit/altengine && altengine dev
 ```
+
+Get an API key and instances for production at [www.altengine.net](https://www.altengine.net).
