@@ -44,7 +44,7 @@ const db = ae.datastore("myapp", { namespace: "prod" });
 
 const { keys } = await db.put("todos", [{ data: { title: "ship SDK", done: false } }]);
 const doc = await db.get("todos", keys[0]);         // null when missing
-await db.batchGet("todos", keys);
+const docs = await db.get("todos", keys);           // array in → array out, nulls for missing
 await db.delete("todos", keys);                     // missing keys are no-ops
 
 // Queries (cursor pagination handled by queryAll)

@@ -51,25 +51,36 @@ export class DatastoreClient {
     });
   }
 
-  /** Fetch one document, or `null` when it doesn't exist. */
-  async get<T = unknown>(collection: string, key: Key): Promise<DatastoreDocument<T> | null> {
+  /** Fetch one document (`null` when missing), or — passed an array — up to 500
+   * documents in one round trip, order-preserving with `null` placeholders for
+   * missing keys (App Engine `db.get` semantics). */
+  async get<T = unknown>(collection: string, key: Key): Promise<DatastoreDocument<T> | null>;
+  async get<T = unknown>(collection: string, keys: Key[]): Promise<(DatastoreDocument<T> | null)[]>;
+  async get<T = unknown>(
+    collection: string,
+    keyOrKeys: Key | Key[]
+  ): Promise<DatastoreDocument<T> | null | (DatastoreDocument<T> | null)[]> {
+    if (Array.isArray(keyOrKeys)) {
+      const res = await this.http.request<{ documents: DatastoreDocument<T>[] }>(
+        "POST",
+        `${this.nsBase}/collections/${seg(collection)}/documents/get`,
+        { body: { keys: keyOrKeys } }
+      );
+      // The wire response omits missing keys; rebuild positional correspondence
+      // (numeric keys are stored as decimal strings, so String() aligns them).
+      const byKey = new Map(res.documents.map((d) => [d.key, d]));
+      return keyOrKeys.map((k) => byKey.get(String(k)) ?? null);
+    }
     try {
       const res = await this.http.request<{ document: DatastoreDocument<T> }>(
         "GET",
-        `${this.nsBase}/collections/${seg(collection)}/documents/${seg(key)}`
+        `${this.nsBase}/collections/${seg(collection)}/documents/${seg(keyOrKeys)}`
       );
       return res.document;
     } catch (err) {
       if (err instanceof AltEngineError && err.status === 404) return null;
       throw err;
     }
-  }
-
-  /** Fetch up to 500 documents by key; missing keys are omitted from the result. */
-  async batchGet<T = unknown>(collection: string, keys: Key[]): Promise<{ documents: DatastoreDocument<T>[] }> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/get`, {
-      body: { keys },
-    });
   }
 
   /** Delete up to 500 documents by key; missing keys are no-ops. */

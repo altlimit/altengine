@@ -49,9 +49,9 @@ describe("datastore CRUD", () => {
     await db.delete("todos", keys as string[]);
   });
 
-  it("batchGet returns found docs and omits missing", async () => {
-    const { documents } = await db.batchGet("todos", ["t1", "does-not-exist", "t3"]);
-    expect(documents.map((d) => d.key).sort()).toEqual(["t1", "t3"]);
+  it("get with an array is order-preserving with nulls for missing keys", async () => {
+    const docs = await db.get("todos", ["t1", "does-not-exist", "t3"]);
+    expect(docs.map((d) => d?.key ?? null)).toEqual(["t1", null, "t3"]);
   });
 
   it("get of missing key returns null; delete of missing is a no-op", async () => {

@@ -26,7 +26,7 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 ## Datastore
 
 - [ ] put → get roundtrip (auto-id and explicit key; numeric key ≡ decimal string)
-- [ ] batchGet returns found docs, omits missing
+- [ ] bulk get (POST documents/get) returns found docs, omits missing on the wire; SDKs map to order-preserving nulls
 - [ ] delete → get returns null/NOT_FOUND
 - [ ] query: `=`, `!=`, range ops, `in` (≤80 values), dot-path fields, `__key__`
 - [ ] order asc/desc + limit + cursor pagination to exhaustion
