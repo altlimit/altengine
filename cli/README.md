@@ -65,7 +65,7 @@ All data-plane routes require `Authorization: Bearer <token>`. `{instance}` auto
 |---|---|
 | `POST /namespaces/{ns}/collections/{c}/documents` | put/upsert `{documents:[{key?,data}]}` → `{keys}` |
 | `GET  /namespaces/{ns}/collections/{c}/documents/{key}` | get one |
-| `POST /namespaces/{ns}/collections/{c}/documents/batchGet` | `{keys:[]}` → `{documents}` |
+| `POST /namespaces/{ns}/collections/{c}/documents/get` | `{keys:[]}` → `{documents}` |
 | `POST /namespaces/{ns}/collections/{c}/documents/delete` | `{keys:[]}` → `{deleted}` |
 | `POST /namespaces/{ns}/collections/{c}/query` | `{where,order,limit,cursor,keys_only,join}` |
 | `POST /namespaces/{ns}/collections/{c}/aggregate` | `{where,group,metrics,order,limit}` |

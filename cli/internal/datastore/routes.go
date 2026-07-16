@@ -32,7 +32,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/transaction", common.Wrap(h.transaction))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents", common.Wrap(h.putDocs))
 	mux.HandleFunc("GET "+p+"/namespaces/{ns}/collections/{collection}/documents/{key}", common.Wrap(h.getDoc))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/batchGet", common.Wrap(h.batchGet))
+	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/get", common.Wrap(h.batchGet))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/delete", common.Wrap(h.deleteDocs))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/query", common.Wrap(h.query))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/aggregate", common.Wrap(h.aggregate))

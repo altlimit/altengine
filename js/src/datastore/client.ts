@@ -67,7 +67,7 @@ export class DatastoreClient {
 
   /** Fetch up to 500 documents by key; missing keys are omitted from the result. */
   async batchGet<T = unknown>(collection: string, keys: Key[]): Promise<{ documents: DatastoreDocument<T>[] }> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/batchGet`, {
+    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/get`, {
       body: { keys },
     });
   }

@@ -60,7 +60,7 @@ export class ChannelSocket {
   private pingTimer?: ReturnType<typeof setInterval>;
   private lastActivity = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
-  private pendingSubscribes: { resolve: (channels: string[]) => void; reject: (e: Error) => void }[] = [];
+  private pendingSubscribes: { channels: string[]; resolve: (channels: string[]) => void; reject: (e: Error) => void }[] = [];
   private pendingPublishes: { resolve: (delivered: number) => void; reject: (e: Error) => void }[] = [];
 
   constructor(opts: ChannelSocketOptions) {
@@ -114,7 +114,7 @@ export class ChannelSocket {
     this.explicitChannels = true;
     if (!this.isOpen()) return [...this.desired];
     return new Promise<string[]>((resolve, reject) => {
-      this.pendingSubscribes.push({ resolve, reject });
+      this.pendingSubscribes.push({ channels, resolve, reject });
       this.send({ type: "subscribe", channels });
     });
   }
@@ -212,9 +212,17 @@ export class ChannelSocket {
       return;
     }
     switch (frame?.type) {
-      case "subscribed":
-        this.pendingSubscribes.shift()?.resolve(frame.channels ?? []);
+      case "subscribed": {
+        // Only settle the oldest pending subscribe if this ack covers its channels —
+        // an unsolicited ack (e.g. for the connect-time ?channels= subscription)
+        // arriving late must not steal a runtime subscribe()'s resolution.
+        const head = this.pendingSubscribes[0];
+        const acked = new Set<string>(frame.channels ?? []);
+        if (head && head.channels.every((c) => acked.has(c))) {
+          this.pendingSubscribes.shift()!.resolve(frame.channels ?? []);
+        }
         return;
+      }
       case "published":
         this.pendingPublishes.shift()?.resolve(frame.delivered ?? 0);
         return;
