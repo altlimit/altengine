@@ -18,3 +18,16 @@ go.work.sum
 # editor / OS
 .DS_Store
 *.swp
+
+# Python
+/python/.venv/
+__pycache__/
+*.egg-info/
+/python/dist/
+.pytest_cache/
+
+# PHP
+/php/vendor/
+/php/composer.lock
+.phpunit.cache/
+.phpunit.result.cache

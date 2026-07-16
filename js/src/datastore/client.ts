@@ -121,7 +121,7 @@ export class DatastoreClient {
       this.http.request("GET", `${this.nsBase}/collections/${seg(collection)}/indexes`),
     create: async (collection: string, req: CreateIndexRequest): Promise<{ index: IndexSpec }> =>
       this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/indexes`, { body: req }),
-    delete: async (collection: string, id: string): Promise<{ deleted: boolean }> =>
+    delete: async (collection: string, id: number): Promise<{ deleted: boolean }> =>
       this.http.request("DELETE", `${this.nsBase}/collections/${seg(collection)}/indexes/${seg(id)}`),
   };
 }

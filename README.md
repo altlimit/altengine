@@ -7,9 +7,9 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`) | `alt install altlimit/altengine` |
 | [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | `npm i @altengine/sdk` |
-| `go/` | Go SDK (planned) | — |
-| `python/` | Python SDK (planned) | — |
-| `php/` | PHP SDK (planned) | — |
+| [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
+| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | `pip install altengine` |
+| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | `composer require altlimit/altengine` |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
 ## Quick start

@@ -1,0 +1,46 @@
+# Packagist can't point at a monorepo subfolder, so pushes to main that touch
+# php/ are subtree-split and mirrored to altlimit/altengine-php (the repo
+# Packagist watches). Tags php/vX.Y.Z are mirrored as plain vX.Y.Z.
+#
+# Requires the PHP_MIRROR_TOKEN secret: a fine-grained PAT with contents:write
+# on altlimit/altengine-php. The job no-ops (with a notice) until it's set.
+name: Mirror PHP SDK
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["php/**"]
+    tags: ["php/v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Subtree split → altlimit/altengine-php
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Split and push
+        env:
+          TOKEN: ${{ secrets.PHP_MIRROR_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::PHP_MIRROR_TOKEN not set — skipping Packagist mirror"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          SPLIT_SHA="$(git subtree split --prefix=php HEAD)"
+          REMOTE="https://x-access-token:${TOKEN}@github.com/altlimit/altengine-php.git"
+          git push "$REMOTE" "$SPLIT_SHA:refs/heads/main" --force
+          case "$GITHUB_REF" in
+            refs/tags/php/v*)
+              VERSION="${GITHUB_REF#refs/tags/php/}"
+              git tag -f "$VERSION" "$SPLIT_SHA"
+              git push "$REMOTE" "refs/tags/$VERSION" --force
+              ;;
+          esac

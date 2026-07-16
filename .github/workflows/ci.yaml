@@ -1,5 +1,6 @@
-# CI for pull requests and non-release pushes: Go emulator tests + JS SDK unit and
-# conformance tests (the conformance suite spawns the locally-built emulator).
+# CI for pull requests and non-release pushes: Go emulator tests + every SDK's
+# unit and conformance tests (each conformance suite spawns the locally-built
+# emulator, so emulator changes re-run them all).
 name: CI
 
 on:
@@ -9,6 +10,9 @@ on:
       - "main"
     paths:
       - "js/**"
+      - "go/**"
+      - "python/**"
+      - "php/**"
       - "conformance/**"
       - ".github/workflows/ci.yaml"
 
@@ -55,3 +59,65 @@ jobs:
       - name: Unit + conformance tests
         working-directory: js
         run: npm test
+
+  go-sdk:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            go/go.sum
+            cli/go.sum
+      - name: Vet
+        working-directory: go
+        run: go vet -tags conformance ./...
+      - name: Conformance tests
+        working-directory: go
+        run: go test -tags conformance -count=1 ./...
+
+  python:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: cli/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        working-directory: python
+        run: pip install -e ".[ws]" pytest
+      - name: Conformance tests
+        working-directory: python
+        run: pytest -q
+
+  php:
+    name: PHP SDK
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ["8.1", "8.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: cli/go.sum
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+      - name: Install
+        working-directory: php
+        run: composer install --no-interaction --no-progress
+      - name: Conformance tests
+        working-directory: php
+        run: vendor/bin/phpunit

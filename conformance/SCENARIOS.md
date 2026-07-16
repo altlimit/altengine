@@ -72,3 +72,8 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 - [ ] reconnect: kill the socket server-side → client reconnects and resubscribes
       (SDKs with a managed socket)
 - [ ] message > 32 KiB → INVALID_ARGUMENT
+
+## Per-language exceptions
+
+- **php/** has no WebSocket client (v1 is token/publish/presence only) — the
+  "WS lifecycle" scenarios don't apply; everything else does.

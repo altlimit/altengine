@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "altengine"
+version = "0.1.0"
+description = "Official Python SDK for altengine - managed datastore, search, and realtime channels"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "altlimit" }]
+keywords = ["altengine", "search", "datastore", "pubsub", "realtime"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Database",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
+dependencies = ["httpx>=0.25"]
+
+[project.optional-dependencies]
+ws = ["websockets>=12"]
+
+[project.urls]
+Homepage = "https://www.altengine.net"
+Repository = "https://github.com/altlimit/altengine"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/altengine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

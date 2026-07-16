@@ -52,13 +52,20 @@ export interface QueryRequest {
   join?: Join[];
 }
 
+/** Describes an index the instance auto-created to serve a query (present
+ * only on the request that triggered the build). */
+export interface AutoIndexInfo {
+  fields: string[];
+  rows_written: number;
+}
+
 export interface QueryResult<T = unknown> {
   documents?: DatastoreDocument<T>[];
   keys?: string[];
   /** Pass back to continue; `null` when exhausted. */
   cursor: string | null;
   /** Present when the instance auto-created an index to serve this query. */
-  auto_indexed?: boolean;
+  auto_indexed?: AutoIndexInfo;
 }
 
 export type MetricFn = "count" | "sum" | "avg" | "min" | "max";
@@ -86,7 +93,7 @@ export interface AggregateGroup {
 
 export interface AggregateResult {
   groups: AggregateGroup[];
-  auto_indexed?: boolean;
+  auto_indexed?: AutoIndexInfo;
 }
 
 /** One atomic transaction operation. All ops in a transaction apply atomically
@@ -111,7 +118,7 @@ export interface TransactionResult {
 }
 
 export interface IndexSpec {
-  id: string;
+  id: number;
   collection: string;
   /** `"field"` or `"field:asc"` / `"field:desc"`, max 8. */
   fields: string[];
