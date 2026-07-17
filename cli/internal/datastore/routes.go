@@ -31,7 +31,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE "+p+"/namespaces/{ns}", common.Wrap(h.deleteNamespace))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/transaction", common.Wrap(h.transaction))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents", common.Wrap(h.putDocs))
-	mux.HandleFunc("GET "+p+"/namespaces/{ns}/collections/{collection}/documents/{key}", common.Wrap(h.getDoc))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/get", common.Wrap(h.batchGet))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/delete", common.Wrap(h.deleteDocs))
 	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/query", common.Wrap(h.query))
@@ -135,19 +134,6 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"keys": keys})
-	return nil
-}
-
-func (h *Handler) getDoc(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Read)
-	if err != nil {
-		return err
-	}
-	doc, err := store.Get(r.PathValue("collection"), r.PathValue("key"))
-	if err != nil {
-		return err
-	}
-	common.WriteJSON(w, 200, map[string]any{"document": doc})
 	return nil
 }
 

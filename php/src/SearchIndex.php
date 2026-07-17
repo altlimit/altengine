@@ -37,22 +37,23 @@ class SearchIndex
         return $res['ids'];
     }
 
-    /** Fetch one document, or null when it (or the index) doesn't exist. */
+    /**
+     * Fetch one document, or null when it (or the index) doesn't exist.
+     * Rides the keyset listing (start_id + limit 1) — there is no
+     * single-document route on the wire.
+     */
     public function get(string $id): ?array
     {
         try {
-            $res = $this->http->request(
-                'GET',
-                "{$this->path}/documents/" . Http::seg($id),
-                headers: $this->headers,
-            );
-            return $res['document'];
+            $page = $this->listDocuments(startId: $id, limit: 1);
         } catch (AltEngineError $err) {
             if ($err->status === 404) {
                 return null;
             }
             throw $err;
         }
+        $doc = ($page['documents'] ?? [])[0] ?? null;
+        return ($doc !== null && $doc['id'] === $id) ? $doc : null;
     }
 
     /**

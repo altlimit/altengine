@@ -72,8 +72,8 @@ describe("transport", () => {
     expect(calls).toBe(1);
   });
 
-  it("get() returns null on 404", async () => {
-    const fetchMock = vi.fn(async () => json(404, { error: { code: "NOT_FOUND", message: "missing" } }));
+  it("get() returns null when the batch response omits the key", async () => {
+    const fetchMock = vi.fn(async () => json(200, { documents: [] }));
     const db = client(fetchMock as any).datastore("app");
     expect(await db.get("todos", "nope")).toBeNull();
   });

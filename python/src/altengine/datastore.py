@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence, Union
 
 from ._http import AsyncHttp, Http, seg
-from .errors import AltEngineError
 
 Key = Union[str, int]
 Document = Dict[str, Any]
@@ -42,20 +41,17 @@ class DatastoreClient:
     def get(self, collection: str, key: Union[Key, Sequence[Key]]) -> Any:
         """Fetch one document (``None`` when missing), or — passed a list — up
         to 500 documents in one round trip, order-preserving with ``None``
-        placeholders for missing keys (App Engine ``db.get`` semantics)."""
-        if isinstance(key, (list, tuple)):
-            res = self._http.request(
-                "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": list(key)}
-            )
-            by_key = {d["key"]: d for d in res["documents"]}
-            return [by_key.get(_key_str(k)) for k in key]
-        try:
-            res = self._http.request("GET", f"{self._ns}/collections/{seg(collection)}/documents/{seg(key)}")
-            return res["document"]
-        except AltEngineError as err:
-            if err.status == 404:
-                return None
-            raise
+        placeholders for missing keys (App Engine ``db.get`` semantics). Both
+        forms ride the batch endpoint — there is no single-document route on
+        the wire."""
+        single = not isinstance(key, (list, tuple))
+        keys = [key] if single else list(key)
+        res = self._http.request(
+            "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": keys}
+        )
+        by_key = {d["key"]: d for d in res["documents"]}
+        docs = [by_key.get(_key_str(k)) for k in keys]
+        return docs[0] if single else docs
 
     def delete(self, collection: str, keys: Sequence[Key]) -> int:
         """Delete up to 500 documents by key; missing keys are no-ops. Returns
@@ -144,19 +140,14 @@ class AsyncDatastoreClient:
         return res["keys"]
 
     async def get(self, collection: str, key: Union[Key, Sequence[Key]]) -> Any:
-        if isinstance(key, (list, tuple)):
-            res = await self._http.request(
-                "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": list(key)}
-            )
-            by_key = {d["key"]: d for d in res["documents"]}
-            return [by_key.get(_key_str(k)) for k in key]
-        try:
-            res = await self._http.request("GET", f"{self._ns}/collections/{seg(collection)}/documents/{seg(key)}")
-            return res["document"]
-        except AltEngineError as err:
-            if err.status == 404:
-                return None
-            raise
+        single = not isinstance(key, (list, tuple))
+        keys = [key] if single else list(key)
+        res = await self._http.request(
+            "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": keys}
+        )
+        by_key = {d["key"]: d for d in res["documents"]}
+        docs = [by_key.get(_key_str(k)) for k in keys]
+        return docs[0] if single else docs
 
     async def delete(self, collection: str, keys: Sequence[Key]) -> int:
         res = await self._http.request(

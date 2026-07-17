@@ -80,15 +80,14 @@ export class SearchIndex {
     return this.http.request("PUT", `${this.path}/documents`, { body: { documents }, headers: this.hdrs });
   }
 
-  /** Fetch one document, or `null` when it (or the index) doesn't exist. */
+  /** Fetch one document, or `null` when it (or the index) doesn't exist.
+   * Rides the keyset listing (`start_id` + `limit:1`) — there is no
+   * single-document route on the wire. */
   async get(id: string): Promise<SearchDocument | null> {
     try {
-      const res = await this.http.request<{ document: SearchDocument }>(
-        "GET",
-        `${this.path}/documents/${seg(id)}`,
-        { headers: this.hdrs }
-      );
-      return res.document;
+      const page = await this.listDocuments({ start_id: id, limit: 1 });
+      const doc = page.documents?.[0];
+      return doc && doc.id === id ? doc : null;
     } catch (err) {
       if (err instanceof AltEngineError && err.status === 404) return null;
       throw err;

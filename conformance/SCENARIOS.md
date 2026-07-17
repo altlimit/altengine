@@ -27,7 +27,8 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 
 - [ ] put → get roundtrip (auto-id and explicit key; numeric key ≡ decimal string)
 - [ ] bulk get (POST documents/get) returns found docs, omits missing on the wire; SDKs map to order-preserving nulls
-- [ ] delete → get returns null/NOT_FOUND
+- [ ] delete → get returns null (single-doc get is SDK sugar over the batch
+      endpoint — the wire has no single-document route)
 - [ ] query: `=`, `!=`, range ops, `in` (≤80 values), dot-path fields, `__key__`
 - [ ] order asc/desc + limit + cursor pagination to exhaustion
 - [ ] keys_only query returns keys
@@ -72,6 +73,13 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 - [ ] reconnect: kill the socket server-side → client reconnects and resubscribes
       (SDKs with a managed socket)
 - [ ] message > 32 KiB → INVALID_ARGUMENT
+
+## Wire minimalism
+
+Single-document reads are SDK-level sugar, not endpoints: datastore `get(key)`
+rides `POST documents/get` with one key; search `get(id)` rides the keyset
+listing (`start_id=<id>&limit=1` + an id check). Servers expose no
+`GET .../documents/:id` routes.
 
 ## Per-language exceptions
 

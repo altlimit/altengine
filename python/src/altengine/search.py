@@ -68,14 +68,17 @@ class SearchIndex:
         return res["ids"]
 
     def get(self, doc_id: str) -> Optional[Document]:
-        """Fetch one document, or ``None`` when it (or the index) doesn't exist."""
+        """Fetch one document, or ``None`` when it (or the index) doesn't
+        exist. Rides the keyset listing (``start_id`` + ``limit=1``) — there
+        is no single-document route on the wire."""
         try:
-            res = self._http.request("GET", f"{self._path}/documents/{seg(doc_id)}", headers=self._hdrs)
-            return res["document"]
+            page = self.list_documents(start_id=doc_id, limit=1)
         except AltEngineError as err:
             if err.status == 404:
                 return None
             raise
+        docs = page.get("documents") or []
+        return docs[0] if docs and docs[0]["id"] == doc_id else None
 
     def delete(self, ids: Sequence[str]) -> int:
         """Delete up to 200 documents by id; missing ids are no-ops. Requires
@@ -186,12 +189,13 @@ class AsyncSearchIndex:
 
     async def get(self, doc_id: str) -> Optional[Document]:
         try:
-            res = await self._http.request("GET", f"{self._path}/documents/{seg(doc_id)}", headers=self._hdrs)
-            return res["document"]
+            page = await self.list_documents(start_id=doc_id, limit=1)
         except AltEngineError as err:
             if err.status == 404:
                 return None
             raise
+        docs = page.get("documents") or []
+        return docs[0] if docs and docs[0]["id"] == doc_id else None
 
     async def delete(self, ids: Sequence[str]) -> int:
         res = await self._http.request(

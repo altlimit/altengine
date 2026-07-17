@@ -339,20 +339,20 @@ func (i *SearchIndex) Put(ctx context.Context, documents []SearchDocument) ([]st
 }
 
 // Get fetches one document, or nil (with a nil error) when it — or the
-// index — doesn't exist.
+// index — doesn't exist. Rides the keyset listing (StartID + Limit 1) —
+// there is no single-document route on the wire.
 func (i *SearchIndex) Get(ctx context.Context, id string) (*SearchDocument, error) {
-	var out struct {
-		Document *SearchDocument `json:"document"`
-	}
-	err := i.s.http.do(ctx, request{
-		method:  "GET",
-		path:    i.path + "/documents/" + seg(id),
-		headers: i.s.headers(),
-	}, &out)
+	page, err := i.ListDocuments(ctx, ListDocumentsOptions{StartID: id, Limit: 1})
 	if IsNotFound(err) {
 		return nil, nil
 	}
-	return out.Document, err
+	if err != nil {
+		return nil, err
+	}
+	if len(page.Documents) > 0 && page.Documents[0].ID == id {
+		return &page.Documents[0], nil
+	}
+	return nil, nil
 }
 
 // Delete removes up to 200 documents by id; missing ids are no-ops. Requires

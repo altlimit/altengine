@@ -28,7 +28,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+p+"/indexes/{index}/schema", common.Wrap(h.schema))
 	mux.HandleFunc("DELETE "+p+"/indexes/{index}", common.Wrap(h.dropIndex))
 	mux.HandleFunc("PUT "+p+"/indexes/{index}/documents", common.Wrap(h.putDocs))
-	mux.HandleFunc("GET "+p+"/indexes/{index}/documents/{docId}", common.Wrap(h.getDoc))
 	mux.HandleFunc("GET "+p+"/indexes/{index}/documents", common.Wrap(h.listDocs))
 	mux.HandleFunc("POST "+p+"/indexes/{index}/documents/delete", common.Wrap(h.deleteDocs))
 	mux.HandleFunc("POST "+p+"/indexes/{index}/search", common.Wrap(h.search))
@@ -173,19 +172,6 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"ids": ids})
-	return nil
-}
-
-func (h *Handler) getDoc(w http.ResponseWriter, r *http.Request) error {
-	store, err := h.resolve(r, auth.Read)
-	if err != nil {
-		return err
-	}
-	doc, err := store.Get(r.PathValue("index"), r.PathValue("docId"))
-	if err != nil {
-		return err
-	}
-	common.WriteJSON(w, 200, map[string]any{"document": doc})
 	return nil
 }
 

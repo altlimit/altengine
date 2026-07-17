@@ -48,36 +48,26 @@ class Datastore
     /**
      * Fetch one document (null when missing), or — passed a list of keys — up
      * to 500 documents in one round trip, order-preserving with null
-     * placeholders for missing keys (App Engine db.get semantics).
+     * placeholders for missing keys (App Engine db.get semantics). Both forms
+     * ride the batch endpoint — there is no single-document route on the wire.
      *
      * @param string|int|list<string|int> $key
      */
     public function get(string $collection, string|int|array $key): ?array
     {
-        if (is_array($key)) {
-            $res = $this->http->request(
-                'POST',
-                "{$this->ns}/collections/" . Http::seg($collection) . '/documents/get',
-                body: ['keys' => $key],
-            );
-            $byKey = [];
-            foreach ($res['documents'] as $doc) {
-                $byKey[$doc['key']] = $doc;
-            }
-            return array_map(static fn ($k) => $byKey[(string) $k] ?? null, $key);
+        $single = !is_array($key);
+        $keys = $single ? [$key] : $key;
+        $res = $this->http->request(
+            'POST',
+            "{$this->ns}/collections/" . Http::seg($collection) . '/documents/get',
+            body: ['keys' => $keys],
+        );
+        $byKey = [];
+        foreach ($res['documents'] as $doc) {
+            $byKey[$doc['key']] = $doc;
         }
-        try {
-            $res = $this->http->request(
-                'GET',
-                "{$this->ns}/collections/" . Http::seg($collection) . '/documents/' . Http::seg($key),
-            );
-            return $res['document'];
-        } catch (AltEngineError $err) {
-            if ($err->status === 404) {
-                return null;
-            }
-            throw $err;
-        }
+        $docs = array_map(static fn ($k) => $byKey[(string) $k] ?? null, $keys);
+        return $single ? $docs[0] : $docs;
     }
 
     /**

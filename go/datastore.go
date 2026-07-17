@@ -246,18 +246,13 @@ func (d *Datastore) PutMulti(ctx context.Context, collection string, documents [
 }
 
 // Get fetches one document, or nil (with a nil error) when it doesn't exist.
+// Rides the batch endpoint — there is no single-document route on the wire.
 func (d *Datastore) Get(ctx context.Context, collection string, key any) (*Document, error) {
-	var out struct {
-		Document *Document `json:"document"`
+	docs, err := d.GetMulti(ctx, collection, []any{key})
+	if err != nil {
+		return nil, err
 	}
-	err := d.http.do(ctx, request{
-		method: "GET",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/documents/" + seg(keyString(key)),
-	}, &out)
-	if IsNotFound(err) {
-		return nil, nil
-	}
-	return out.Document, err
+	return docs[0], nil
 }
 
 // GetMulti fetches up to 500 documents in one round trip, order-preserving
