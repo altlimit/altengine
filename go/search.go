@@ -245,46 +245,47 @@ type DocumentsPage struct {
 
 // --- client ---
 
-// Search is a client for one search instance, bound to a namespace (sent as
-// X-Namespace, default "").
+// Search is a client for one search instance, bound to a namespace (carried in
+// the request path, default "").
 type Search struct {
 	Instance  string
 	Namespace string
 	http      *transport
 	base      string
+	nsBase    string
 }
 
 // Search binds a client for a search instance in the default namespace.
 func (c *Client) Search(instance string) *Search {
-	return &Search{Instance: instance, http: c.http, base: "/v1/search/" + seg(instance)}
+	return newSearch(c.http, instance, "")
+}
+
+func newSearch(t *transport, instance, namespace string) *Search {
+	base := "/v1/search/" + seg(instance)
+	return &Search{
+		Instance:  instance,
+		Namespace: namespace,
+		http:      t,
+		base:      base,
+		nsBase:    base + "/ns/" + nsSeg(namespace),
+	}
 }
 
 // WithNamespace returns a client for the same instance bound to another
 // namespace.
 func (s *Search) WithNamespace(namespace string) *Search {
-	return &Search{Instance: s.Instance, Namespace: namespace, http: s.http, base: s.base}
-}
-
-func (s *Search) headers() map[string]string {
-	if s.Namespace == "" {
-		return nil
-	}
-	return map[string]string{"X-Namespace": s.Namespace}
+	return newSearch(s.http, s.Instance, namespace)
 }
 
 // Index binds operations on one search index.
 func (s *Search) Index(name string) *SearchIndex {
-	return &SearchIndex{Name: name, s: s, path: s.base + "/indexes/" + seg(name)}
+	return &SearchIndex{Name: name, s: s, path: s.nsBase + "/idx/" + seg(name)}
 }
 
-// ListIndexes lists the namespace's indexes.
+// ListIndexes lists the indexes in this client's namespace.
 func (s *Search) ListIndexes(ctx context.Context, opts ListOptions) (*IndexesPage, error) {
-	q := opts.query()
-	if s.Namespace != "" {
-		q.Set("namespace", s.Namespace)
-	}
 	var out IndexesPage
-	err := s.http.do(ctx, request{method: "GET", path: s.base + "/indexes", query: q}, &out)
+	err := s.http.do(ctx, request{method: "GET", path: s.nsBase + "/idx", query: opts.query()}, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +297,7 @@ func (s *Search) ListIndexes(ctx context.Context, opts ListOptions) (*IndexesPag
 // this client's namespace); the default namespace appears as "".
 func (s *Search) ListNamespaces(ctx context.Context, opts ListOptions) (*NamespacesPage, error) {
 	var out NamespacesPage
-	err := s.http.do(ctx, request{method: "GET", path: s.base + "/namespaces", query: opts.query()}, &out)
+	err := s.http.do(ctx, request{method: "GET", path: s.base + "/ns", query: opts.query()}, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -309,9 +310,8 @@ func (s *Search) DeleteIndex(ctx context.Context, name string) (bool, error) {
 		Deleted bool `json:"deleted"`
 	}
 	err := s.http.do(ctx, request{
-		method:  "DELETE",
-		path:    s.base + "/indexes/" + seg(name),
-		headers: s.headers(),
+		method: "DELETE",
+		path:   s.nsBase + "/idx/" + seg(name),
 	}, &out)
 	return out.Deleted, err
 }
@@ -330,29 +330,47 @@ func (i *SearchIndex) Put(ctx context.Context, documents []SearchDocument) ([]st
 		IDs []string `json:"ids"`
 	}
 	err := i.s.http.do(ctx, request{
-		method:  "PUT",
-		path:    i.path + "/documents",
-		body:    map[string]any{"documents": documents},
-		headers: i.s.headers(),
+		method: "POST",
+		path:   i.path + "/documents",
+		body:   map[string]any{"documents": documents},
 	}, &out)
 	return out.IDs, err
 }
 
-// Get fetches one document, or nil (with a nil error) when it — or the
-// index — doesn't exist. Rides the keyset listing (StartID + Limit 1) —
-// there is no single-document route on the wire.
+// Get fetches one document, or nil (with a nil error) when it doesn't exist.
+// Rides the batch endpoint — there is no single-document route on the wire.
 func (i *SearchIndex) Get(ctx context.Context, id string) (*SearchDocument, error) {
-	page, err := i.ListDocuments(ctx, ListDocumentsOptions{StartID: id, Limit: 1})
-	if IsNotFound(err) {
-		return nil, nil
-	}
+	docs, err := i.GetMulti(ctx, []string{id})
 	if err != nil {
 		return nil, err
 	}
-	if len(page.Documents) > 0 && page.Documents[0].ID == id {
-		return &page.Documents[0], nil
+	return docs[0], nil
+}
+
+// GetMulti fetches up to 200 documents by id in one round trip, order-preserving
+// with nil placeholders for missing ids.
+func (i *SearchIndex) GetMulti(ctx context.Context, ids []string) ([]*SearchDocument, error) {
+	var out struct {
+		Documents []*SearchDocument `json:"documents"`
 	}
-	return nil, nil
+	err := i.s.http.do(ctx, request{
+		method: "POST",
+		path:   i.path + "/documents/get",
+		body:   map[string]any{"ids": ids},
+	}, &out)
+	if err != nil {
+		return nil, err
+	}
+	// The wire response omits missing ids; rebuild positional correspondence.
+	byID := make(map[string]*SearchDocument, len(out.Documents))
+	for _, doc := range out.Documents {
+		byID[doc.ID] = doc
+	}
+	docs := make([]*SearchDocument, len(ids))
+	for n, id := range ids {
+		docs[n] = byID[id]
+	}
+	return docs, nil
 }
 
 // Delete removes up to 200 documents by id; missing ids are no-ops. Requires
@@ -362,10 +380,9 @@ func (i *SearchIndex) Delete(ctx context.Context, ids []string) (int, error) {
 		Deleted int `json:"deleted"`
 	}
 	err := i.s.http.do(ctx, request{
-		method:  "POST",
-		path:    i.path + "/documents/delete",
-		body:    map[string]any{"ids": ids},
-		headers: i.s.headers(),
+		method: "POST",
+		path:   i.path + "/documents/delete",
+		body:   map[string]any{"ids": ids},
 	}, &out)
 	return out.Deleted, err
 }
@@ -374,10 +391,9 @@ func (i *SearchIndex) Delete(ctx context.Context, ids []string) (int, error) {
 func (i *SearchIndex) Search(ctx context.Context, req SearchRequest) (*SearchResponse, error) {
 	var out SearchResponse
 	err := i.s.http.do(ctx, request{
-		method:  "POST",
-		path:    i.path + "/search",
-		body:    req,
-		headers: i.s.headers(),
+		method: "POST",
+		path:   i.path + "/search",
+		body:   req,
 	}, &out)
 	if err != nil {
 		return nil, err
@@ -427,10 +443,9 @@ func (i *SearchIndex) ListDocuments(ctx context.Context, opts ListDocumentsOptio
 	}
 	var out DocumentsPage
 	err := i.s.http.do(ctx, request{
-		method:  "GET",
-		path:    i.path + "/documents",
-		query:   q,
-		headers: i.s.headers(),
+		method: "GET",
+		path:   i.path + "/documents",
+		query:  q,
 	}, &out)
 	if err != nil {
 		return nil, err
@@ -467,7 +482,7 @@ func (i *SearchIndex) ListAllDocuments(ctx context.Context, limit int) iter.Seq2
 // Schema returns the index's union field schema.
 func (i *SearchIndex) Schema(ctx context.Context) (*IndexSchema, error) {
 	var out IndexSchema
-	err := i.s.http.do(ctx, request{method: "GET", path: i.path + "/schema", headers: i.s.headers()}, &out)
+	err := i.s.http.do(ctx, request{method: "GET", path: i.path + "/schema"}, &out)
 	if err != nil {
 		return nil, err
 	}

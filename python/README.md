@@ -97,6 +97,9 @@ idx.put([{
     "facets": [facet.atom("category", "shoes"), facet.number("price", 59)],
 }])
 
+doc = idx.get("p1")                  # None when missing
+docs = idx.get(["p1", "nope"])       # list in → list out, None for missing
+
 res = idx.search(
     "shoes price<100",
     facets=["category"],

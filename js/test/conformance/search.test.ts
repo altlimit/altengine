@@ -34,6 +34,11 @@ describe("search documents", () => {
     expect(await idx.get("nope")).toBeNull();
   });
 
+  it("get with an array is order-preserving with nulls for missing ids", async () => {
+    const docs = await idx.get(["p1", "does-not-exist", "p3"]);
+    expect(docs.map((d) => d?.id ?? null)).toEqual(["p1", null, "p3"]);
+  });
+
   it("server assigns ids when omitted", async () => {
     const { ids } = await idx.put([{ fields: [{ name: "title", type: "text", value: "temp" }] }]);
     expect(ids[0]!.length).toBeGreaterThan(0);

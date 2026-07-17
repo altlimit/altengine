@@ -11,7 +11,7 @@ function client(fetchImpl: typeof fetch, retry = {}) {
 describe("transport", () => {
   it("sends bearer auth and JSON body to the right path", async () => {
     const fetchMock = vi.fn(async (url: any, init: any) => {
-      expect(String(url)).toBe("http://test.local/v1/datastore/app/namespaces/ns%2F1/collections/todos/documents");
+      expect(String(url)).toBe("http://test.local/v1/datastore/app/ns/ns%2F1/col/todos/documents");
       expect(init.method).toBe("POST");
       expect(init.headers.authorization).toBe("Bearer k");
       expect(JSON.parse(init.body)).toEqual({ documents: [{ data: { a: 1 } }] });
@@ -167,18 +167,29 @@ describe("base URL resolution", () => {
 });
 
 describe("search namespace routing", () => {
-  it("sends X-Namespace on index calls and ?namespace= on list", async () => {
+  it("carries the namespace in the path (/ns/{ns}/idx/...)", async () => {
+    const seen: string[] = [];
     const fetchMock = vi.fn(async (url: any, init: any) => {
-      const u = String(url);
-      if (u.includes("/search/app/indexes?")) {
-        expect(u).toContain("namespace=prod");
-        return json(200, { indexes: [], has_more: false });
-      }
-      expect(init.headers["x-namespace"]).toBe("prod");
-      return json(200, { ids: ["1"] });
+      seen.push(`${init.method} ${new URL(String(url)).pathname}`);
+      return json(200, String(url).endsWith("/idx") ? { indexes: [], has_more: false } : { ids: ["1"] });
     });
     const s = client(fetchMock as any).search("app", { namespace: "prod" });
     await s.listIndexes();
     await s.index("products").put([{ fields: [{ name: "t", type: "text", value: "x" }] }]);
+    expect(seen).toEqual([
+      "GET /v1/search/app/ns/prod/idx",
+      "POST /v1/search/app/ns/prod/idx/products/documents",
+    ]);
+  });
+
+  it("encodes the default namespace as _default in the path", async () => {
+    let seen = "";
+    const fetchMock = vi.fn(async (url: any, init: any) => {
+      seen = `${init.method} ${new URL(String(url)).pathname}`;
+      return json(200, { ids: ["1"] });
+    });
+    const s = client(fetchMock as any).search("app"); // default namespace
+    await s.index("products").put([{ fields: [{ name: "t", type: "text", value: "x" }] }]);
+    expect(seen).toBe("POST /v1/search/app/ns/_default/idx/products/documents");
   });
 });

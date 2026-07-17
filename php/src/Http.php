@@ -143,4 +143,14 @@ final class Http
     {
         return rawurlencode((string) $value);
     }
+
+    /**
+     * Encode a namespace path segment. The empty (default) namespace can't ride
+     * a URL path — routers collapse the resulting "//" — so it travels as the
+     * reserved sentinel `_default` (the server maps it back to "").
+     */
+    public static function nsSeg(string $namespace): string
+    {
+        return rawurlencode($namespace === '' ? '_default' : $namespace);
+    }
 }

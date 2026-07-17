@@ -27,17 +27,30 @@ func NewHandler(reg *control.Registry, a *auth.Store, mgr *Manager) *Handler {
 // Register mounts the datastore routes on mux.
 func (h *Handler) Register(mux *http.ServeMux) {
 	p := "/v1/datastore/{instance}"
-	mux.HandleFunc("GET "+p+"/namespaces", common.Wrap(h.listNamespaces))
-	mux.HandleFunc("DELETE "+p+"/namespaces/{ns}", common.Wrap(h.deleteNamespace))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/transaction", common.Wrap(h.transaction))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents", common.Wrap(h.putDocs))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/get", common.Wrap(h.batchGet))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/documents/delete", common.Wrap(h.deleteDocs))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/query", common.Wrap(h.query))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/aggregate", common.Wrap(h.aggregate))
-	mux.HandleFunc("GET "+p+"/namespaces/{ns}/collections/{collection}/indexes", common.Wrap(h.listIndexes))
-	mux.HandleFunc("POST "+p+"/namespaces/{ns}/collections/{collection}/indexes", common.Wrap(h.createIndex))
-	mux.HandleFunc("DELETE "+p+"/namespaces/{ns}/collections/{collection}/indexes/{id}", common.Wrap(h.dropIndex))
+	i := p + "/ns/{ns}/col"
+	mux.HandleFunc("GET "+p+"/ns", common.Wrap(h.listNamespaces))
+	mux.HandleFunc("DELETE "+p+"/ns/{ns}", common.Wrap(h.deleteNamespace))
+	mux.HandleFunc("POST "+p+"/ns/{ns}/transaction", common.Wrap(h.transaction))
+	mux.HandleFunc("POST "+i+"/{collection}/documents", common.Wrap(h.putDocs))
+	mux.HandleFunc("POST "+i+"/{collection}/documents/get", common.Wrap(h.batchGet))
+	mux.HandleFunc("POST "+i+"/{collection}/documents/delete", common.Wrap(h.deleteDocs))
+	mux.HandleFunc("POST "+i+"/{collection}/query", common.Wrap(h.query))
+	mux.HandleFunc("POST "+i+"/{collection}/aggregate", common.Wrap(h.aggregate))
+	mux.HandleFunc("GET "+i+"/{collection}/indexes", common.Wrap(h.listIndexes))
+	mux.HandleFunc("POST "+i+"/{collection}/indexes", common.Wrap(h.createIndex))
+	mux.HandleFunc("DELETE "+i+"/{collection}/indexes/{id}", common.Wrap(h.dropIndex))
+}
+
+// nsDefaultSegment is the reserved wire spelling of the empty (default)
+// namespace — a URL path can't carry an empty segment (routers collapse "//").
+const nsDefaultSegment = "_default"
+
+// decodeNs maps a {ns} path segment to its canonical namespace ("" for default).
+func decodeNs(seg string) string {
+	if seg == nsDefaultSegment {
+		return ""
+	}
+	return seg
 }
 
 // resolve authenticates the request and opens the store for the path's namespace.
@@ -51,7 +64,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, 
 		return nil, nil, err
 	}
 	inst := h.Reg.GetOrCreate("datastore", name)
-	ns := r.PathValue("ns")
+	ns := decodeNs(r.PathValue("ns"))
 	autoID, _ := inst.Config["autoId"].(string)
 	store, err := h.Mgr.Open(inst.ID, ns, autoID)
 	if err != nil {
@@ -110,7 +123,7 @@ func (h *Handler) deleteNamespace(w http.ResponseWriter, r *http.Request) error 
 	// Deliberately NOT h.resolve: opening the store would auto-create the very
 	// namespace being deleted.
 	inst := h.Reg.GetOrCreate("datastore", name)
-	existed, err := h.Mgr.Drop(inst.ID, r.PathValue("ns"))
+	existed, err := h.Mgr.Drop(inst.ID, decodeNs(r.PathValue("ns")))
 	if err != nil {
 		return err
 	}

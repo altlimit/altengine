@@ -34,6 +34,10 @@ class TestDocuments:
     def test_get_missing_returns_none(self, idx):
         assert idx.get("nope") is None
 
+    def test_get_list_is_order_preserving_with_nones(self, idx):
+        docs = idx.get(["p1", "does-not-exist", "p3"])
+        assert [d["id"] if d else None for d in docs] == ["p1", None, "p3"]
+
     def test_server_assigns_ids(self, idx):
         ids = idx.put([{"fields": [{"name": "title", "type": "text", "value": "temp"}]}])
         assert ids[0]

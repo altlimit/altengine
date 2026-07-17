@@ -160,3 +160,8 @@ async function toApiError(res: Response): Promise<AltEngineError> {
 
 /** Encode one path segment (instance/index/collection/key names). */
 export const seg = (s: string | number): string => encodeURIComponent(String(s));
+
+/** Encode a namespace path segment. The empty (default) namespace can't ride a
+ * URL path — routers collapse the resulting "//", so it travels as the reserved
+ * sentinel `_default` (the server maps it back to ""). */
+export const nsSeg = (namespace: string): string => seg(namespace === "" ? "_default" : namespace);

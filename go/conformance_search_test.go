@@ -84,6 +84,22 @@ func TestSearchDocuments(t *testing.T) {
 		}
 	})
 
+	t.Run("GetMulti is order-preserving with nils for missing ids", func(t *testing.T) {
+		docs, err := idx.GetMulti(ctx(t), []string{"p1", "does-not-exist", "p3"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, len(docs))
+		for n, d := range docs {
+			if d != nil {
+				got[n] = d.ID
+			}
+		}
+		if !reflect.DeepEqual(got, []string{"p1", "", "p3"}) {
+			t.Fatalf("got %v", got)
+		}
+	})
+
 	t.Run("server assigns ids when omitted", func(t *testing.T) {
 		ids, err := idx.Put(ctx(t), []altengine.SearchDocument{{Fields: []altengine.SearchField{altengine.Text("title", "temp")}}})
 		if err != nil || len(ids) != 1 || ids[0] == "" {

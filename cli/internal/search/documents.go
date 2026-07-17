@@ -253,6 +253,65 @@ func (s *Store) Get(indexName, docID string) (*Document, error) {
 	return &d, nil
 }
 
+// GetDocs batch-fetches documents by id (misses omitted), returned in the
+// requested order with duplicates collapsed. Chunked below the SQLite
+// bound-param cap for parity with the hosted service.
+func (s *Store) GetDocs(indexName string, ids []string) ([]Document, error) {
+	ix, err := s.getIndex(indexName)
+	if err != nil {
+		return nil, err
+	}
+	if ix == nil {
+		return nil, common.NotFound("index not found")
+	}
+	// De-dupe while preserving first-seen (requested) order.
+	seen := map[string]bool{}
+	distinct := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			distinct = append(distinct, id)
+		}
+	}
+	byID := map[string]Document{}
+	const chunkSize = 90
+	for start := 0; start < len(distinct); start += chunkSize {
+		end := start + chunkSize
+		if end > len(distinct) {
+			end = len(distinct)
+		}
+		grp := distinct[start:end]
+		ph := make([]string, len(grp))
+		args := make([]any, len(grp))
+		for i, id := range grp {
+			ph[i] = "?"
+			args[i] = id
+		}
+		rows, err := s.db.Query(fmt.Sprintf(`SELECT doc_id, body FROM %s_docs WHERE doc_id IN (%s)`, ix.prefix, strings.Join(ph, ",")), args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var docID, body string
+			if err := rows.Scan(&docID, &body); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var d Document
+			json.Unmarshal([]byte(body), &d)
+			byID[docID] = d
+		}
+		rows.Close()
+	}
+	out := make([]Document, 0, len(distinct))
+	for _, id := range distinct {
+		if d, ok := byID[id]; ok {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 // List returns documents ordered by doc_id, optionally starting at start_id.
 func (s *Store) List(indexName, startID string, includeStart bool, limit int, idsOnly bool) ([]Document, []string, error) {
 	ix, err := s.getIndex(indexName)

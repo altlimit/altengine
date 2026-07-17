@@ -46,6 +46,12 @@ final class SearchTest extends ConformanceTestCase
         $this->assertNull(self::$idx->get('nope'));
     }
 
+    public function testGetListIsOrderPreservingWithNulls(): void
+    {
+        $docs = self::$idx->get(['p1', 'does-not-exist', 'p3']);
+        $this->assertSame(['p1', null, 'p3'], array_map(fn ($d) => $d['id'] ?? null, $docs));
+    }
+
     public function testServerAssignsIds(): void
     {
         $ids = self::$idx->put([['fields' => [['name' => 'title', 'type' => 'text', 'value' => 'temp']]]]);

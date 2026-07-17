@@ -1,4 +1,4 @@
-import { Http, seg } from "../http.js";
+import { Http, seg, nsSeg } from "../http.js";
 import type {
   AggregateRequest,
   AggregateResult,
@@ -34,7 +34,7 @@ export class DatastoreClient {
     this.instance = instance;
     this.namespace = opts.namespace ?? "";
     this.base = `/v1/datastore/${seg(instance)}`;
-    this.nsBase = `${this.base}/namespaces/${seg(this.namespace)}`;
+    this.nsBase = `${this.base}/ns/${nsSeg(this.namespace)}`;
     this.namespaces = new NamespaceAdmin(http, this.base);
   }
 
@@ -45,7 +45,7 @@ export class DatastoreClient {
 
   /** Upsert up to 500 documents; returns their keys in order. */
   async put<T>(collection: string, documents: PutDocument<T>[]): Promise<{ keys: string[] }> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents`, {
+    return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/documents`, {
       body: { documents },
     });
   }
@@ -63,7 +63,7 @@ export class DatastoreClient {
     const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
     const res = await this.http.request<{ documents: DatastoreDocument<T>[] }>(
       "POST",
-      `${this.nsBase}/collections/${seg(collection)}/documents/get`,
+      `${this.nsBase}/col/${seg(collection)}/documents/get`,
       { body: { keys } }
     );
     // The wire response omits missing keys; rebuild positional correspondence
@@ -75,14 +75,14 @@ export class DatastoreClient {
 
   /** Delete up to 500 documents by key; missing keys are no-ops. */
   async delete(collection: string, keys: Key[]): Promise<{ deleted: number }> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/documents/delete`, {
+    return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/documents/delete`, {
       body: { keys },
     });
   }
 
   /** Run one page of an index-served query. */
   async query<T = unknown>(collection: string, req: QueryRequest = {}): Promise<QueryResult<T>> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/query`, { body: req });
+    return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/query`, { body: req });
   }
 
   /** Iterate every matching document across pages (cursor handled for you). */
@@ -97,7 +97,7 @@ export class DatastoreClient {
 
   /** Grouped metrics over an index-served filter. */
   async aggregate(collection: string, req: AggregateRequest): Promise<AggregateResult> {
-    return this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/aggregate`, { body: req });
+    return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/aggregate`, { body: req });
   }
 
   /** Apply up to 500 operations atomically within this namespace. NOT retried
@@ -108,11 +108,11 @@ export class DatastoreClient {
 
   readonly indexes = {
     list: async (collection: string): Promise<{ indexes: IndexSpec[] }> =>
-      this.http.request("GET", `${this.nsBase}/collections/${seg(collection)}/indexes`),
+      this.http.request("GET", `${this.nsBase}/col/${seg(collection)}/indexes`),
     create: async (collection: string, req: CreateIndexRequest): Promise<{ index: IndexSpec }> =>
-      this.http.request("POST", `${this.nsBase}/collections/${seg(collection)}/indexes`, { body: req }),
+      this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/indexes`, { body: req }),
     delete: async (collection: string, id: number): Promise<{ deleted: boolean }> =>
-      this.http.request("DELETE", `${this.nsBase}/collections/${seg(collection)}/indexes/${seg(id)}`),
+      this.http.request("DELETE", `${this.nsBase}/col/${seg(collection)}/indexes/${seg(id)}`),
   };
 }
 
@@ -120,11 +120,11 @@ export class NamespaceAdmin {
   constructor(private readonly http: Http, private readonly base: string) {}
 
   async list(opts: { q?: string; limit?: number } = {}): Promise<NamespacesPage> {
-    return this.http.request("GET", `${this.base}/namespaces`, { query: { q: opts.q, limit: opts.limit } });
+    return this.http.request("GET", `${this.base}/ns`, { query: { q: opts.q, limit: opts.limit } });
   }
 
   /** Delete a namespace and everything in it. Requires a `full` grant. */
   async delete(namespace: string): Promise<{ deleted: boolean }> {
-    return this.http.request("DELETE", `${this.base}/namespaces/${seg(namespace)}`);
+    return this.http.request("DELETE", `${this.base}/ns/${nsSeg(namespace)}`);
   }
 }

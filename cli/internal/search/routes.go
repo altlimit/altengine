@@ -23,14 +23,28 @@ func NewHandler(reg *control.Registry, a *auth.Store, mgr *Manager) *Handler {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	p := "/v1/search/{instance}"
-	mux.HandleFunc("GET "+p+"/namespaces", common.Wrap(h.listNamespaces))
-	mux.HandleFunc("GET "+p+"/indexes", common.Wrap(h.listIndexes))
-	mux.HandleFunc("GET "+p+"/indexes/{index}/schema", common.Wrap(h.schema))
-	mux.HandleFunc("DELETE "+p+"/indexes/{index}", common.Wrap(h.dropIndex))
-	mux.HandleFunc("PUT "+p+"/indexes/{index}/documents", common.Wrap(h.putDocs))
-	mux.HandleFunc("GET "+p+"/indexes/{index}/documents", common.Wrap(h.listDocs))
-	mux.HandleFunc("POST "+p+"/indexes/{index}/documents/delete", common.Wrap(h.deleteDocs))
-	mux.HandleFunc("POST "+p+"/indexes/{index}/search", common.Wrap(h.search))
+	mux.HandleFunc("GET "+p+"/ns", common.Wrap(h.listNamespaces))
+	i := p + "/ns/{ns}/idx"
+	mux.HandleFunc("GET "+i, common.Wrap(h.listIndexes))
+	mux.HandleFunc("GET "+i+"/{index}/schema", common.Wrap(h.schema))
+	mux.HandleFunc("DELETE "+i+"/{index}", common.Wrap(h.dropIndex))
+	mux.HandleFunc("POST "+i+"/{index}/documents", common.Wrap(h.putDocs))
+	mux.HandleFunc("POST "+i+"/{index}/documents/get", common.Wrap(h.batchGet))
+	mux.HandleFunc("GET "+i+"/{index}/documents", common.Wrap(h.listDocs))
+	mux.HandleFunc("POST "+i+"/{index}/documents/delete", common.Wrap(h.deleteDocs))
+	mux.HandleFunc("POST "+i+"/{index}/search", common.Wrap(h.search))
+}
+
+// nsDefaultSegment is the reserved wire spelling of the empty (default)
+// namespace — a URL path can't carry an empty segment (routers collapse "//").
+const nsDefaultSegment = "_default"
+
+// decodeNs maps a {ns} path segment to its canonical namespace ("" for default).
+func decodeNs(seg string) string {
+	if seg == nsDefaultSegment {
+		return ""
+	}
+	return seg
 }
 
 func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
@@ -43,10 +57,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 		return nil, err
 	}
 	inst := h.Reg.GetOrCreate("search", name)
-	ns := r.URL.Query().Get("namespace")
-	if ns == "" {
-		ns = r.Header.Get("X-Namespace")
-	}
+	ns := decodeNs(r.PathValue("ns"))
 	if err := validateNamespace(ns); err != nil {
 		return nil, err
 	}
@@ -71,6 +82,9 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 func validateNamespace(ns string) error {
 	if ns == "" {
 		return nil
+	}
+	if ns == nsDefaultSegment {
+		return common.BadRequest(`"` + nsDefaultSegment + `" is reserved; use the default namespace ("")`)
 	}
 	if len(ns) > 100 {
 		return common.BadRequest("namespace must be at most 100 bytes")
@@ -138,8 +152,29 @@ func (h *Handler) schema(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	ns := r.URL.Query().Get("namespace")
-	common.WriteJSON(w, 200, map[string]any{"name": r.PathValue("index"), "namespace": ns, "fields": sc})
+	common.WriteJSON(w, 200, map[string]any{"name": r.PathValue("index"), "namespace": decodeNs(r.PathValue("ns")), "fields": sc})
+	return nil
+}
+
+func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
+	store, err := h.resolve(r, auth.Read)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	docs, err := store.GetDocs(r.PathValue("index"), body.IDs)
+	if err != nil {
+		return err
+	}
+	if docs == nil {
+		docs = []Document{}
+	}
+	common.WriteJSON(w, 200, map[string]any{"documents": docs})
 	return nil
 }
 

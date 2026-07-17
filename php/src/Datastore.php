@@ -19,7 +19,7 @@ class Datastore
         public readonly string $namespace = '',
     ) {
         $this->base = '/v1/datastore/' . Http::seg($instance);
-        $this->ns = $this->base . '/namespaces/' . Http::seg($namespace);
+        $this->ns = $this->base . '/ns/' . Http::nsSeg($namespace);
     }
 
     /** Same instance, different namespace. */
@@ -39,7 +39,7 @@ class Datastore
     {
         $res = $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/documents',
+            "{$this->ns}/col/" . Http::seg($collection) . '/documents',
             body: ['documents' => $documents],
         );
         return $res['keys'];
@@ -59,7 +59,7 @@ class Datastore
         $keys = $single ? [$key] : $key;
         $res = $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/documents/get',
+            "{$this->ns}/col/" . Http::seg($collection) . '/documents/get',
             body: ['keys' => $keys],
         );
         $byKey = [];
@@ -80,7 +80,7 @@ class Datastore
     {
         $res = $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/documents/delete',
+            "{$this->ns}/col/" . Http::seg($collection) . '/documents/delete',
             body: ['keys' => $keys],
         );
         return $res['deleted'];
@@ -94,7 +94,7 @@ class Datastore
     {
         return $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/query',
+            "{$this->ns}/col/" . Http::seg($collection) . '/query',
             body: (object) $request,
         );
     }
@@ -125,7 +125,7 @@ class Datastore
     {
         return $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/aggregate',
+            "{$this->ns}/col/" . Http::seg($collection) . '/aggregate',
             body: (object) $request,
         );
     }
@@ -157,7 +157,7 @@ class Datastore
     {
         return $this->http->request(
             'GET',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/indexes',
+            "{$this->ns}/col/" . Http::seg($collection) . '/indexes',
         )['indexes'];
     }
 
@@ -171,7 +171,7 @@ class Datastore
     {
         $res = $this->http->request(
             'POST',
-            "{$this->ns}/collections/" . Http::seg($collection) . '/indexes',
+            "{$this->ns}/col/" . Http::seg($collection) . '/indexes',
             body: ['fields' => $fields, 'unique' => $unique],
         );
         return $res['index'];
@@ -181,7 +181,7 @@ class Datastore
     {
         $res = $this->http->request(
             'DELETE',
-            "{$this->ns}/collections/" . Http::seg($collection) . "/indexes/{$indexId}",
+            "{$this->ns}/col/" . Http::seg($collection) . "/indexes/{$indexId}",
         );
         return $res['deleted'];
     }
@@ -191,12 +191,12 @@ class Datastore
     /** @return array{namespaces: list<string>, has_more: bool} */
     public function listNamespaces(?string $q = null, ?int $limit = null): array
     {
-        return $this->http->request('GET', "{$this->base}/namespaces", ['q' => $q, 'limit' => $limit]);
+        return $this->http->request('GET', "{$this->base}/ns", ['q' => $q, 'limit' => $limit]);
     }
 
     /** Delete a namespace and everything in it. Requires a `full` grant. */
     public function deleteNamespace(string $namespace): bool
     {
-        return $this->http->request('DELETE', "{$this->base}/namespaces/" . Http::seg($namespace))['deleted'];
+        return $this->http->request('DELETE', "{$this->base}/ns/" . Http::nsSeg($namespace))['deleted'];
     }
 }

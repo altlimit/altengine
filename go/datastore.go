@@ -209,7 +209,7 @@ func newDatastore(t *transport, instance, namespace string) *Datastore {
 		Instance:  instance,
 		Namespace: namespace,
 		http:      t,
-		nsBase:    "/v1/datastore/" + seg(instance) + "/namespaces/" + seg(namespace),
+		nsBase:    "/v1/datastore/" + seg(instance) + "/ns/" + nsSeg(namespace),
 	}
 }
 
@@ -239,7 +239,7 @@ func (d *Datastore) PutMulti(ctx context.Context, collection string, documents [
 	}
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/documents",
+		path:   d.nsBase + "/col/" + seg(collection) + "/documents",
 		body:   map[string]any{"documents": documents},
 	}, &out)
 	return out.Keys, err
@@ -263,7 +263,7 @@ func (d *Datastore) GetMulti(ctx context.Context, collection string, keys []any)
 	}
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/documents/get",
+		path:   d.nsBase + "/col/" + seg(collection) + "/documents/get",
 		body:   map[string]any{"keys": keys},
 	}, &out)
 	if err != nil {
@@ -296,7 +296,7 @@ func (d *Datastore) DeleteMulti(ctx context.Context, collection string, keys []a
 	}
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/documents/delete",
+		path:   d.nsBase + "/col/" + seg(collection) + "/documents/delete",
 		body:   map[string]any{"keys": keys},
 	}, &out)
 	return out.Deleted, err
@@ -307,7 +307,7 @@ func (d *Datastore) Query(ctx context.Context, collection string, req QueryReque
 	var out QueryResult
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/query",
+		path:   d.nsBase + "/col/" + seg(collection) + "/query",
 		body:   req,
 	}, &out)
 	if err != nil {
@@ -344,7 +344,7 @@ func (d *Datastore) Aggregate(ctx context.Context, collection string, req Aggreg
 	var out AggregateResult
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/aggregate",
+		path:   d.nsBase + "/col/" + seg(collection) + "/aggregate",
 		body:   req,
 	}, &out)
 	if err != nil {
@@ -377,7 +377,7 @@ func (d *Datastore) ListIndexes(ctx context.Context, collection string) ([]Index
 	}
 	err := d.http.do(ctx, request{
 		method: "GET",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/indexes",
+		path:   d.nsBase + "/col/" + seg(collection) + "/indexes",
 	}, &out)
 	return out.Indexes, err
 }
@@ -390,7 +390,7 @@ func (d *Datastore) CreateIndex(ctx context.Context, collection string, fields [
 	}
 	err := d.http.do(ctx, request{
 		method: "POST",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/indexes",
+		path:   d.nsBase + "/col/" + seg(collection) + "/indexes",
 		body:   map[string]any{"fields": fields, "unique": unique},
 	}, &out)
 	return out.Index, err
@@ -403,7 +403,7 @@ func (d *Datastore) DeleteIndex(ctx context.Context, collection string, id int64
 	}
 	err := d.http.do(ctx, request{
 		method: "DELETE",
-		path:   d.nsBase + "/collections/" + seg(collection) + "/indexes/" + strconv.FormatInt(id, 10),
+		path:   d.nsBase + "/col/" + seg(collection) + "/indexes/" + strconv.FormatInt(id, 10),
 	}, &out)
 	return out.Deleted, err
 }
@@ -414,7 +414,7 @@ func (d *Datastore) ListNamespaces(ctx context.Context, opts ListOptions) (*Name
 	var out NamespacesPage
 	err := d.http.do(ctx, request{
 		method: "GET",
-		path:   "/v1/datastore/" + seg(d.Instance) + "/namespaces",
+		path:   "/v1/datastore/" + seg(d.Instance) + "/ns",
 		query:  opts.query(),
 	}, &out)
 	if err != nil {
@@ -431,7 +431,7 @@ func (d *Datastore) DeleteNamespace(ctx context.Context, namespace string) (bool
 	}
 	err := d.http.do(ctx, request{
 		method: "DELETE",
-		path:   "/v1/datastore/" + seg(d.Instance) + "/namespaces/" + seg(namespace),
+		path:   "/v1/datastore/" + seg(d.Instance) + "/ns/" + nsSeg(namespace),
 	}, &out)
 	return out.Deleted, err
 }

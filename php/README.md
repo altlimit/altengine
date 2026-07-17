@@ -86,6 +86,9 @@ $idx->put([[
     'facets' => [F::atomFacet('category', 'shoes'), F::numberFacet('price', 59)],
 ]]);
 
+$doc = $idx->get('p1');                 // null when missing
+$docs = $idx->get(['p1', 'nope']);      // array in → array out, null for missing
+
 $res = $idx->search('shoes price<100', [
     'facets' => ['category'],
     'snippet' => ['fields' => ['title']],

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence, Union
 
-from ._http import AsyncHttp, Http, seg
+from ._http import AsyncHttp, Http, seg, ns_seg
 
 Key = Union[str, int]
 Document = Dict[str, Any]
@@ -24,7 +24,7 @@ class DatastoreClient:
         self.instance = instance
         self.namespace = namespace
         self._base = f"/v1/datastore/{seg(instance)}"
-        self._ns = f"{self._base}/namespaces/{seg(namespace)}"
+        self._ns = f"{self._base}/ns/{ns_seg(namespace)}"
 
     def with_namespace(self, namespace: str) -> "DatastoreClient":
         """Same instance, different namespace."""
@@ -34,7 +34,7 @@ class DatastoreClient:
         """Upsert up to 500 documents (``{"key": ..., "data": {...}}``; omit
         ``key`` for auto-id). Returns their keys in order."""
         res = self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents", body={"documents": list(documents)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents", body={"documents": list(documents)}
         )
         return res["keys"]
 
@@ -47,7 +47,7 @@ class DatastoreClient:
         single = not isinstance(key, (list, tuple))
         keys = [key] if single else list(key)
         res = self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": keys}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents/get", body={"keys": keys}
         )
         by_key = {d["key"]: d for d in res["documents"]}
         docs = [by_key.get(_key_str(k)) for k in keys]
@@ -57,7 +57,7 @@ class DatastoreClient:
         """Delete up to 500 documents by key; missing keys are no-ops. Returns
         the number actually deleted."""
         res = self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents/delete", body={"keys": list(keys)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents/delete", body={"keys": list(keys)}
         )
         return res["deleted"]
 
@@ -65,7 +65,7 @@ class DatastoreClient:
         """Run one page of an index-served query. Keyword args are the wire
         request: ``where``, ``order``, ``limit`` (default 25, max 500),
         ``cursor``, ``keys_only``, ``join``."""
-        return self._http.request("POST", f"{self._ns}/collections/{seg(collection)}/query", body=req)
+        return self._http.request("POST", f"{self._ns}/col/{seg(collection)}/query", body=req)
 
     def query_all(self, collection: str, **req: Any) -> Iterator[Document]:
         """Iterate every matching document across pages (cursor handled for you)."""
@@ -81,7 +81,7 @@ class DatastoreClient:
     def aggregate(self, collection: str, **req: Any) -> Dict[str, Any]:
         """Grouped metrics over an index-served filter: ``metrics`` (count/sum/
         avg/min/max), ``group``, ``where``, ``order``, ``limit``."""
-        return self._http.request("POST", f"{self._ns}/collections/{seg(collection)}/aggregate", body=req)
+        return self._http.request("POST", f"{self._ns}/col/{seg(collection)}/aggregate", body=req)
 
     def transaction(self, operations: Sequence[Dict[str, Any]]) -> List[Optional[str]]:
         """Apply up to 500 operations (op: put/delete/mutate/check) atomically
@@ -94,30 +94,30 @@ class DatastoreClient:
     # --- indexes ---
 
     def list_indexes(self, collection: str) -> List[Dict[str, Any]]:
-        return self._http.request("GET", f"{self._ns}/collections/{seg(collection)}/indexes")["indexes"]
+        return self._http.request("GET", f"{self._ns}/col/{seg(collection)}/indexes")["indexes"]
 
     def create_index(self, collection: str, fields: Sequence[str], unique: bool = False) -> Dict[str, Any]:
         """Create a secondary index (idempotent). ``fields`` entries are
         ``"field"`` or ``"field:asc"`` / ``"field:desc"``, max 8."""
         res = self._http.request(
             "POST",
-            f"{self._ns}/collections/{seg(collection)}/indexes",
+            f"{self._ns}/col/{seg(collection)}/indexes",
             body={"fields": list(fields), "unique": unique},
         )
         return res["index"]
 
     def delete_index(self, collection: str, index_id: int) -> bool:
-        res = self._http.request("DELETE", f"{self._ns}/collections/{seg(collection)}/indexes/{index_id}")
+        res = self._http.request("DELETE", f"{self._ns}/col/{seg(collection)}/indexes/{index_id}")
         return res["deleted"]
 
     # --- namespaces (instance-wide, not bound to this client's namespace) ---
 
     def list_namespaces(self, q: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
-        return self._http.request("GET", f"{self._base}/namespaces", query={"q": q, "limit": limit})
+        return self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit})
 
     def delete_namespace(self, namespace: str) -> bool:
         """Delete a namespace and everything in it. Requires a ``full`` grant."""
-        return self._http.request("DELETE", f"{self._base}/namespaces/{seg(namespace)}")["deleted"]
+        return self._http.request("DELETE", f"{self._base}/ns/{ns_seg(namespace)}")["deleted"]
 
 
 class AsyncDatastoreClient:
@@ -128,14 +128,14 @@ class AsyncDatastoreClient:
         self.instance = instance
         self.namespace = namespace
         self._base = f"/v1/datastore/{seg(instance)}"
-        self._ns = f"{self._base}/namespaces/{seg(namespace)}"
+        self._ns = f"{self._base}/ns/{ns_seg(namespace)}"
 
     def with_namespace(self, namespace: str) -> "AsyncDatastoreClient":
         return AsyncDatastoreClient(self._http, self.instance, namespace)
 
     async def put(self, collection: str, documents: Sequence[Document]) -> List[str]:
         res = await self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents", body={"documents": list(documents)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents", body={"documents": list(documents)}
         )
         return res["keys"]
 
@@ -143,7 +143,7 @@ class AsyncDatastoreClient:
         single = not isinstance(key, (list, tuple))
         keys = [key] if single else list(key)
         res = await self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents/get", body={"keys": keys}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents/get", body={"keys": keys}
         )
         by_key = {d["key"]: d for d in res["documents"]}
         docs = [by_key.get(_key_str(k)) for k in keys]
@@ -151,12 +151,12 @@ class AsyncDatastoreClient:
 
     async def delete(self, collection: str, keys: Sequence[Key]) -> int:
         res = await self._http.request(
-            "POST", f"{self._ns}/collections/{seg(collection)}/documents/delete", body={"keys": list(keys)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents/delete", body={"keys": list(keys)}
         )
         return res["deleted"]
 
     async def query(self, collection: str, **req: Any) -> Dict[str, Any]:
-        return await self._http.request("POST", f"{self._ns}/collections/{seg(collection)}/query", body=req)
+        return await self._http.request("POST", f"{self._ns}/col/{seg(collection)}/query", body=req)
 
     async def query_all(self, collection: str, **req: Any) -> AsyncIterator[Document]:
         cursor = req.pop("cursor", None)
@@ -169,7 +169,7 @@ class AsyncDatastoreClient:
                 return
 
     async def aggregate(self, collection: str, **req: Any) -> Dict[str, Any]:
-        return await self._http.request("POST", f"{self._ns}/collections/{seg(collection)}/aggregate", body=req)
+        return await self._http.request("POST", f"{self._ns}/col/{seg(collection)}/aggregate", body=req)
 
     async def transaction(self, operations: Sequence[Dict[str, Any]]) -> List[Optional[str]]:
         res = await self._http.request(
@@ -178,22 +178,22 @@ class AsyncDatastoreClient:
         return res["keys"]
 
     async def list_indexes(self, collection: str) -> List[Dict[str, Any]]:
-        return (await self._http.request("GET", f"{self._ns}/collections/{seg(collection)}/indexes"))["indexes"]
+        return (await self._http.request("GET", f"{self._ns}/col/{seg(collection)}/indexes"))["indexes"]
 
     async def create_index(self, collection: str, fields: Sequence[str], unique: bool = False) -> Dict[str, Any]:
         res = await self._http.request(
             "POST",
-            f"{self._ns}/collections/{seg(collection)}/indexes",
+            f"{self._ns}/col/{seg(collection)}/indexes",
             body={"fields": list(fields), "unique": unique},
         )
         return res["index"]
 
     async def delete_index(self, collection: str, index_id: int) -> bool:
-        res = await self._http.request("DELETE", f"{self._ns}/collections/{seg(collection)}/indexes/{index_id}")
+        res = await self._http.request("DELETE", f"{self._ns}/col/{seg(collection)}/indexes/{index_id}")
         return res["deleted"]
 
     async def list_namespaces(self, q: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
-        return await self._http.request("GET", f"{self._base}/namespaces", query={"q": q, "limit": limit})
+        return await self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit})
 
     async def delete_namespace(self, namespace: str) -> bool:
-        return (await self._http.request("DELETE", f"{self._base}/namespaces/{seg(namespace)}"))["deleted"]
+        return (await self._http.request("DELETE", f"{self._base}/ns/{ns_seg(namespace)}"))["deleted"]

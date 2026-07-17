@@ -9,14 +9,12 @@ class SearchIndex
 {
     private string $path;
 
-    /** @param array<string, string>|null $headers */
     public function __construct(
         private readonly Http $http,
-        string $base,
+        string $nsBase,
         public readonly string $name,
-        private readonly ?array $headers,
     ) {
-        $this->path = "{$base}/indexes/" . Http::seg($name);
+        $this->path = "{$nsBase}/idx/" . Http::seg($name);
     }
 
     /**
@@ -28,32 +26,28 @@ class SearchIndex
      */
     public function put(array $documents): array
     {
-        $res = $this->http->request(
-            'PUT',
-            "{$this->path}/documents",
-            body: ['documents' => $documents],
-            headers: $this->headers,
-        );
+        $res = $this->http->request('POST', "{$this->path}/documents", body: ['documents' => $documents]);
         return $res['ids'];
     }
 
     /**
-     * Fetch one document, or null when it (or the index) doesn't exist.
-     * Rides the keyset listing (start_id + limit 1) — there is no
-     * single-document route on the wire.
+     * Fetch one document (null when missing), or — passed a list of ids — up to
+     * 200 documents in one round trip, order-preserving with null placeholders
+     * for missing ids. Both forms ride the batch endpoint.
+     *
+     * @param string|list<string> $id
      */
-    public function get(string $id): ?array
+    public function get(string|array $id): ?array
     {
-        try {
-            $page = $this->listDocuments(startId: $id, limit: 1);
-        } catch (AltEngineError $err) {
-            if ($err->status === 404) {
-                return null;
-            }
-            throw $err;
+        $single = !is_array($id);
+        $ids = $single ? [$id] : $id;
+        $res = $this->http->request('POST', "{$this->path}/documents/get", body: ['ids' => $ids]);
+        $byId = [];
+        foreach ($res['documents'] as $doc) {
+            $byId[$doc['id']] = $doc;
         }
-        $doc = ($page['documents'] ?? [])[0] ?? null;
-        return ($doc !== null && $doc['id'] === $id) ? $doc : null;
+        $docs = array_map(static fn ($i) => $byId[$i] ?? null, $ids);
+        return $single ? $docs[0] : $docs;
     }
 
     /**
@@ -64,12 +58,7 @@ class SearchIndex
      */
     public function delete(array $ids): int
     {
-        $res = $this->http->request(
-            'POST',
-            "{$this->path}/documents/delete",
-            body: ['ids' => $ids],
-            headers: $this->headers,
-        );
+        $res = $this->http->request('POST', "{$this->path}/documents/delete", body: ['ids' => $ids]);
         return $res['deleted'];
     }
 
@@ -80,12 +69,7 @@ class SearchIndex
      */
     public function search(string $query = '', array $options = []): array
     {
-        return $this->http->request(
-            'POST',
-            "{$this->path}/search",
-            body: ['query' => $query, ...$options],
-            headers: $this->headers,
-        );
+        return $this->http->request('POST', "{$this->path}/search", body: ['query' => $query, ...$options]);
     }
 
     /**
@@ -118,7 +102,7 @@ class SearchIndex
             'include_start' => $includeStart,
             'limit' => $limit,
             'ids_only' => $idsOnly,
-        ], headers: $this->headers);
+        ]);
     }
 
     /**
@@ -148,6 +132,6 @@ class SearchIndex
      */
     public function schema(): array
     {
-        return $this->http->request('GET', "{$this->path}/schema", headers: $this->headers);
+        return $this->http->request('GET', "{$this->path}/schema");
     }
 }

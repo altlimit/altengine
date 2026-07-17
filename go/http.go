@@ -174,6 +174,16 @@ func toAPIError(res *http.Response) *APIError {
 // seg encodes one path segment (instance/index/collection/key names).
 func seg(s string) string { return url.PathEscape(s) }
 
+// nsSeg encodes a namespace path segment. The empty (default) namespace can't
+// ride a URL path — routers collapse the resulting "//", so it travels as the
+// reserved sentinel `_default` (the server maps it back to "").
+func nsSeg(namespace string) string {
+	if namespace == "" {
+		return "_default"
+	}
+	return seg(namespace)
+}
+
 // keyString renders a document key: numeric keys are stored as decimal strings.
 func keyString(key any) string {
 	switch k := key.(type) {

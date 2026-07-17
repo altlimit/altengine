@@ -94,6 +94,9 @@ await idx.put([{
   facets: [facet.atom("category", "shoes"), facet.number("price", 59)],
 }]);
 
+const doc = await idx.get("p1");                 // null when missing
+const docs = await idx.get(["p1", "nope"]);      // array in → array out, nulls for missing
+
 const res = await idx.search({
   query: 'shoes price<100',
   facets: ["category"],

@@ -91,6 +91,9 @@ ids, err := idx.Put(ctx, []altengine.SearchDocument{{
     Facets: []altengine.SearchFacet{altengine.AtomFacet("category", "shoes")},
 }})
 
+doc, err := idx.Get(ctx, "p1")                        // nil, nil when missing
+docs, err := idx.GetMulti(ctx, []string{"p1", "nope"}) // order-preserving, nil for missing
+
 res, err := idx.Search(ctx, altengine.SearchRequest{
     Query:   "shoes price<100",
     Facets:  []string{"category"},

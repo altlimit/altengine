@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace AltEngine;
 
 /**
- * Client for one search instance, bound to a namespace (sent as X-Namespace,
- * default "").
+ * Client for one search instance, bound to a namespace (carried in the request
+ * path, default "").
  */
 class Search
 {
     private string $base;
+    private string $ns;
 
     public function __construct(
         private readonly Http $http,
@@ -18,6 +19,7 @@ class Search
         public readonly string $namespace = '',
     ) {
         $this->base = '/v1/search/' . Http::seg($instance);
+        $this->ns = $this->base . '/ns/' . Http::nsSeg($namespace);
     }
 
     /** Same instance, different namespace. */
@@ -26,25 +28,15 @@ class Search
         return new self($this->http, $this->instance, $namespace);
     }
 
-    /** @return array<string, string>|null */
-    private function headers(): ?array
-    {
-        return $this->namespace !== '' ? ['x-namespace' => $this->namespace] : null;
-    }
-
     public function index(string $name): SearchIndex
     {
-        return new SearchIndex($this->http, $this->base, $name, $this->headers());
+        return new SearchIndex($this->http, $this->ns, $name);
     }
 
-    /** @return array{indexes: list<array>, has_more: bool} */
+    /** Indexes in this client's namespace. @return array{indexes: list<array>, has_more: bool} */
     public function listIndexes(?string $q = null, ?int $limit = null): array
     {
-        return $this->http->request('GET', "{$this->base}/indexes", [
-            'q' => $q,
-            'limit' => $limit,
-            'namespace' => $this->namespace !== '' ? $this->namespace : null,
-        ]);
+        return $this->http->request('GET', "{$this->ns}/idx", ['q' => $q, 'limit' => $limit]);
     }
 
     /**
@@ -56,17 +48,13 @@ class Search
      */
     public function listNamespaces(?string $q = null, ?int $limit = null): array
     {
-        return $this->http->request('GET', "{$this->base}/namespaces", ['q' => $q, 'limit' => $limit]);
+        return $this->http->request('GET', "{$this->base}/ns", ['q' => $q, 'limit' => $limit]);
     }
 
     /** Delete an index and all its documents. Requires a `full` grant. */
     public function deleteIndex(string $name): bool
     {
-        $res = $this->http->request(
-            'DELETE',
-            "{$this->base}/indexes/" . Http::seg($name),
-            headers: $this->headers(),
-        );
+        $res = $this->http->request('DELETE', "{$this->ns}/idx/" . Http::seg($name));
         return $res['deleted'];
     }
 }

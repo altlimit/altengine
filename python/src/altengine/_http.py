@@ -206,3 +206,10 @@ def seg(value: Any) -> str:
     from urllib.parse import quote
 
     return quote(str(value), safe="")
+
+
+def ns_seg(namespace: str) -> str:
+    """Encode a namespace path segment. The empty (default) namespace can't ride
+    a URL path — routers collapse the resulting ``//`` — so it travels as the
+    reserved sentinel ``_default`` (the server maps it back to ``""``)."""
+    return seg("_default" if namespace == "" else namespace)
