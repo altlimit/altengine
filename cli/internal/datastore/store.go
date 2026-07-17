@@ -222,7 +222,7 @@ func (s *Store) genKey(collection string) (string, error) {
 	switch s.autoID {
 	case "scattered":
 		return scatteredID(), nil
-	case "incrementing":
+	case "serial", "incrementing": // "incrementing" is the pre-rename alias
 		var next int64
 		err := s.db.QueryRow(
 			`INSERT INTO _dsseq(collection, next) VALUES(?, 1)
@@ -244,7 +244,7 @@ func (s *Store) genKeyTx(tx *sql.Tx, collection string) (string, error) {
 	switch s.autoID {
 	case "scattered":
 		return scatteredID(), nil
-	case "incrementing":
+	case "serial", "incrementing": // "incrementing" is the pre-rename alias
 		var next int64
 		err := tx.QueryRow(
 			`INSERT INTO _dsseq(collection, next) VALUES(?, 1)
