@@ -3,6 +3,7 @@ package altengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"net/url"
 	"strconv"
@@ -218,8 +219,21 @@ func (d *Datastore) WithNamespace(namespace string) *Datastore {
 	return newDatastore(d.http, d.Instance, namespace)
 }
 
-// Put upserts up to 500 documents and returns their keys in order.
-func (d *Datastore) Put(ctx context.Context, collection string, documents []PutDocument) ([]string, error) {
+// Put upserts one document and returns its key; pass a nil key to use the
+// instance's auto-id strategy.
+func (d *Datastore) Put(ctx context.Context, collection string, key any, data any) (string, error) {
+	keys, err := d.PutMulti(ctx, collection, []PutDocument{{Key: key, Data: data}})
+	if err != nil {
+		return "", err
+	}
+	if len(keys) == 0 {
+		return "", errors.New("altengine: server returned no key")
+	}
+	return keys[0], nil
+}
+
+// PutMulti upserts up to 500 documents and returns their keys in order.
+func (d *Datastore) PutMulti(ctx context.Context, collection string, documents []PutDocument) ([]string, error) {
 	var out struct {
 		Keys []string `json:"keys"`
 	}
@@ -272,9 +286,16 @@ func (d *Datastore) GetMulti(ctx context.Context, collection string, keys []any)
 	return docs, nil
 }
 
-// Delete removes up to 500 documents by key; missing keys are no-ops.
+// Delete removes one document by key (a no-op when missing) and reports
+// whether it existed.
+func (d *Datastore) Delete(ctx context.Context, collection string, key any) (bool, error) {
+	n, err := d.DeleteMulti(ctx, collection, []any{key})
+	return n > 0, err
+}
+
+// DeleteMulti removes up to 500 documents by key; missing keys are no-ops.
 // Returns the number actually deleted.
-func (d *Datastore) Delete(ctx context.Context, collection string, keys []any) (int, error) {
+func (d *Datastore) DeleteMulti(ctx context.Context, collection string, keys []any) (int, error) {
 	var out struct {
 		Deleted int `json:"deleted"`
 	}

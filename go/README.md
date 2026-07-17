@@ -35,12 +35,12 @@ publishes, which are never auto-retried. API failures are `*APIError` with
 ```go
 db := ae.Datastore("myapp").WithNamespace("prod")
 
-keys, err := db.Put(ctx, "todos", []altengine.PutDocument{
-    {Data: map[string]any{"title": "ship SDK", "done": false}},
-})
-doc, err := db.Get(ctx, "todos", keys[0])           // nil, nil when missing
+key, err := db.Put(ctx, "todos", nil, map[string]any{"title": "ship SDK", "done": false}) // nil key → auto-id
+keys, err := db.PutMulti(ctx, "todos", []altengine.PutDocument{{Key: "t2", Data: todo}})
+doc, err := db.Get(ctx, "todos", key)               // nil, nil when missing
 docs, err := db.GetMulti(ctx, "todos", []any{"t1", "t2"}) // order-preserving, nil for missing
-n, err := db.Delete(ctx, "todos", []any{"t1"})      // missing keys are no-ops
+ok, err := db.Delete(ctx, "todos", key)             // missing keys are no-ops
+n, err := db.DeleteMulti(ctx, "todos", []any{"t1", "t2"})
 
 // Queries (QueryAll pages cursors for you)
 page, err := db.Query(ctx, "todos", altengine.QueryRequest{

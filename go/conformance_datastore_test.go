@@ -36,10 +36,10 @@ func seedDatastore(t *testing.T) (*altengine.Datastore, dsSeed) {
 	for _, o := range seed.Owners {
 		owners = append(owners, altengine.PutDocument{Key: o.Key, Data: o.Data})
 	}
-	if _, err := db.Put(ctx(t), seed.Collection, docs); err != nil {
+	if _, err := db.PutMulti(ctx(t), seed.Collection, docs); err != nil {
 		t.Fatalf("seeding todos: %v", err)
 	}
-	if _, err := db.Put(ctx(t), "owners", owners); err != nil {
+	if _, err := db.PutMulti(ctx(t), "owners", owners); err != nil {
 		t.Fatalf("seeding owners: %v", err)
 	}
 	return db, seed
@@ -66,7 +66,7 @@ func TestDatastoreCRUD(t *testing.T) {
 
 	t.Run("puts are upserts and preserve created", func(t *testing.T) {
 		before, _ := db.Get(ctx(t), "todos", "t1")
-		if _, err := db.Put(ctx(t), "todos", []altengine.PutDocument{
+		if _, err := db.PutMulti(ctx(t), "todos", []altengine.PutDocument{
 			{Key: "t1", Data: map[string]any{"title": "ship SDK v2", "owner": "ana", "done": false, "priority": 1}},
 		}); err != nil {
 			t.Fatal(err)
@@ -85,13 +85,13 @@ func TestDatastoreCRUD(t *testing.T) {
 		// restore
 		for _, d := range seed.Documents {
 			if d.Key == "t1" {
-				db.Put(ctx(t), "todos", []altengine.PutDocument{{Key: d.Key, Data: d.Data}})
+				db.PutMulti(ctx(t), "todos", []altengine.PutDocument{{Key: d.Key, Data: d.Data}})
 			}
 		}
 	})
 
 	t.Run("auto-id put returns a generated key; numeric keys coerce to strings", func(t *testing.T) {
-		keys, err := db.Put(ctx(t), "todos", []altengine.PutDocument{
+		keys, err := db.PutMulti(ctx(t), "todos", []altengine.PutDocument{
 			{Data: map[string]any{"title": "auto"}},
 			{Key: 42, Data: map[string]any{"title": "num"}},
 		})
@@ -109,7 +109,7 @@ func TestDatastoreCRUD(t *testing.T) {
 		for i, k := range keys {
 			anyKeys[i] = k
 		}
-		db.Delete(ctx(t), "todos", anyKeys)
+		db.DeleteMulti(ctx(t), "todos", anyKeys)
 	})
 
 	t.Run("GetMulti is order-preserving with nils for missing keys", func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestDatastoreCRUD(t *testing.T) {
 		if err != nil || doc != nil {
 			t.Fatalf("doc=%v err=%v", doc, err)
 		}
-		if _, err := db.Delete(ctx(t), "todos", []any{"ghost"}); err != nil {
+		if _, err := db.Delete(ctx(t), "todos", "ghost"); err != nil {
 			t.Fatalf("delete missing: %v", err)
 		}
 	})
@@ -245,7 +245,9 @@ func TestDatastoreTransactionsAndIndexes(t *testing.T) {
 	db, _ := seedDatastore(t)
 
 	t.Run("applies put mutate check atomically", func(t *testing.T) {
-		db.Put(ctx(t), "counters", []altengine.PutDocument{{Key: "c1", Data: map[string]any{"total": 0}}})
+		if _, err := db.Put(ctx(t), "counters", "c1", map[string]any{"total": 0}); err != nil {
+			t.Fatal(err)
+		}
 		keys, err := db.Transaction(ctx(t), []altengine.TxnOp{
 			altengine.TxnCheck("counters", "c1", true),
 			altengine.TxnMutate("counters", "c1", altengine.TxnOp{Increment: map[string]float64{"total": 5}}),
@@ -292,10 +294,10 @@ func TestDatastoreTransactionsAndIndexes(t *testing.T) {
 		if err != nil || b.ID != a.ID {
 			t.Fatalf("idempotency: a=%v b=%v err=%v", a, b, err)
 		}
-		if _, err := db.Put(ctx(t), "users", []altengine.PutDocument{{Key: "u1", Data: map[string]any{"email": "x@y.z"}}}); err != nil {
+		if _, err := db.PutMulti(ctx(t), "users", []altengine.PutDocument{{Key: "u1", Data: map[string]any{"email": "x@y.z"}}}); err != nil {
 			t.Fatal(err)
 		}
-		_, err = db.Put(ctx(t), "users", []altengine.PutDocument{{Key: "u2", Data: map[string]any{"email": "x@y.z"}}})
+		_, err = db.PutMulti(ctx(t), "users", []altengine.PutDocument{{Key: "u2", Data: map[string]any{"email": "x@y.z"}}})
 		var ae *altengine.APIError
 		if !errors.As(err, &ae) {
 			t.Fatalf("unique violation not an APIError: %v", err)
@@ -320,7 +322,7 @@ func TestDatastoreNamespaces(t *testing.T) {
 	db, _ := seedDatastore(t)
 
 	other := db.WithNamespace(uniq("other"))
-	if _, err := other.Put(ctx(t), "todos", []altengine.PutDocument{{Key: "only-here", Data: map[string]any{"a": 1}}}); err != nil {
+	if _, err := other.PutMulti(ctx(t), "todos", []altengine.PutDocument{{Key: "only-here", Data: map[string]any{"a": 1}}}); err != nil {
 		t.Fatal(err)
 	}
 	if doc, _ := db.Get(ctx(t), "todos", "only-here"); doc != nil {
