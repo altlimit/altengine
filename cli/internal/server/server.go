@@ -7,6 +7,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/admin"
 	"github.com/altlimit/altengine/cli/internal/auth"
@@ -56,7 +57,7 @@ func New(opts Options) (*Server, error) {
 	identity.NewHandler(reg, idSvc).Register(mux)
 
 	// Admin last: its console handler is a catch-all on "/".
-	admin.NewHandler(reg, a, dsMgr, srMgr, hub).Register(mux)
+	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		common.WriteJSON(w, 200, map[string]any{"ok": true})
@@ -65,9 +66,9 @@ func New(opts Options) (*Server, error) {
 	return &Server{opts: opts, mux: mux}, nil
 }
 
-// Handler returns the root http.Handler (with a simple request log).
+// Handler returns the root http.Handler (with CORS and a simple request log).
 func (s *Server) Handler() http.Handler {
-	return logMW(s.mux)
+	return logMW(corsMW(s.mux))
 }
 
 // ListenAndServe starts the HTTP server.
@@ -85,6 +86,42 @@ func dataLabel(d string) string {
 		return "in-memory (nothing persisted)"
 	}
 	return d
+}
+
+// corsMW makes the data plane reachable from a browser app served on another origin — the
+// normal local setup (a Vite dev server on :5173 talking to the emulator on :9191), and the
+// whole point of the auth service. It mirrors the hosted behavior: the request Origin is
+// REFLECTED (with `Vary: Origin`) rather than a blanket "*", and credentials are deliberately
+// NOT allowed. That is safe because these endpoints carry no cookies — they authenticate with
+// a Bearer token that JS must attach explicitly, so a foreign page has no ambient credential
+// to ride.
+//
+// Scoped to /v1/* on purpose. The admin plane is same-origin (the console is served from this
+// same server) and, hosted, is cookie-authed with a CSRF Origin check — giving it CORS here
+// would teach a habit the hosted service does not allow.
+func corsMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", origin)
+		h.Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+		h.Set("Access-Control-Allow-Headers", "Authorization,Content-Type")
+		h.Set("Access-Control-Max-Age", "86400")
+		h.Add("Vary", "Origin")
+		// Preflight never reaches a route.
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func logMW(next http.Handler) http.Handler {

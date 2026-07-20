@@ -47,6 +47,7 @@ async function api(method, path, body) {
 }
 const jGet = (p) => api("GET", p);
 const jPost = (p, b) => api("POST", p, b);
+const jPut = (p, b) => api("PUT", p, b);
 const jDel = (p) => api("DELETE", p);
 function fmtTime(ms) { return ms ? new Date(ms).toLocaleString() : "—"; }
 function parseJSONField(text, fallback) {
@@ -99,9 +100,8 @@ views.overview = async () => {
     try {
       const { instances } = await jGet(`/admin/${svc}`);
       const label = svc === "channel" ? "channels" : svc;
-      // Auth has no browser tab yet — its card is informational, not clickable.
-      const clickable = svc !== "auth";
-      grid.append(h("div", { class: clickable ? "card click" : "card", onclick: () => clickable && setView(label === "channel" ? "channels" : label) },
+      const clickable = true;
+      grid.append(h("div", { class: "card click", onclick: () => setView(label === "channel" ? "channels" : label) },
         h("h2", {}, label[0].toUpperCase() + label.slice(1)),
         h("div", { class: "mono" }, `${instances.length} instance${instances.length === 1 ? "" : "s"}`),
         h("div", { class: "muted", style: "margin-top:6px;font-size:12px" }, `/v1/${svc}/{instance}`)
@@ -402,6 +402,96 @@ function renderChannels() {
       h("div", { class: "row", style: "margin-top:8px" }, pubHTTP, pubWS)),
     h("h2", {}, "Messages"), log
   );
+}
+
+// ================= AUTH =================
+// An auth instance auto-creates on first use, but its DEFAULT config collects only an email
+// and grants no access — so a client app signs a user up and then gets 403 on every data
+// call. This tab is where you fix that: edit the sign-up form and the access rules, and see
+// the end users that result.
+const authState = { instId: null, name: null };
+
+views.auth = async () => {
+  main.append(h("h1", {}, "Auth"),
+    h("p", { class: "muted" },
+      "End-user accounts and identity tokens. A signed-in user's id_token is what your app sends to " +
+      "the datastore and channel planes; the access rules below decide what it may reach."));
+  main.append(await instancePicker("auth", async (id) => {
+    authState.instId = id;
+    const inst = (await jGet(`/admin/auth`)).instances.find((i) => i.id === id);
+    authState.name = inst ? inst.name : null;
+    renderAuth();
+  }, authState.instId));
+  main.append(h("div", { id: "auth-holder" }));
+  if (authState.instId) renderAuth();
+};
+
+async function renderAuth() {
+  const holder = $("#auth-holder"); if (!holder) return; holder.innerHTML = "";
+  if (!authState.instId) return;
+
+  const inst = (await jGet(`/admin/auth`)).instances.find((i) => i.id === authState.instId);
+  if (!inst) return;
+
+  // ---- config editor ----
+  const editor = h("textarea", {
+    class: "mono", rows: "18", style: "width:100%",
+    spellcheck: "false", "aria-label": "Auth instance configuration (JSON)",
+  });
+  editor.value = JSON.stringify(inst.config || {}, null, 2);
+
+  const save = h("button", { class: "btn", onclick: async () => {
+    let cfg;
+    try { cfg = JSON.parse(editor.value); }
+    catch (e) { toast("invalid JSON: " + e.message, true); return; }
+    try {
+      await jPut(`/admin/auth/${authState.instId}/config`, { config: cfg });
+      toast("config saved");
+      renderAuth();
+    } catch (e) { toast(e.message, true); }
+  } }, "Save config");
+
+  holder.append(h("div", { class: "card" },
+    h("h2", {}, "Configuration"),
+    h("p", { class: "muted", style: "font-size:12px;margin-top:0" },
+      "signup.identityField names the unique login handle; every other collected field becomes a " +
+      "claim you can reference from rules as $auth.claims.X. access is keyed \"datastore:<instance>\" " +
+      "or \"channel:<instance>\" — an instance with no entry is denied."),
+    editor,
+    h("div", { class: "row", style: "margin-top:8px" }, save,
+      h("span", { class: "muted mono", style: "font-size:12px" }, `/v1/auth/${inst.name}`)),
+  ));
+
+  // ---- end users ----
+  const usersCard = h("div", { class: "card" }, h("h2", {}, "End users"));
+  holder.append(usersCard);
+  try {
+    const { users } = await jGet(`/admin/auth/${authState.instId}/users`);
+    if (!users.length) {
+      usersCard.append(h("p", { class: "muted" }, "No end users yet — sign one up from your app."));
+    } else {
+      const rows = users.map((u) => h("tr", {},
+        h("td", { class: "mono" }, u.identifier),
+        h("td", { class: "mono", style: "font-size:11px" }, u.uid),
+        h("td", { class: "mono", style: "font-size:11px" }, JSON.stringify(u.claims || {})),
+        h("td", {}, u.disabled ? "disabled" : "active"),
+        h("td", {}, fmtTime(u.created)),
+        h("td", {}, h("button", { class: "btn ghost", onclick: async () => {
+          if (!confirm(`Delete ${u.identifier}?`)) return;
+          try { await jDel(`/admin/auth/${authState.instId}/users/${encodeURIComponent(u.uid)}`); toast("deleted"); renderAuth(); }
+          catch (e) { toast(e.message, true); }
+        } }, "Delete")),
+      ));
+      usersCard.append(h("table", { class: "tbl" },
+        h("thead", {}, h("tr", {},
+          h("th", { scope: "col" }, "Identifier"), h("th", { scope: "col" }, "UID"),
+          h("th", { scope: "col" }, "Claims"), h("th", { scope: "col" }, "Status"),
+          h("th", { scope: "col" }, "Created"), h("th", { scope: "col" }, ""))),
+        h("tbody", {}, ...rows)));
+    }
+  } catch (e) {
+    usersCard.append(h("p", { class: "muted" }, "Could not load users: " + e.message));
+  }
 }
 
 // ================= API KEYS =================

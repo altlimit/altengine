@@ -17,6 +17,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
+	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
 
@@ -30,12 +31,19 @@ type Handler struct {
 	DS    *datastore.Manager
 	Srch  *search.Manager
 	Hub   *channel.Hub
+	Ident *identity.Manager
 	files http.Handler
 }
 
 func NewHandler(reg *control.Registry, a *auth.Store, ds *datastore.Manager, srch *search.Manager, hub *channel.Hub) *Handler {
 	sub, _ := fs.Sub(webFS, "web")
 	return &Handler{Reg: reg, Auth: a, DS: ds, Srch: srch, Hub: hub, files: http.FileServer(http.FS(sub))}
+}
+
+// WithIdentity enables the console's end-user browser for auth instances.
+func (h *Handler) WithIdentity(m *identity.Manager) *Handler {
+	h.Ident = m
+	return h
 }
 
 // Register mounts the admin API and the console (catch-all "/").
@@ -53,6 +61,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /admin/channel/{id}/rotate-secret", common.Wrap(h.rotateSecret))
 	mux.HandleFunc("POST /admin/auth/{id}/rotate-secret", common.Wrap(h.rotateAuthSecret))
+
+	// End users of an auth instance (the console's browser).
+	mux.HandleFunc("GET /admin/auth/{id}/users", common.Wrap(h.authUsers))
+	mux.HandleFunc("DELETE /admin/auth/{id}/users/{uid}", common.Wrap(h.authDeleteUser))
 
 	// Search data browser.
 	mux.HandleFunc("GET /admin/search/{id}/indexes", common.Wrap(h.searchIndexes))

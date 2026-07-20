@@ -286,6 +286,48 @@ func (s *Store) ByUID(uid string) (*UserRow, error) {
 		`SELECT uid, identifier, pw_hash, claims, disabled, created, updated FROM users WHERE uid = ?`, uid))
 }
 
+// ListUsers returns end users newest-first, for the local console's browser. The password
+// hash never leaves the store — callers get the public shape only.
+func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.Query(
+		`SELECT uid, identifier, pw_hash, claims, disabled, created, updated
+		   FROM users ORDER BY created DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PublicUser{}
+	for rows.Next() {
+		var r UserRow
+		var claims string
+		var disabled int
+		if err := rows.Scan(&r.UID, &r.Identifier, &r.PwHash, &claims, &disabled, &r.Created, &r.Updated); err != nil {
+			return nil, err
+		}
+		r.Disabled = disabled == 1
+		r.Claims = parseJSONObject(claims)
+		out = append(out, r.public())
+	}
+	return out, rows.Err()
+}
+
+// DeleteUser removes an end user along with their outstanding refresh tokens. Reports
+// whether a user was actually removed.
+func (s *Store) DeleteUser(uid string) (bool, error) {
+	if _, err := s.db.Exec(`DELETE FROM refresh_tokens WHERE uid = ?`, uid); err != nil {
+		return false, err
+	}
+	res, err := s.db.Exec(`DELETE FROM users WHERE uid = ?`, uid)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // SetPassword replaces a user's password hash and revokes every outstanding refresh
 // token (a reset must invalidate sessions minted with the old credential).
 func (s *Store) SetPassword(uid, pwHash string, now int64) error {
