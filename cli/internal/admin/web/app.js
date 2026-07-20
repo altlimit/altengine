@@ -470,18 +470,39 @@ async function renderAuth() {
     if (!users.length) {
       usersCard.append(h("p", { class: "muted" }, "No end users yet — sign one up from your app."));
     } else {
-      const rows = users.map((u) => h("tr", {},
-        h("td", { class: "mono" }, u.identifier),
-        h("td", { class: "mono", style: "font-size:11px" }, u.uid),
-        h("td", { class: "mono", style: "font-size:11px" }, JSON.stringify(u.claims || {})),
-        h("td", {}, u.disabled ? "disabled" : "active"),
-        h("td", {}, fmtTime(u.created)),
-        h("td", {}, h("button", { class: "btn ghost", onclick: async () => {
-          if (!confirm(`Delete ${u.identifier}?`)) return;
-          try { await jDel(`/admin/auth/${authState.instId}/users/${encodeURIComponent(u.uid)}`); toast("deleted"); renderAuth(); }
-          catch (e) { toast(e.message, true); }
-        } }, "Delete")),
-      ));
+      const rows = users.map((u) => {
+        // Claims are editable because adding a sign-up field does NOT backfill users who
+        // registered before it — and a rule that stamps a missing claim is a hard deny, so
+        // those accounts are otherwise stuck.
+        const claims = h("input", {
+          class: "mono flex1", style: "font-size:11px",
+          value: JSON.stringify(u.claims || {}),
+          "aria-label": `Claims for ${u.identifier}`,
+        });
+        const saveClaims = h("button", { class: "btn ghost", onclick: async () => {
+          let parsed;
+          try { parsed = JSON.parse(claims.value); }
+          catch (e) { toast("invalid JSON: " + e.message, true); return; }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) { toast("claims must be a JSON object", true); return; }
+          try {
+            await jPut(`/admin/auth/${authState.instId}/users/${encodeURIComponent(u.uid)}/claims`, { claims: parsed });
+            toast("claims saved");
+            renderAuth();
+          } catch (e) { toast(e.message, true); }
+        } }, "Save");
+        return h("tr", {},
+          h("td", { class: "mono" }, u.identifier),
+          h("td", { class: "mono", style: "font-size:11px" }, u.uid),
+          h("td", {}, h("div", { class: "row" }, claims, saveClaims)),
+          h("td", {}, u.disabled ? "disabled" : "active"),
+          h("td", {}, fmtTime(u.created)),
+          h("td", {}, h("button", { class: "btn ghost", onclick: async () => {
+            if (!confirm(`Delete ${u.identifier}?`)) return;
+            try { await jDel(`/admin/auth/${authState.instId}/users/${encodeURIComponent(u.uid)}`); toast("deleted"); renderAuth(); }
+            catch (e) { toast(e.message, true); }
+          } }, "Delete")),
+        );
+      });
       usersCard.append(h("table", { class: "tbl" },
         h("thead", {}, h("tr", {},
           h("th", { scope: "col" }, "Identifier"), h("th", { scope: "col" }, "UID"),

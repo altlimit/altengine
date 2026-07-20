@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/identity"
@@ -36,6 +37,31 @@ func (h *Handler) authUsers(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"users": users})
+	return nil
+}
+
+// authSetClaims backfills/edits an end user's claims. Adding a sign-up field does not
+// retroactively give existing users that claim, and a rule stamping a missing claim is a
+// hard deny — so without this, accounts created before a field existed are stuck.
+func (h *Handler) authSetClaims(w http.ResponseWriter, r *http.Request) error {
+	s, err := h.authStore(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Claims map[string]any `json:"claims"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	ok, err := s.SetClaims(r.PathValue("uid"), body.Claims, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return common.NotFound("user not found")
+	}
+	common.WriteJSON(w, 200, map[string]any{"claims": body.Claims})
 	return nil
 }
 

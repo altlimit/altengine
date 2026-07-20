@@ -314,6 +314,25 @@ func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
 	return out, rows.Err()
 }
 
+// SetClaims replaces an end user's claims. Adding a sign-up field does NOT backfill the
+// users who registered before it existed, and a rule that stamps a missing claim is a hard
+// deny — so this is the backfill path for those accounts.
+func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, error) {
+	if claims == nil {
+		claims = map[string]any{}
+	}
+	blob, err := json.Marshal(claims)
+	if err != nil {
+		return false, common.BadRequest("claims must be a JSON object")
+	}
+	res, err := s.db.Exec(`UPDATE users SET claims = ?, updated = ? WHERE uid = ?`, string(blob), now, uid)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // DeleteUser removes an end user along with their outstanding refresh tokens. Reports
 // whether a user was actually removed.
 func (s *Store) DeleteUser(uid string) (bool, error) {

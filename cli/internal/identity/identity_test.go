@@ -304,3 +304,39 @@ func TestTokenFromAnotherInstanceIsRejected(t *testing.T) {
 		t.Fatal("auth instances must have distinct secrets")
 	}
 }
+
+// Adding a sign-up field does not backfill users who registered before it existed, and a
+// rule that stamps a missing claim is a hard deny — so those accounts can only be rescued
+// by editing their claims. This is the path the local console uses.
+func TestSetClaimsBackfillsAnOlderAccount(t *testing.T) {
+	m := NewManager("")
+	s, err := m.Open("inst-" + t.Name())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// A user created while the form collected only an identifier has no claims.
+	u, err := s.CreateUser("old@example.com", "pw", nil, 1)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := s.ByUID(u.UID); len(got.Claims) != 0 {
+		t.Fatalf("expected no claims, got %v", got.Claims)
+	}
+
+	ok, err := s.SetClaims(u.UID, map[string]any{"name": "Old User"}, 2)
+	if err != nil || !ok {
+		t.Fatalf("SetClaims -> %v %v", ok, err)
+	}
+	got, _ := s.ByUID(u.UID)
+	if got.Claims["name"] != "Old User" {
+		t.Fatalf("claims not backfilled: %v", got.Claims)
+	}
+	if got.Updated != 2 {
+		t.Fatalf("updated not bumped: %d", got.Updated)
+	}
+
+	// A missing user reports false rather than silently succeeding.
+	if ok, _ := s.SetClaims("no-such-uid", map[string]any{"a": 1}, 3); ok {
+		t.Fatal("SetClaims on a missing user should report false")
+	}
+}
