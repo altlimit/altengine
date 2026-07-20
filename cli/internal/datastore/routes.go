@@ -10,6 +10,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
+	"github.com/altlimit/altengine/cli/internal/identity"
 )
 
 // Handler serves the datastore data plane.
@@ -17,12 +18,22 @@ type Handler struct {
 	Reg  *control.Registry
 	Auth *auth.Store
 	Mgr  *Manager
+	// Ident resolves end-user identity tokens (nil = API keys only).
+	Ident *identity.Service
+	// Live publishes change events for the datastore→channel live bridge (nil = off).
+	Live LivePublisher
 }
 
 // NewHandler builds a datastore handler.
 func NewHandler(reg *control.Registry, a *auth.Store, mgr *Manager) *Handler {
 	return &Handler{Reg: reg, Auth: a, Mgr: mgr}
 }
+
+// WithIdentity enables end-user identity tokens (and their row rules) on this handler.
+func (h *Handler) WithIdentity(svc *identity.Service) *Handler { h.Ident = svc; return h }
+
+// WithLive enables the datastore→channel live bridge.
+func (h *Handler) WithLive(p LivePublisher) *Handler { h.Live = p; return h }
 
 // Register mounts the datastore routes on mux.
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -53,24 +64,37 @@ func decodeNs(seg string) string {
 	return seg
 }
 
-// resolve authenticates the request and opens the store for the path's namespace.
-func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, *Store, error) {
+// resolve authenticates the request and opens the store for the path's namespace. The
+// returned EndUser is non-nil when the caller presented an end-user identity token rather
+// than an org API key — that caller's reads and writes are row-scoped by the issuing auth
+// instance's rules.
+func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, *Store, *identity.EndUser, error) {
 	name := r.PathValue("instance")
-	id, err := h.Auth.Resolve(r)
+	id, user, err := h.Ident.ResolveRequest(r, h.Auth)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := auth.Require(id, "datastore", name, need); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	inst := h.Reg.GetOrCreate("datastore", name)
 	ns := decodeNs(r.PathValue("ns"))
 	autoID, _ := inst.Config["autoId"].(string)
 	store, err := h.Mgr.Open(inst.ID, ns, autoID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return inst, store, nil
+	return inst, store, user, nil
+}
+
+// backendOnly refuses an end-user identity token on a route that requires full backend
+// trust (namespace administration, transactions, index management) — matching the hosted
+// service, which accepts only an org API key on those.
+func backendOnly(user *identity.EndUser, what string) error {
+	if user != nil {
+		return common.PermissionDenied(what + " requires an org API key, not an end-user token")
+	}
+	return nil
 }
 
 func autoIndexEnabled(inst *control.Instance) bool {
@@ -82,11 +106,14 @@ func autoIndexEnabled(inst *control.Instance) bool {
 
 func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("instance")
-	id, err := h.Auth.Resolve(r)
+	id, user, err := h.Ident.ResolveRequest(r, h.Auth)
 	if err != nil {
 		return err
 	}
 	if err := auth.Require(id, "datastore", name, auth.Read); err != nil {
+		return err
+	}
+	if err := backendOnly(user, "listing namespaces"); err != nil {
 		return err
 	}
 	inst := h.Reg.GetOrCreate("datastore", name)
@@ -113,11 +140,14 @@ func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request) error {
 
 func (h *Handler) deleteNamespace(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("instance")
-	id, err := h.Auth.Resolve(r)
+	id, user, err := h.Ident.ResolveRequest(r, h.Auth)
 	if err != nil {
 		return err
 	}
 	if err := auth.Require(id, "datastore", name, auth.Full); err != nil {
+		return err
+	}
+	if err := backendOnly(user, "dropping a namespace"); err != nil {
 		return err
 	}
 	// Deliberately NOT h.resolve: opening the store would auto-create the very
@@ -132,7 +162,7 @@ func (h *Handler) deleteNamespace(w http.ResponseWriter, r *http.Request) error 
 }
 
 func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Write)
+	inst, store, user, err := h.resolve(r, auth.Write)
 	if err != nil {
 		return err
 	}
@@ -142,16 +172,40 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
-	keys, _, err := store.Put(r.PathValue("collection"), body.Documents)
-	if err != nil {
-		return err
+	collection := r.PathValue("collection")
+	var keys []string
+	var changed []LiveDoc
+	if user != nil {
+		// An identity write is row-scoped: create/update rules decide per document (owner
+		// match, immutable fields) and server `stamp` fields are applied from the token.
+		create, err := user.DatastoreWritePolicy(inst.Name, collection, "create")
+		if err != nil {
+			return err
+		}
+		update, err := user.DatastoreWritePolicy(inst.Name, collection, "update")
+		if err != nil {
+			return err
+		}
+		keys, changed, err = store.PutScoped(collection, body.Documents, create, update)
+		if err != nil {
+			return err
+		}
+	} else {
+		keys, _, err = store.Put(collection, body.Documents)
+		if err != nil {
+			return err
+		}
+		for i, k := range keys {
+			changed = append(changed, LiveDoc{Key: k, Data: body.Documents[i].Data})
+		}
 	}
+	h.emitLive(inst, decodeNs(r.PathValue("ns")), collection, "put", changed)
 	common.WriteJSON(w, 200, map[string]any{"keys": keys})
 	return nil
 }
 
 func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Read)
+	inst, store, user, err := h.resolve(r, auth.Read)
 	if err != nil {
 		return err
 	}
@@ -161,8 +215,20 @@ func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
-	docs, err := store.BatchGet(r.PathValue("collection"), body.Keys)
-	if err != nil {
+	collection := r.PathValue("collection")
+	var docs []StoredDoc
+	if user != nil {
+		// A point-read can't be scoped in SQL, so the read rules are applied server-side:
+		// a row the caller may not read is omitted, never leaked.
+		filters, err := h.readFilters(user, inst, collection)
+		if err != nil {
+			return err
+		}
+		docs, err = store.BatchGetScoped(collection, body.Keys, filters)
+		if err != nil {
+			return err
+		}
+	} else if docs, err = store.BatchGet(collection, body.Keys); err != nil {
 		return err
 	}
 	if docs == nil {
@@ -173,7 +239,7 @@ func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Full)
+	inst, store, user, err := h.resolve(r, auth.Full)
 	if err != nil {
 		return err
 	}
@@ -183,16 +249,41 @@ func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
-	n, err := store.Delete(r.PathValue("collection"), body.Keys)
-	if err != nil {
+	collection := r.PathValue("collection")
+	// The live event needs each document's partition field, which is gone once the row is
+	// deleted — read the bodies first (only when this collection actually publishes).
+	var removed []LiveDoc
+	if h.livePublishes(inst, collection) {
+		if existing, err := store.BatchGet(collection, body.Keys); err == nil {
+			for _, d := range existing {
+				removed = append(removed, LiveDoc{Key: d.Key, Data: d.Data})
+			}
+		}
+	}
+	var n int
+	if user != nil {
+		del, err := user.DatastoreWritePolicy(inst.Name, collection, "delete")
+		if err != nil {
+			return err
+		}
+		if del.Denied {
+			return common.PermissionDenied("not permitted: delete on '" + collection + "'")
+		}
+		if n, err = store.DeleteScoped(collection, body.Keys, ToFilters(del.Match)); err != nil {
+			return err
+		}
+	} else if n, err = store.Delete(collection, body.Keys); err != nil {
 		return err
+	}
+	if n > 0 {
+		h.emitLive(inst, decodeNs(r.PathValue("ns")), collection, "delete", removed)
 	}
 	common.WriteJSON(w, 200, map[string]any{"deleted": n})
 	return nil
 }
 
 func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
-	inst, store, err := h.resolve(r, auth.Read)
+	inst, store, user, err := h.resolve(r, auth.Read)
 	if err != nil {
 		return err
 	}
@@ -200,7 +291,17 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	res, err := store.Query(r.PathValue("collection"), req, autoIndexEnabled(inst))
+	collection := r.PathValue("collection")
+	// Row-level read rules are ANDed into the query BEFORE the index-served guard runs, so
+	// the guard sees (and can auto-index for) the filters that will actually execute.
+	if user != nil {
+		filters, err := h.readFilters(user, inst, collection)
+		if err != nil {
+			return err
+		}
+		req.Where = append(req.Where, filters...)
+	}
+	res, err := store.Query(collection, req, autoIndexEnabled(inst))
 	if err != nil {
 		return err
 	}
@@ -212,7 +313,7 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
-	inst, store, err := h.resolve(r, auth.Read)
+	inst, store, user, err := h.resolve(r, auth.Read)
 	if err != nil {
 		return err
 	}
@@ -220,7 +321,16 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	res, err := store.Aggregate(r.PathValue("collection"), req, autoIndexEnabled(inst))
+	collection := r.PathValue("collection")
+	// Same row scoping as query: an identity aggregates only over rows it may read.
+	if user != nil {
+		filters, err := h.readFilters(user, inst, collection)
+		if err != nil {
+			return err
+		}
+		req.Where = append(req.Where, filters...)
+	}
+	res, err := store.Aggregate(collection, req, autoIndexEnabled(inst))
 	if err != nil {
 		return err
 	}
@@ -229,8 +339,13 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) transaction(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Write)
+	_, store, user, err := h.resolve(r, auth.Write)
 	if err != nil {
+		return err
+	}
+	// A multi-document transaction can't be row-scoped per operation, so it stays a
+	// backend-only surface (an identity's single-document writes go through the rules).
+	if err := backendOnly(user, "transactions"); err != nil {
 		return err
 	}
 	var body struct {
@@ -248,8 +363,11 @@ func (h *Handler) transaction(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) listIndexes(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Read)
+	_, store, user, err := h.resolve(r, auth.Read)
 	if err != nil {
+		return err
+	}
+	if err := backendOnly(user, "index management"); err != nil {
 		return err
 	}
 	ix, err := store.ListIndexes(r.PathValue("collection"))
@@ -264,8 +382,11 @@ func (h *Handler) listIndexes(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) createIndex(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Write)
+	_, store, user, err := h.resolve(r, auth.Write)
 	if err != nil {
+		return err
+	}
+	if err := backendOnly(user, "index management"); err != nil {
 		return err
 	}
 	var body struct {
@@ -304,8 +425,11 @@ func fieldsEqual(a, b []string) bool {
 }
 
 func (h *Handler) dropIndex(w http.ResponseWriter, r *http.Request) error {
-	_, store, err := h.resolve(r, auth.Write)
+	_, store, user, err := h.resolve(r, auth.Write)
 	if err != nil {
+		return err
+	}
+	if err := backendOnly(user, "index management"); err != nil {
 		return err
 	}
 	idStr := r.PathValue("id")
@@ -319,4 +443,27 @@ func (h *Handler) dropIndex(w http.ResponseWriter, r *http.Request) error {
 	}
 	common.WriteJSON(w, 200, map[string]any{"deleted": ok})
 	return nil
+}
+
+// readFilters resolves the row-level read rules for an identity into datastore filters.
+// Empty means unconstrained; a collection the rules don't cover is a 403.
+func (h *Handler) readFilters(user *identity.EndUser, inst *control.Instance, collection string) ([]Filter, error) {
+	fs, err := user.DatastoreReadFilters(inst.Name, collection)
+	if err != nil {
+		return nil, err
+	}
+	return ToFilters(fs), nil
+}
+
+// livePublishes reports whether a collection emits live change events.
+func (h *Handler) livePublishes(inst *control.Instance, collection string) bool {
+	if h.Live == nil {
+		return false
+	}
+	live := parseLive(inst.Config)
+	if live == nil {
+		return false
+	}
+	_, ok := live.Collections[collection]
+	return ok
 }

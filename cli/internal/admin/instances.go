@@ -79,7 +79,17 @@ func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request, service
 }
 
 func (h *Handler) rotateSecret(w http.ResponseWriter, r *http.Request) error {
-	in, err := h.resolveInst(r, "channel")
+	return h.rotate(w, r, "channel")
+}
+
+// rotateAuthSecret re-keys an auth instance: every outstanding identity token stops
+// verifying immediately (clients sign in again).
+func (h *Handler) rotateAuthSecret(w http.ResponseWriter, r *http.Request) error {
+	return h.rotate(w, r, "auth")
+}
+
+func (h *Handler) rotate(w http.ResponseWriter, r *http.Request, service string) error {
+	in, err := h.resolveInst(r, service)
 	if err != nil {
 		return err
 	}

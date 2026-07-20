@@ -57,8 +57,8 @@ type QueryResult struct {
 }
 
 type AutoIndexInfo struct {
-	Fields       []string `json:"fields"`
-	RowsWritten  int      `json:"rows_written"`
+	Fields      []string `json:"fields"`
+	RowsWritten int      `json:"rows_written"`
 }
 
 var fieldSegRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

@@ -75,6 +75,37 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
       (SDKs with a managed socket)
 - [ ] message > 32 KiB → INVALID_ARGUMENT
 
+## Auth
+
+Auth is the odd one out: its endpoints are **public** (no API key) because the end
+user's own credentials are the trust boundary. The `id_token` it issues is what
+data-plane requests carry instead of an org key, and row-level access rules on the
+auth instance scope what that user can reach.
+
+- [ ] `GET /config` is fetchable unauthenticated and exposes no secrets
+      (identity_field, fields, methods, captcha.site_key only)
+- [ ] signup → signin roundtrip; the configured identity field is the login handle
+      and every other collected field lands in the user's `claims`
+- [ ] duplicate identifier → ALREADY_EXISTS
+- [ ] wrong password and unknown identifier return the **same** error (no account
+      enumeration)
+- [ ] `/me` with the id_token returns the user; without it → UNAUTHENTICATED
+- [ ] refresh rotates the refresh token and issues a fresh id_token; the old
+      refresh token stops working
+- [ ] signout revokes the refresh token
+- [ ] passwordless start → verify signs in; `/start` returns 200 for an unknown
+      identifier too (no enumeration)
+- [ ] identity token on the data plane: accepted by datastore/channel; a target
+      with no `access` entry → PERMISSION_DENIED (default-deny)
+- [ ] row rules: `create.stamp` overwrites author fields from the token (a forged
+      author in the request body is ignored); read filters scope a query to the
+      caller's own rows; update/delete of another user's row → PERMISSION_DENIED;
+      changing an `immutable` field → PERMISSION_DENIED
+- [ ] channel tokens minted for an identity are restricted to the templated
+      channel patterns and are subscribe-only
+- [ ] live bridge: a committed datastore write publishes `{op, keys}` on
+      `<collection>.<keyBy-value>` to the bound channel instance
+
 ## Path grammar
 
 Both data planes share one shape, labels kept short:
@@ -100,3 +131,9 @@ misses omitted; SDKs rebuild order with nulls). Every batch operation is `POST`
 
 - **php/** has no WebSocket client (v1 is token/publish/presence only) — the
   "WS lifecycle" scenarios don't apply; everything else does.
+- **Auth ships in js/ only for v1.** The auth client exists to let a *browser*
+  sign an end user in and hold their token; go/, python/ and php/ are backend
+  SDKs, where the org API key is the correct credential and a sign-in flow has no
+  caller. The **server-side** halves of the Auth scenarios (identity tokens on the
+  data plane, row rules, the live bridge) are language-agnostic and should be
+  added to the other SDKs if and when they grow an auth client.

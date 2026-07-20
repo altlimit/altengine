@@ -1,5 +1,5 @@
 // Package control is the emulator's control plane: the registry of service instances
-// (search / channel / datastore) and minted API keys for the single local dev org.
+// (search / channel / datastore / auth) and minted API keys for the single local dev org.
 // It lives in memory and is persisted to a small JSON file so instances and keys
 // survive a restart. Instances auto-create on first
 // data-plane use so `altengine dev` followed by a request to /v1/datastore/myapp
@@ -20,11 +20,11 @@ import (
 // Instance is one service instance owned by the dev org.
 type Instance struct {
 	ID        string         `json:"id"`
-	Service   string         `json:"service"` // search | channel | datastore
+	Service   string         `json:"service"` // search | channel | datastore | auth
 	Name      string         `json:"name"`
 	CreatedAt int64          `json:"created_at"`
 	Config    map[string]any `json:"config"`
-	Secret    string         `json:"secret,omitempty"` // channel JWT signing secret
+	Secret    string         `json:"secret,omitempty"` // channel / auth JWT signing secret
 }
 
 // APIKey is a minted key's metadata. The plaintext is returned once at creation and
@@ -96,6 +96,10 @@ func (r *Registry) save() {
 	}
 }
 
+// needsSecret reports whether a service signs tokens with a per-instance secret: channel
+// subscriber tokens and auth end-user identity tokens.
+func needsSecret(service string) bool { return service == "channel" || service == "auth" }
+
 func defaultConfig(service string) map[string]any {
 	switch service {
 	case "search":
@@ -104,6 +108,25 @@ func defaultConfig(service string) map[string]any {
 		return map[string]any{"rateLimit": 0, "autoId": "uuid", "autoIndex": true}
 	case "channel":
 		return map[string]any{"presence": false, "publishRateLimit": 0, "connectRateLimit": 0}
+	case "auth":
+		// The seed blob an auth instance starts with. Every key is optional — the auth
+		// service defaults anything missing — so this is what the console pre-populates,
+		// not the source of truth for defaults.
+		return map[string]any{
+			"allowSignup":         true,
+			"accessTokenTtl":      3600,
+			"refreshTokenTtl":     2592000,
+			"passwordlessEnabled": false,
+			"passwordlessCodeTtl": 600,
+			"passkeysEnabled":     false,
+			"totpEnabled":         false,
+			"captchaEnabled":      false,
+			"signup": map[string]any{
+				"identityField": "email",
+				"fields":        []any{map[string]any{"key": "email", "type": "email", "required": true}},
+			},
+			"access": map[string]any{},
+		}
 	}
 	return map[string]any{}
 }
@@ -123,7 +146,7 @@ func (r *Registry) GetOrCreate(service, name string) *Instance {
 		CreatedAt: nowMS(),
 		Config:    defaultConfig(service),
 	}
-	if service == "channel" {
+	if needsSecret(service) {
 		in.Secret = common.RandID(32)
 	}
 	r.insts[key] = in
@@ -173,7 +196,7 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 		return nil, common.AlreadyExists("instance already exists")
 	}
 	in := &Instance{ID: common.UUID(), Service: service, Name: name, CreatedAt: nowMS(), Config: defaultConfig(service)}
-	if service == "channel" {
+	if needsSecret(service) {
 		in.Secret = common.RandID(32)
 	}
 	r.insts[key] = in

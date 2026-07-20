@@ -37,7 +37,9 @@ func NewError(status int, message, code string) *APIError {
 func (e *APIError) WithDetails(d map[string]any) *APIError { e.Details = d; return e }
 
 // Common constructors matching the hosted API's status/code pairs.
-func BadRequest(msg string) *APIError    { return NewError(http.StatusBadRequest, msg, "INVALID_ARGUMENT") }
+func BadRequest(msg string) *APIError {
+	return NewError(http.StatusBadRequest, msg, "INVALID_ARGUMENT")
+}
 func Unauthenticated(msg string) *APIError {
 	return NewError(http.StatusUnauthorized, msg, "UNAUTHENTICATED")
 }

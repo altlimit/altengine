@@ -43,7 +43,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/me", common.Wrap(h.me))
 
 	// Instances (per service).
-	for _, svc := range []string{"search", "datastore", "channel"} {
+	for _, svc := range []string{"search", "datastore", "channel", "auth"} {
 		s := svc
 		mux.HandleFunc("GET /admin/"+s, common.Wrap(func(w http.ResponseWriter, r *http.Request) error { return h.listInstances(w, s) }))
 		mux.HandleFunc("POST /admin/"+s, common.Wrap(func(w http.ResponseWriter, r *http.Request) error { return h.createInstance(w, r, s) }))
@@ -52,6 +52,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("DELETE /admin/"+s+"/{id}", common.Wrap(func(w http.ResponseWriter, r *http.Request) error { return h.deleteInstance(w, r, s) }))
 	}
 	mux.HandleFunc("POST /admin/channel/{id}/rotate-secret", common.Wrap(h.rotateSecret))
+	mux.HandleFunc("POST /admin/auth/{id}/rotate-secret", common.Wrap(h.rotateAuthSecret))
 
 	// Search data browser.
 	mux.HandleFunc("GET /admin/search/{id}/indexes", common.Wrap(h.searchIndexes))

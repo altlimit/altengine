@@ -128,7 +128,7 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // single-threaded DO semantics
+	db.SetMaxOpenConns(1) // the store is single-writer
 	if err := ensureSchema(db); err != nil {
 		return nil, err
 	}

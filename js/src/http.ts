@@ -9,10 +9,18 @@ export interface RetryOptions {
   maxDelayMs?: number;
 }
 
-/** Production API origin used when no override is given. */
-export const DEFAULT_BASE_URL = "https://api.altengine.net";
-/** Where `altengine dev` (the local emulator) listens by default. */
-export const DEV_BASE_URL = "http://127.0.0.1:9191";
+// Re-exported so `from "./http.js"` keeps working for every existing importer;
+// they live in constants.ts so browser-safe entries can use them without
+// dragging the API-key transport into the bundle.
+export { DEFAULT_BASE_URL, DEV_BASE_URL, seg, nsSeg } from "./constants.js";
+import { DEFAULT_BASE_URL, DEV_BASE_URL } from "./constants.js";
+
+/** Supplies a per-request end-user bearer token. `AuthClient` implements this, so
+ * `new AltEngine({ auth })` sends the signed-in user's `id_token` (kept fresh)
+ * rather than an org API key. */
+export interface TokenProvider {
+  getToken(): Promise<string | undefined> | string | undefined;
+}
 
 export interface ClientOptions {
   /** API origin override. Resolution order: this option → `dev: true` →
@@ -23,6 +31,11 @@ export interface ClientOptions {
   /** Org API key (`Authorization: Bearer`). Falls back to the `ALTENGINE_API_KEY`
    * env var; omit only for token-based flows. */
   apiKey?: string;
+  /** End-user identity source (an `AuthClient`). When it yields a token, it takes
+   * precedence over `apiKey` — an org key is a backend credential and must not be
+   * shipped to a browser; the signed-in user's `id_token` is what a client-side
+   * app sends, and access rules scope it to that user's own rows. */
+  auth?: TokenProvider;
   /** Custom fetch (tests, polyfills). Defaults to `globalThis.fetch`. */
   fetch?: typeof globalThis.fetch;
   /** Per-request timeout in ms (default 30000). */
@@ -54,8 +67,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Minimal JSON-over-fetch transport shared by all service clients. */
 export class Http {
-  private readonly baseUrl: string;
+  readonly baseUrl: string;
   private readonly apiKey?: string;
+  private readonly auth?: TokenProvider;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly timeoutMs: number;
   private readonly retry: Required<RetryOptions>;
@@ -63,6 +77,7 @@ export class Http {
   constructor(opts: ClientOptions = {}) {
     this.baseUrl = resolveBaseUrl(opts).replace(/\/+$/, "");
     this.apiKey = opts.apiKey ?? env("ALTENGINE_API_KEY");
+    this.auth = opts.auth;
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
     if (!this.fetchImpl) throw new Error("no fetch implementation available; pass { fetch }");
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -115,7 +130,14 @@ export class Http {
 
   private async once<T>(method: string, path: string, opts: RequestOptions): Promise<T> {
     const headers: Record<string, string> = { ...opts.headers };
-    if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    // Precedence: an explicit per-request header wins, then the end-user identity
+    // token, then the org API key. Asking the provider each time is what keeps a
+    // long-lived page's token fresh (AuthClient refreshes before it expires).
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === "authorization")) {
+      const token = await this.auth?.getToken();
+      if (token) headers["authorization"] = `Bearer ${token}`;
+      else if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    }
     let body: string | undefined;
     if (opts.body !== undefined) {
       headers["content-type"] = "application/json";
@@ -158,10 +180,3 @@ async function toApiError(res: Response): Promise<AltEngineError> {
   return new AltEngineError({ code, message, status: res.status, details, retryAfter });
 }
 
-/** Encode one path segment (instance/index/collection/key names). */
-export const seg = (s: string | number): string => encodeURIComponent(String(s));
-
-/** Encode a namespace path segment. The empty (default) namespace can't ride a
- * URL path — routers collapse the resulting "//", so it travels as the reserved
- * sentinel `_default` (the server maps it back to ""). */
-export const nsSeg = (namespace: string): string => seg(namespace === "" ? "_default" : namespace);

@@ -10,6 +10,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
+	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/gorilla/websocket"
 )
 
@@ -18,8 +19,13 @@ type Handler struct {
 	Reg  *control.Registry
 	Auth *auth.Store
 	Hub  *Hub
-	up   websocket.Upgrader
+	// Ident resolves end-user identity tokens (nil = API keys only).
+	Ident *identity.Service
+	up    websocket.Upgrader
 }
+
+// WithIdentity enables end-user identity tokens on this handler.
+func (h *Handler) WithIdentity(svc *identity.Service) *Handler { h.Ident = svc; return h }
 
 func NewHandler(reg *control.Registry, a *auth.Store, hub *Hub) *Handler {
 	return &Handler{
@@ -65,9 +71,15 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 	if pub != "" {
 		need = auth.Write
 	}
-	id, err := h.Auth.Resolve(r)
+	id, user, err := h.Ident.ResolveRequest(r, h.Auth)
 	if err != nil {
 		return err
+	}
+	if user != nil {
+		// End-user identity tokens are SUBSCRIBE-ONLY: a browser mints its own token, so
+		// letting it also grant itself publish would make the mint the trust boundary.
+		need = auth.Read
+		pub = ""
 	}
 	if err := auth.Require(id, "channel", name, need); err != nil {
 		return err
@@ -78,11 +90,29 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if user != nil {
+		// Confine the token to the auth instance's channel patterns, interpolated from the
+		// VERIFIED identity (e.g. "posts.*", "dm.$auth.uid").
+		patterns, err := user.ChannelPatterns(inst.Name)
+		if err != nil {
+			return err
+		}
+		for _, ch := range channels {
+			if !identity.ChannelAllowed(patterns, ch) {
+				return common.PermissionDenied("not permitted to subscribe to: " + ch)
+			}
+		}
+	}
 	ttl := clampTTL(body.TTLSeconds)
 	exp := time.Now().Unix() + ttl
 	pid, err := validatePresenceID(body.PresenceID)
 	if err != nil {
 		return err
+	}
+	if user != nil {
+		// The presence identity is FORCED to the end user's uid — a client minting its own
+		// token must not be able to claim someone else's roster identity.
+		pid = user.UID
 	}
 	claims := Claims{Iss: inst.ID, Channels: channels, Exp: exp, Pub: pub, Pid: pid}
 	token := SignJWT(claims, inst.Secret)
@@ -102,6 +132,19 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 	}
 	common.WriteJSON(w, 200, resp)
 	return nil
+}
+
+// channelTokenIssuer returns the channel instance that issued a bearer token, or nil when
+// the credential isn't a channel-issued JWT (an API key, or a token from another service).
+func (h *Handler) channelTokenIssuer(token string) *control.Instance {
+	if token == "" || !LooksLikeJWT(token) {
+		return nil
+	}
+	peek := PeekClaims(token)
+	if peek == nil || peek.Iss == "" {
+		return nil
+	}
+	return h.Reg.GetByID("channel", peek.Iss)
 }
 
 func pubOrFalse(p string) any {
@@ -131,24 +174,24 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) error {
 
 	token := auth.Bearer(r)
 	var inst *control.Instance
-	if token != "" && LooksLikeJWT(token) {
-		peek := PeekClaims(token)
-		if peek == nil || peek.Iss == "" {
-			return common.Unauthenticated("invalid token")
-		}
-		resolved := h.Reg.GetByID("channel", peek.Iss)
-		if resolved == nil {
-			return common.Unauthenticated("invalid token")
-		}
+	// A publish-capable subscriber token is a JWT issued by a CHANNEL instance. An end-user
+	// identity token is also a JWT, but issued by an auth instance — it falls through to the
+	// resolver below (and is refused there) rather than being mistaken for a channel token.
+	if resolved := h.channelTokenIssuer(token); resolved != nil {
 		claims := VerifyJWT(token, resolved.Secret)
 		if claims == nil || !CanPublish(claims, "http") || !contains(claims.Channels, body.Channel) {
 			return common.PermissionDenied("token may not publish to this channel over HTTP")
 		}
 		inst = resolved
 	} else {
-		id, err := h.Auth.Resolve(r)
+		id, user, err := h.Ident.ResolveRequest(r, h.Auth)
 		if err != nil {
 			return err
+		}
+		// Publishing stays a backend capability: an end-user token subscribes, and writes
+		// through the datastore (whose live bridge publishes) instead.
+		if user != nil {
+			return common.PermissionDenied("publishing requires an org API key or a publish token, not an end-user token")
 		}
 		if err := auth.Require(id, "channel", name, auth.Write); err != nil {
 			return err

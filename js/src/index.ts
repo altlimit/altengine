@@ -18,12 +18,22 @@
  * ```
  *
  * For the browser WebSocket subscriber, import from `@altengine/sdk/channel`.
+ * For client-side sign-in with no backend of your own, see `@altengine/sdk/auth`:
+ *
+ * ```ts
+ * import { AuthClient } from "@altengine/sdk/auth";
+ *
+ * const auth = new AuthClient({ instance: "myapp-auth" });
+ * await auth.signIn("alice@example.com", "hunter2");
+ * const ae = new AltEngine({ auth });   // requests now carry the user's token
+ * ```
  */
 
 import { Http, type ClientOptions } from "./http.js";
 import { DatastoreClient, type DatastoreOptions } from "./datastore/client.js";
 import { SearchClient, type SearchOptions } from "./search/client.js";
 import { ChannelClient } from "./channel/client.js";
+import { AuthClient } from "./auth/client.js";
 
 export class AltEngine {
   private readonly http: Http;
@@ -46,10 +56,29 @@ export class AltEngine {
   channel(instance: string): ChannelClient {
     return new ChannelClient(this.http, instance);
   }
+
+  /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
+   * Shares this client's API origin but never its API key (auth endpoints are
+   * public; the end user's own credentials are the trust boundary). For browser
+   * apps, import `AuthClient` from `@altengine/sdk/auth` directly instead. */
+  auth(instance: string): AuthClient {
+    return new AuthClient({ instance, baseUrl: this.http.baseUrl });
+  }
 }
 
 export { AltEngineError, AltEngineNetworkError, type ErrorCode } from "./errors.js";
-export { DEFAULT_BASE_URL, DEV_BASE_URL, type ClientOptions, type RetryOptions, type RequestOptions } from "./http.js";
+export {
+  DEFAULT_BASE_URL,
+  DEV_BASE_URL,
+  type ClientOptions,
+  type RetryOptions,
+  type RequestOptions,
+  type TokenProvider,
+} from "./http.js";
+
+export { AuthClient, type AuthClientOptions } from "./auth/client.js";
+export { memoryStorage, defaultStorage, type TokenStorage } from "./auth/storage.js";
+export * from "./auth/types.js";
 
 export { DatastoreClient, NamespaceAdmin, type DatastoreOptions } from "./datastore/client.js";
 export * from "./datastore/types.js";

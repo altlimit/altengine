@@ -1,7 +1,7 @@
-// Package server wires the emulator's HTTP surface: the three data planes
-// (/v1/search, /v1/datastore, /v1/channel), the control-plane admin API (/admin), and
-// the embedded admin console — mounted in the same order as the hosted platform
-// (data plane, then admin, then static assets).
+// Package server wires the emulator's HTTP surface: the four data planes
+// (/v1/search, /v1/datastore, /v1/channel, /v1/auth), the control-plane admin API
+// (/admin), and the embedded admin console — mounted in the same order as the hosted
+// platform (data plane, then admin, then static assets).
 package server
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
+	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
 
@@ -41,12 +42,20 @@ func New(opts Options) (*Server, error) {
 
 	dsMgr := datastore.NewManager(opts.DataDir)
 	srMgr := search.NewManager(opts.DataDir)
+	idMgr := identity.NewManager(opts.DataDir)
 	hub := channel.NewHub()
+	idSvc := identity.NewService(reg, idMgr, opts.DevOpen)
 
-	datastore.NewHandler(reg, a, dsMgr).Register(mux)
+	// Data planes first. The datastore and channel planes also accept END-USER identity
+	// tokens minted by the auth plane: the datastore enforces row rules on them, and the
+	// channel token mint scopes them to the auth instance's channel patterns. The
+	// datastore's live bridge publishes committed changes straight into the hub.
+	datastore.NewHandler(reg, a, dsMgr).WithIdentity(idSvc).WithLive(hub).Register(mux)
 	search.NewHandler(reg, a, srMgr).Register(mux)
-	channel.NewHandler(reg, a, hub).Register(mux)
+	channel.NewHandler(reg, a, hub).WithIdentity(idSvc).Register(mux)
+	identity.NewHandler(reg, idSvc).Register(mux)
 
+	// Admin last: its console handler is a catch-all on "/".
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).Register(mux)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +75,8 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("altengine listening on http://%s", s.opts.Addr)
 	log.Printf("  admin console:  http://%s/", s.opts.Addr)
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
-	log.Printf("  auth:           dev-open (any 'Authorization: Bearer <token>' works)")
+	log.Printf("  api keys:       dev-open (any 'Authorization: Bearer <token>' works)")
+	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
 	return http.ListenAndServe(s.opts.Addr, s.Handler())
 }
 

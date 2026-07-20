@@ -136,6 +136,45 @@ await sock.subscribe(["room:2"]);
 The `@altengine/sdk/channel` subpath contains no API-key code — safe to bundle
 into client apps.
 
+## Auth
+
+Auth gives your **end users** accounts and identity tokens, so a browser app can
+talk to Datastore and Channel **directly — with no backend of your own**. Access
+rules on the auth instance decide what each user may read and write, which is what
+makes it safe to hold that token in a browser.
+
+```ts
+import { AuthClient } from "@altengine/sdk/auth";
+import { AltEngine } from "@altengine/sdk";
+
+const auth = new AuthClient({ instance: "myapp-auth" });
+
+// Render a sign-in form that matches the instance's configured fields.
+const cfg = await auth.config(); // { identity_field, fields, methods, ... }
+
+const res = await auth.signIn("alice@example.com", "hunter2");
+if (res.status === "mfa_required") {
+  await auth.verifyMfa(res.mfaToken, promptForCode());
+}
+
+// Hand the client to the SDK — every request now carries the user's id_token,
+// refreshed automatically before it expires.
+const ae = new AltEngine({ auth });
+const { documents } = await ae.datastore("myapp").query("posts", { limit: 20 });
+```
+
+Also available: `signUp`, `passwordlessStart`/`passwordlessVerify` (emailed
+one-time code), `passwordResetStart`/`passwordResetVerify`, `me`, `refresh`, and
+`signOut`. `auth.onChange(fn)` fires on sign-in/sign-out so your UI can react, and
+`auth.user` / `auth.isSignedIn` survive a page reload.
+
+The session persists in `localStorage` by default; pass `storage: memoryStorage()`
+(or your own `TokenStorage`) to change that. Like the channel subpath,
+`@altengine/sdk/auth` contains no API-key code.
+
+> An org API key is a **backend** credential — never ship one to a browser. That
+> is why passing `auth` takes precedence over `apiKey`.
+
 ## Local development
 
 Run the [altengine emulator](https://github.com/altlimit/altengine) and construct

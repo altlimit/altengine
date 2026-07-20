@@ -1,7 +1,7 @@
 {
   "name": "@altengine/sdk",
   "version": "0.1.0",
-  "description": "Official JavaScript/TypeScript SDK for altengine — datastore, search, and realtime channels.",
+  "description": "Official JavaScript/TypeScript SDK for altengine — datastore, search, realtime channels, and end-user auth.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,6 +15,8 @@
     "search",
     "realtime",
     "pubsub",
+    "auth",
+    "authentication",
     "sdk"
   ],
   "type": "module",
@@ -31,6 +33,11 @@
       "types": "./dist/channel.d.ts",
       "import": "./dist/channel.js",
       "require": "./dist/channel.cjs"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js",
+      "require": "./dist/auth.cjs"
     }
   },
   "files": [

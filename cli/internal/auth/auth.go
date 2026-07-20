@@ -76,9 +76,9 @@ func Bearer(r *http.Request) string {
 // Store holds minted API keys (hash -> Identity) for the realism path. Dev-open mode
 // resolves unknown tokens to full access rather than rejecting them.
 type Store struct {
-	mu       sync.RWMutex
-	byHash   map[string]*Identity
-	devOpen  bool
+	mu      sync.RWMutex
+	byHash  map[string]*Identity
+	devOpen bool
 }
 
 func NewStore(devOpen bool) *Store {
@@ -119,7 +119,7 @@ func (s *Store) Resolve(r *http.Request) (*Identity, error) {
 		return id, nil
 	}
 	if s.devOpen {
-		return &Identity{OrgID: DevOrgID, Grants: Grants{"search": "full", "channel": "full", "datastore": "full"}}, nil
+		return &Identity{OrgID: DevOrgID, Grants: Grants{"search": "full", "channel": "full", "datastore": "full", "auth": "full"}}, nil
 	}
 	return nil, common.Unauthenticated("invalid API key")
 }

@@ -92,14 +92,16 @@ async function instancePicker(service, onPick, current) {
 // ================= OVERVIEW =================
 views.overview = async () => {
   main.append(h("h1", {}, "Local emulator"), h("p", { class: "muted" },
-    "Three services running locally. Point your SDK at this host and use any Bearer token."));
+    "Four services running locally. Point your SDK at this host and use any Bearer token."));
   const grid = h("div", { class: "grid" });
   main.append(grid);
-  for (const svc of ["datastore", "search", "channel"]) {
+  for (const svc of ["datastore", "search", "channel", "auth"]) {
     try {
       const { instances } = await jGet(`/admin/${svc}`);
       const label = svc === "channel" ? "channels" : svc;
-      grid.append(h("div", { class: "card click", onclick: () => setView(label === "channel" ? "channels" : label) },
+      // Auth has no browser tab yet — its card is informational, not clickable.
+      const clickable = svc !== "auth";
+      grid.append(h("div", { class: clickable ? "card click" : "card", onclick: () => clickable && setView(label === "channel" ? "channels" : label) },
         h("h2", {}, label[0].toUpperCase() + label.slice(1)),
         h("div", { class: "mono" }, `${instances.length} instance${instances.length === 1 ? "" : "s"}`),
         h("div", { class: "muted", style: "margin-top:6px;font-size:12px" }, `/v1/${svc}/{instance}`)
@@ -112,7 +114,8 @@ views.overview = async () => {
       h("span", { class: "muted" }, "Datastore"), h("span", {}, location.origin + "/v1/datastore/{instance}"),
       h("span", { class: "muted" }, "Search"), h("span", {}, location.origin + "/v1/search/{instance}"),
       h("span", { class: "muted" }, "Channels"), h("span", {}, location.origin + "/v1/channel/{instance}"),
-      h("span", { class: "muted" }, "Auth"), h("span", {}, "Authorization: Bearer <any-token>"),
+      h("span", { class: "muted" }, "Auth"), h("span", {}, location.origin + "/v1/auth/{instance}"),
+      h("span", { class: "muted" }, "API keys"), h("span", {}, "Authorization: Bearer <any-token>"),
     )
   ));
 };
