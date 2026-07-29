@@ -112,6 +112,45 @@ func parseAccess(v any) AccessConfig {
 	return out
 }
 
+// ValidateAccessLevels rejects a row rule for an endpoint the entry's `level` can't reach —
+// dead config that would silently 403 at runtime. `level` is a ceiling on which ENDPOINTS an
+// identity token reaches; rules then scope WHICH rows. Endpoint→level: read=read,
+// create/update=write, delete=full (ranked read<write<full). This mirrors the hosted admin
+// save-time guard so a config that stores in dev also stores in prod (and vice-versa). Called
+// on the auth admin config write; the read path (parseAccess) stays tolerant.
+func ValidateAccessLevels(access any) error {
+	m, ok := access.(map[string]any)
+	if !ok {
+		return nil // absent/malformed access → tolerant read handles it
+	}
+	for target, raw := range m {
+		em, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		level, _ := em["level"].(string)
+		rm, ok := em["rules"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for coll, cr := range rm {
+			cm, ok := cr.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, hasDelete := cm["delete"]; hasDelete && cm["delete"] != nil && level != "full" {
+				return common.BadRequest("access['" + target + "'].rules['" + coll + "'] declares a delete rule, but level '" + level + "' can't reach the delete endpoint — set this target's level to \"full\" (delete requires full).")
+			}
+			_, hasCreate := cm["create"]
+			_, hasUpdate := cm["update"]
+			if (hasCreate && cm["create"] != nil || hasUpdate && cm["update"] != nil) && level == "read" {
+				return common.BadRequest("access['" + target + "'].rules['" + coll + "'] declares a create/update rule, but level 'read' is read-only — set this target's level to \"write\" or \"full\".")
+			}
+		}
+	}
+	return nil
+}
+
 func parseCollectionRules(cm map[string]any) CollectionRules {
 	var out CollectionRules
 	switch rv := cm["read"].(type) {

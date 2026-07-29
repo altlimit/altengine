@@ -5,6 +5,7 @@ import (
 
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
+	"github.com/altlimit/altengine/cli/internal/identity"
 )
 
 func instanceJSON(in *control.Instance) map[string]any {
@@ -65,6 +66,13 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 		var bare map[string]any
 		if err := common.ReadJSON(r, &bare); err == nil {
 			body.Config = bare
+		}
+	}
+	// Auth `access` config: reject a row rule the entry's level can't reach (dead config that
+	// would silently 403 at runtime) — mirrors the hosted admin save-time guard.
+	if service == "auth" && body.Config != nil {
+		if err := identity.ValidateAccessLevels(body.Config["access"]); err != nil {
+			return err
 		}
 	}
 	h.Reg.SetConfig(in, body.Config)
