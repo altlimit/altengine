@@ -18,14 +18,19 @@ import (
 // instance's `access` config, so editing access or rules takes effect without re-minting
 // every outstanding token.
 
-// IdentityClaims is the identity-token payload.
+// IdentityClaims is the identity-token payload. `Profile` (user-supplied, read as
+// `$auth.profile.X`, NEVER authoritative) and `Claims` (server/admin-set, read as
+// `$auth.claims.X`, authoritative) are the two identity bags — the split is a security
+// boundary: a user chooses their profile values, so an authorization rule must trust only
+// claims.
 type IdentityClaims struct {
 	Iss        string         `json:"iss"` // issuing auth instance id
 	Sub        string         `json:"sub"` // end-user uid
 	Identifier string         `json:"identifier"`
 	Email      string         `json:"email,omitempty"`
-	Claims     map[string]any `json:"claims,omitempty"`
-	Exp        int64          `json:"exp"` // unix seconds
+	Profile    map[string]any `json:"profile,omitempty"` // user-supplied signup fields — $auth.profile.X, NEVER authoritative
+	Claims     map[string]any `json:"claims,omitempty"`  // server/admin-set — $auth.claims.X, authoritative
+	Exp        int64          `json:"exp"`               // unix seconds
 }
 
 // SignIdentity mints an identity token.

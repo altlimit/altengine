@@ -186,13 +186,14 @@ func (s SignupConfig) IdentityType() string {
 }
 
 // DeriveEmail returns the address to put on an identity token: the identifier itself when
-// the identity field is email-typed, else a collected `email` claim, else "" (a pure
-// username instance simply has no email on the token).
-func (s SignupConfig) DeriveEmail(identifier string, claims map[string]any) string {
+// the identity field is email-typed, else a collected `email` field, else "" (a pure
+// username instance simply has no email on the token). `email` is a signup-collected field,
+// so it lives in the user-supplied profile bag.
+func (s SignupConfig) DeriveEmail(identifier string, profile map[string]any) string {
 	if s.IdentityType() == "email" {
 		return identifier
 	}
-	if e, ok := claims["email"].(string); ok {
+	if e, ok := profile["email"].(string); ok {
 		return strings.TrimSpace(e)
 	}
 	return ""

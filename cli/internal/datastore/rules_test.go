@@ -26,7 +26,9 @@ func rulesFixture() map[string]any {
 				"posts": map[string]any{
 					"read": "authenticated",
 					"create": map[string]any{
-						"stamp": map[string]any{"author_uid": "$auth.uid", "author_name": "$auth.claims.name"},
+						// `author_name` is stamped from the self-asserted PROFILE (a display
+						// value); `author_uid` from the authoritative token uid.
+						"stamp": map[string]any{"author_uid": "$auth.uid", "author_name": "$auth.profile.name"},
 					},
 					"update": map[string]any{
 						"match":     []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
@@ -82,14 +84,15 @@ func newRuleEnv(t *testing.T) *ruleEnv {
 }
 
 // token mints an identity token directly (the auth data plane's own round-trip is covered
-// in the identity package's tests).
+// in the identity package's tests). `name` is a signup-collected field, so it rides in the
+// self-asserted PROFILE bag (read as $auth.profile.name), not the authoritative claims.
 func (e *ruleEnv) token(uid, name string) string {
 	return identity.SignIdentity(identity.IdentityClaims{
 		Iss:        e.authInst.ID,
 		Sub:        uid,
 		Identifier: uid + "@example.com",
 		Email:      uid + "@example.com",
-		Claims:     map[string]any{"name": name},
+		Profile:    map[string]any{"name": name},
 		Exp:        time.Now().Unix() + 3600,
 	}, e.authInst.Secret)
 }

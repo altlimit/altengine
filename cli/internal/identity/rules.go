@@ -221,9 +221,19 @@ func Substitute(value any, u *EndUser) (any, error) {
 		}
 		return u.Email, nil
 	case strings.HasPrefix(s, "$auth.claims."):
+		// Authoritative — server/admin-set only. Safe to authorize on.
 		v, ok := claimPath(u.Claims, strings.TrimPrefix(s, "$auth.claims."))
 		if !ok || v == nil {
 			return nil, deny("rule references missing claim in '" + s + "'")
+		}
+		return v, nil
+	case strings.HasPrefix(s, "$auth.profile."):
+		// User-supplied (signup). Fine to stamp/match on as display data, but NEVER trust it
+		// for access control — the user chose this value. A missing field is a hard deny, just
+		// like a claim, so a rule never silently degrades to an unconstrained match.
+		v, ok := claimPath(u.Profile, strings.TrimPrefix(s, "$auth.profile."))
+		if !ok || v == nil {
+			return nil, deny("rule references missing profile field in '" + s + "'")
 		}
 		return v, nil
 	}
@@ -401,6 +411,18 @@ func templateValue(name string, u *EndUser) (string, error) {
 		s, ok := scalarString(v)
 		if !ok {
 			return "", deny("channel template references non-scalar claim '$auth." + name + "'")
+		}
+		return s, nil
+	case strings.HasPrefix(name, "profile."):
+		// User-supplied (signup) — never authoritative, but fine to interpolate into a
+		// channel name. A missing or non-scalar field is a hard deny (never a wildcard).
+		v, ok := claimPath(u.Profile, strings.TrimPrefix(name, "profile."))
+		if !ok {
+			return "", deny("channel template references missing profile field '$auth." + name + "'")
+		}
+		s, ok := scalarString(v)
+		if !ok {
+			return "", deny("channel template references non-scalar profile field '$auth." + name + "'")
 		}
 		return s, nil
 	}

@@ -219,7 +219,7 @@ func TestPasswordResetFlow(t *testing.T) {
 	}
 }
 
-func TestConfiguredSignupFormBecomesClaims(t *testing.T) {
+func TestConfiguredSignupFormBecomesProfile(t *testing.T) {
 	srv, reg := newTestServer(t)
 	base := srv.URL + "/v1/auth/app"
 	inst := reg.GetOrCreate("auth", "app")
@@ -252,15 +252,23 @@ func TestConfiguredSignupFormBecomesClaims(t *testing.T) {
 		t.Fatalf("signup -> %d: %v", status, out)
 	}
 	user, _ := out["user"].(map[string]any)
-	claims, _ := user["claims"].(map[string]any)
-	if user["identifier"] != "alice" || claims["name"] != "Alice A" || claims["age"].(float64) != 31 {
-		t.Fatalf("identity field and claims wrong: %v", user)
+	profile, _ := user["profile"].(map[string]any)
+	if user["identifier"] != "alice" || profile["name"] != "Alice A" || profile["age"].(float64) != 31 {
+		t.Fatalf("identity field and profile wrong: %v", user)
+	}
+	// Signup writes ONLY the self-asserted profile — the authoritative claims bag stays empty
+	// (a user can never write it), which is the whole point of the split.
+	if claims, _ := user["claims"].(map[string]any); len(claims) != 0 {
+		t.Fatalf("signup must not populate authoritative claims, got %v", claims)
 	}
 
-	// The non-identity fields ride on the token as custom claims.
+	// The non-identity fields ride on the token in the profile bag, not claims.
 	tokenClaims := VerifyIdentity(out["id_token"].(string), reg.GetOrCreate("auth", "app").Secret)
-	if tokenClaims == nil || tokenClaims.Identifier != "alice" || tokenClaims.Claims["name"] != "Alice A" {
-		t.Fatalf("token claims wrong: %+v", tokenClaims)
+	if tokenClaims == nil || tokenClaims.Identifier != "alice" || tokenClaims.Profile["name"] != "Alice A" {
+		t.Fatalf("token profile wrong: %+v", tokenClaims)
+	}
+	if len(tokenClaims.Claims) != 0 {
+		t.Fatalf("token must not carry authoritative claims from signup, got %v", tokenClaims.Claims)
 	}
 	// A username-typed instance carries no email on the token.
 	if tokenClaims.Email != "" {
@@ -338,5 +346,41 @@ func TestSetClaimsBackfillsAnOlderAccount(t *testing.T) {
 	// A missing user reports false rather than silently succeeding.
 	if ok, _ := s.SetClaims("no-such-uid", map[string]any{"a": 1}, 3); ok {
 		t.Fatal("SetClaims on a missing user should report false")
+	}
+}
+
+// The profile/claims split is a SECURITY BOUNDARY: `profile` is self-asserted (a user
+// chooses their own signup values), `claims` is admin-set and authoritative. A rule that
+// authorizes on `$auth.claims.role` must therefore NEVER be satisfiable by a profile value —
+// otherwise a user could grant themselves `role:"admin"` at signup. This proves it: with the
+// role only in the profile bag, a `$auth.claims.role` lookup denies while `$auth.profile.role`
+// resolves; once an admin sets it authoritatively, `$auth.claims.role` resolves too.
+func TestProfileClaimsSecurityBoundary(t *testing.T) {
+	// A user who self-asserted role:"admin" at signup — it lands in profile, never claims.
+	u := &EndUser{UID: "u1", Profile: map[string]any{"role": "admin"}, Claims: map[string]any{}}
+
+	if _, err := Substitute("$auth.claims.role", u); err == nil {
+		t.Fatal("a self-asserted profile value must NOT satisfy an authoritative $auth.claims.role lookup")
+	}
+	got, err := Substitute("$auth.profile.role", u)
+	if err != nil {
+		t.Fatalf("$auth.profile.role should resolve the self-asserted value: %v", err)
+	}
+	if got != "admin" {
+		t.Fatalf("$auth.profile.role = %v, want \"admin\"", got)
+	}
+
+	// The channel-template path enforces the same boundary.
+	if _, err := SubstituteTemplate("room.$auth.claims.role", u); err == nil {
+		t.Fatal("channel template must not resolve $auth.claims.role from a profile value")
+	}
+	if s, err := SubstituteTemplate("room.$auth.profile.role", u); err != nil || s != "room.admin" {
+		t.Fatalf("channel template $auth.profile.role -> %q, %v (want \"room.admin\")", s, err)
+	}
+
+	// Once an admin sets the claim authoritatively, the claims lookup resolves.
+	u.Claims = map[string]any{"role": "moderator"}
+	if got, err := Substitute("$auth.claims.role", u); err != nil || got != "moderator" {
+		t.Fatalf("admin-set $auth.claims.role -> %v, %v (want \"moderator\")", got, err)
 	}
 }

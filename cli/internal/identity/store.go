@@ -95,12 +95,21 @@ func (m *Manager) Drop(instanceID string) {
 func ensureSchema(db *sql.DB) error {
 	stmts := []string{
 		// One row per end-user. The unique login handle lives in `identifier` — it may be
-		// an email OR a username depending on the instance's configured identity field;
-		// everything else collected at signup lives in the `claims` JSON.
+		// an email OR a username depending on the instance's configured identity field.
+		//
+		// There are TWO bags, and the split is a security boundary:
+		//   - `profile`: everything the USER supplied at signup (name, etc.). Self-asserted,
+		//                NEVER authoritative. Rules read it as `$auth.profile.X` — safe to
+		//                display/stamp, never to authorize on.
+		//   - `claims`:  server/admin-set only. Authoritative. Rules read it as
+		//                `$auth.claims.X`. A user can never write here, so an authorization
+		//                rule that trusts `$auth.claims.role` cannot be satisfied by a
+		//                self-chosen signup value.
 		`CREATE TABLE IF NOT EXISTS users (
 			uid        TEXT PRIMARY KEY,
 			identifier TEXT NOT NULL UNIQUE,
 			pw_hash    TEXT NOT NULL,
+			profile    TEXT NOT NULL DEFAULT '{}',
 			claims     TEXT NOT NULL DEFAULT '{}',
 			disabled   INTEGER NOT NULL DEFAULT 0,
 			created    INTEGER NOT NULL,
@@ -135,17 +144,58 @@ func ensureSchema(db *sql.DB) error {
 			return err
 		}
 	}
+	// One-time migration for stores created before the profile/claims split: add the
+	// `profile` column and MOVE the old signup data into it, resetting `claims` to the new
+	// authoritative-empty default. The whole point of the split is that a user can't write
+	// `claims`, so old signup-populated claims must not survive as authoritative data.
+	// Probe with PRAGMA rather than catching a failed ALTER — the error text isn't portable.
+	// Fresh stores already have the column (CREATE TABLE above), so this is a no-op for them.
+	has, err := hasColumn(db, "users", "profile")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN profile TEXT NOT NULL DEFAULT '{}'`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`UPDATE users SET profile = claims, claims = '{}'`); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// hasColumn reports whether `table` has a column named `col`, via PRAGMA table_info.
+func hasColumn(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Store is a handle to one auth instance's database.
 type Store struct{ db *sql.DB }
 
-// UserRow is the stored end-user record.
+// UserRow is the stored end-user record. `Profile` is the user-supplied signup bag;
+// `Claims` is the server/admin-set authoritative bag (see the security note on the schema).
 type UserRow struct {
 	UID        string
 	Identifier string
 	PwHash     string
+	Profile    map[string]any
 	Claims     map[string]any
 	Disabled   bool
 	Created    int64
@@ -156,7 +206,8 @@ type UserRow struct {
 type PublicUser struct {
 	UID         string         `json:"uid"`
 	Identifier  string         `json:"identifier"`
-	Claims      map[string]any `json:"claims"`
+	Profile     map[string]any `json:"profile"` // user-supplied (signup)
+	Claims      map[string]any `json:"claims"`  // server/admin-set (authoritative)
 	Disabled    bool           `json:"disabled"`
 	TotpEnabled bool           `json:"totpEnabled"`
 	Created     int64          `json:"created"`
@@ -164,11 +215,15 @@ type PublicUser struct {
 }
 
 func (r *UserRow) public() PublicUser {
+	p := r.Profile
+	if p == nil {
+		p = map[string]any{}
+	}
 	c := r.Claims
 	if c == nil {
 		c = map[string]any{}
 	}
-	return PublicUser{UID: r.UID, Identifier: r.Identifier, Claims: c, Disabled: r.Disabled,
+	return PublicUser{UID: r.UID, Identifier: r.Identifier, Profile: p, Claims: c, Disabled: r.Disabled,
 		TotpEnabled: false, Created: r.Created, Updated: r.Updated}
 }
 
@@ -241,13 +296,15 @@ func parseJSONObject(raw string) map[string]any {
 	return m
 }
 
-// CreateUser inserts an end-user. Returns 409 ALREADY_EXISTS when the handle is taken.
-func (s *Store) CreateUser(identifier, pwHash string, claims map[string]any, now int64) (*UserRow, error) {
+// CreateUser inserts an end-user. The signup-collected fields go to `profile` (self-asserted);
+// new accounts have NO authoritative `claims` (admin-set only), so it starts empty. Returns
+// 409 ALREADY_EXISTS when the handle is taken.
+func (s *Store) CreateUser(identifier, pwHash string, profile map[string]any, now int64) (*UserRow, error) {
 	uid := common.UUID()
-	claimsJSON := mustJSON(claims)
+	profileJSON := mustJSON(profile)
 	_, err := s.db.Exec(
-		`INSERT INTO users (uid, identifier, pw_hash, claims, disabled, created, updated) VALUES (?,?,?,?,0,?,?)`,
-		uid, identifier, pwHash, claimsJSON, now, now)
+		`INSERT INTO users (uid, identifier, pw_hash, profile, claims, disabled, created, updated) VALUES (?,?,?,?,'{}',0,?,?)`,
+		uid, identifier, pwHash, profileJSON, now, now)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "unique") || strings.Contains(msg, "constraint") {
@@ -255,14 +312,14 @@ func (s *Store) CreateUser(identifier, pwHash string, claims map[string]any, now
 		}
 		return nil, err
 	}
-	return &UserRow{UID: uid, Identifier: identifier, PwHash: pwHash, Claims: claims, Created: now, Updated: now}, nil
+	return &UserRow{UID: uid, Identifier: identifier, PwHash: pwHash, Profile: profile, Claims: map[string]any{}, Created: now, Updated: now}, nil
 }
 
 func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 	var r UserRow
-	var claims string
+	var profile, claims string
 	var disabled int
-	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &claims, &disabled, &r.Created, &r.Updated)
+	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &r.Created, &r.Updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -270,6 +327,7 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 		return nil, err
 	}
 	r.Disabled = disabled == 1
+	r.Profile = parseJSONObject(profile)
 	r.Claims = parseJSONObject(claims)
 	return &r, nil
 }
@@ -277,13 +335,13 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 // ByIdentifier looks a user up by their unique login handle (nil when absent).
 func (s *Store) ByIdentifier(identifier string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, claims, disabled, created, updated FROM users WHERE identifier = ?`, identifier))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated FROM users WHERE identifier = ?`, identifier))
 }
 
 // ByUID looks a user up by uid (nil when absent).
 func (s *Store) ByUID(uid string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, claims, disabled, created, updated FROM users WHERE uid = ?`, uid))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated FROM users WHERE uid = ?`, uid))
 }
 
 // ListUsers returns end users newest-first, for the local console's browser. The password
@@ -293,7 +351,7 @@ func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
 		limit = 100
 	}
 	rows, err := s.db.Query(
-		`SELECT uid, identifier, pw_hash, claims, disabled, created, updated
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated
 		   FROM users ORDER BY created DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -302,21 +360,23 @@ func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
 	out := []PublicUser{}
 	for rows.Next() {
 		var r UserRow
-		var claims string
+		var profile, claims string
 		var disabled int
-		if err := rows.Scan(&r.UID, &r.Identifier, &r.PwHash, &claims, &disabled, &r.Created, &r.Updated); err != nil {
+		if err := rows.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &r.Created, &r.Updated); err != nil {
 			return nil, err
 		}
 		r.Disabled = disabled == 1
+		r.Profile = parseJSONObject(profile)
 		r.Claims = parseJSONObject(claims)
 		out = append(out, r.public())
 	}
 	return out, rows.Err()
 }
 
-// SetClaims replaces an end user's claims. Adding a sign-up field does NOT backfill the
-// users who registered before it existed, and a rule that stamps a missing claim is a hard
-// deny — so this is the backfill path for those accounts.
+// SetClaims replaces an end user's AUTHORITATIVE claims (the admin-only surface). These are
+// what rules may safely authorize on via `$auth.claims.X` — a user has no path to write here.
+// It is also the backfill path for accounts created before a needed claim existed (a rule
+// that references a missing claim is a hard deny).
 func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, error) {
 	if claims == nil {
 		claims = map[string]any{}
@@ -326,6 +386,25 @@ func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, e
 		return false, common.BadRequest("claims must be a JSON object")
 	}
 	res, err := s.db.Exec(`UPDATE users SET claims = ?, updated = ? WHERE uid = ?`, string(blob), now, uid)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetProfile replaces an end user's PROFILE (the self-asserted signup bag). Safe to expose as
+// a self-service "edit my profile" path — profile is never authoritative, so a user editing it
+// can't escalate. Rules read it as `$auth.profile.X`.
+func (s *Store) SetProfile(uid string, profile map[string]any, now int64) (bool, error) {
+	if profile == nil {
+		profile = map[string]any{}
+	}
+	blob, err := json.Marshal(profile)
+	if err != nil {
+		return false, common.BadRequest("profile must be a JSON object")
+	}
+	res, err := s.db.Exec(`UPDATE users SET profile = ?, updated = ? WHERE uid = ?`, string(blob), now, uid)
 	if err != nil {
 		return false, err
 	}

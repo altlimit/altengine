@@ -17,7 +17,7 @@ const accessConfig = {
     rules: {
       posts: {
         read: "authenticated",
-        create: { stamp: { author_uid: "$auth.uid", author_name: "$auth.claims.name" } },
+        create: { stamp: { author_uid: "$auth.uid", author_name: "$auth.profile.name" } },
         update: {
           match: [{ field: "author_uid", op: "=", value: "$auth.uid" }],
           immutable: ["author_uid"],
@@ -103,12 +103,14 @@ describe("auth: public config", () => {
 });
 
 describe("auth: sign-up and sign-in", () => {
-  it("signs up, puts non-identity fields on claims, and signs back in", async () => {
+  it("signs up, puts non-identity fields on the profile, and signs back in", async () => {
     const email = `${uniq("alice")}@example.com`;
     const a = await signedUp(email, "Alice");
     expect(a.isSignedIn).toBe(true);
     expect(a.user?.identifier).toBe(email);
-    expect(a.user?.claims?.name).toBe("Alice");
+    // Sign-up fields land in `profile` (self-asserted), NOT `claims` (admin-set).
+    expect(a.user?.profile?.name).toBe("Alice");
+    expect(a.user?.claims?.name).toBeUndefined();
 
     const b = newAuth();
     const res = await b.signIn(email, "hunter2-long-enough");
@@ -208,7 +210,7 @@ describe("auth: identity tokens on the data plane", () => {
     const got = await db.get("posts", keys);
     const doc = (Array.isArray(got) ? got[0] : got) as any;
     expect(doc.data.author_uid).toBe(alice.user?.uid); // forged value overwritten
-    expect(doc.data.author_name).toBe("Alice"); // stamped from a claim
+    expect(doc.data.author_name).toBe("Alice"); // stamped from $auth.profile.name
   });
 
   it("refuses another user's update, delete, and immutable-field change", async () => {

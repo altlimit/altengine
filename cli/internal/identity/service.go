@@ -31,7 +31,11 @@ type EndUser struct {
 	Identifier     string
 	Email          string
 	HasEmail       bool
-	Claims         map[string]any
+	// The two identity bags — the split is a security boundary. Profile is user-supplied
+	// (signup), read as `$auth.profile.X`, NEVER authoritative. Claims is server/admin-set,
+	// read as `$auth.claims.X`, safe to authorize on.
+	Profile map[string]any
+	Claims  map[string]any
 	// The issuing instance's `access` config, carried so the rule engine reads the
 	// per-target rules without a second lookup.
 	Access AccessConfig
@@ -80,6 +84,10 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 		return nil, common.Unauthenticated("invalid or expired token")
 	}
 	cfg := ParseConfig(inst.Config)
+	p := claims.Profile
+	if p == nil {
+		p = map[string]any{}
+	}
 	c := claims.Claims
 	if c == nil {
 		c = map[string]any{}
@@ -91,6 +99,7 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 		Identifier:     claims.Identifier,
 		Email:          claims.Email,
 		HasEmail:       claims.Email != "",
+		Profile:        p,
 		Claims:         c,
 		Access:         cfg.Access,
 	}, nil

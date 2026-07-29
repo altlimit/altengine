@@ -23,11 +23,17 @@ export interface AuthConfig {
   methods: { password: boolean; passkeys: boolean; passwordless: boolean; totp: boolean };
 }
 
-/** An end user of your app (not an altengine account). `claims` holds the
- * non-identity sign-up fields and is what access rules read via `$auth.claims.X`. */
+/** An end user of your app (not an altengine account).
+ *
+ * `profile` holds the fields the user supplied at sign-up (name, etc.), read in
+ * access rules as `$auth.profile.X` — self-asserted, never authoritative. `claims`
+ * is server/admin-set only, read as `$auth.claims.X` — authoritative, safe to
+ * authorize on. A user can never write `claims`, which is what makes it safe to
+ * base access rules on it. */
 export interface AuthUser {
   uid: string;
   identifier: string;
+  profile?: Record<string, unknown>;
   claims?: Record<string, unknown>;
   totpEnabled?: boolean;
 }

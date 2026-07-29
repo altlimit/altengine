@@ -132,7 +132,7 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
-	identifier, claims, err := collectSignup(cfg.Signup, body)
+	identifier, profile, err := collectSignup(cfg.Signup, body)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,9 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	user, err := store.CreateUser(identifier, pwHash, claims, nowMS())
+	// Signup-collected fields go to `profile` (self-asserted); `claims` (authoritative,
+	// admin-set) starts empty — a user can never write it.
+	user, err := store.CreateUser(identifier, pwHash, profile, nowMS())
 	if err != nil {
 		return err
 	}
@@ -331,7 +333,7 @@ func (h *Handler) issueCode(cfg Config, store *Store, identifier, purpose string
 	if user == nil || user.Disabled {
 		return "", nil
 	}
-	email := cfg.Signup.DeriveEmail(user.Identifier, user.Claims)
+	email := cfg.Signup.DeriveEmail(user.Identifier, user.Profile)
 	if email == "" {
 		return "", nil // username-only instance with no address on file — nothing to send
 	}
@@ -500,8 +502,13 @@ func (h *Handler) mintIDToken(inst *control.Instance, cfg Config, user *UserRow,
 		Iss:        inst.ID,
 		Sub:        user.UID,
 		Identifier: user.Identifier,
-		Email:      cfg.Signup.DeriveEmail(user.Identifier, user.Claims),
+		Email:      cfg.Signup.DeriveEmail(user.Identifier, user.Profile),
 		Exp:        exp,
+	}
+	// The token carries BOTH bags: profile (user-supplied, $auth.profile.X) and claims
+	// (server/admin-set, $auth.claims.X). The target data plane keeps them apart.
+	if len(user.Profile) > 0 {
+		c.Profile = user.Profile
 	}
 	if len(user.Claims) > 0 {
 		c.Claims = user.Claims
@@ -529,9 +536,10 @@ func (h *Handler) issueTokens(inst *control.Instance, cfg Config, store *Store, 
 // --- signup-form parsing ---
 
 // collectSignup parses a signup body against the configured fields: the identity field's
-// value becomes the unique `identifier`, every other field becomes a custom claim.
+// value becomes the unique `identifier`, every other field becomes part of the user's
+// PROFILE (self-asserted, non-authoritative) — NOT `claims`, which is admin-set only.
 func collectSignup(sc SignupConfig, body map[string]any) (string, map[string]any, error) {
-	claims := map[string]any{}
+	profile := map[string]any{}
 	identifier := ""
 	for _, f := range sc.Fields {
 		raw, present := body[f.Key]
@@ -560,12 +568,12 @@ func collectSignup(sc SignupConfig, body map[string]any) (string, map[string]any
 		if err != nil {
 			return "", nil, err
 		}
-		claims[f.Key] = val
+		profile[f.Key] = val
 	}
 	if identifier == "" {
 		return "", nil, common.BadRequest("the identity field is required")
 	}
-	return identifier, claims, nil
+	return identifier, profile, nil
 }
 
 func labelOf(f SignupField) string {
