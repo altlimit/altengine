@@ -64,6 +64,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// End users of an auth instance (the console's browser).
 	mux.HandleFunc("GET /admin/auth/{id}/users", common.Wrap(h.authUsers))
+	mux.HandleFunc("POST /admin/auth/{id}/users/claims/bulk", common.Wrap(h.authBulkClaims))
 	mux.HandleFunc("PUT /admin/auth/{id}/users/{uid}/claims", common.Wrap(h.authSetClaims))
 	mux.HandleFunc("DELETE /admin/auth/{id}/users/{uid}", common.Wrap(h.authDeleteUser))
 

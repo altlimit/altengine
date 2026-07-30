@@ -393,6 +393,27 @@ func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, e
 	return n > 0, err
 }
 
+// MergeClaimsAllUsers merges a claims patch into EVERY user in one statement (backfill). It
+// mirrors the hosted service: onlyMissing=true fills gaps without clobbering a user's existing
+// value (existing wins), onlyMissing=false forces the patch's values everywhere (patch wins),
+// and a null value in the patch deletes that claim across all users (RFC 7386 merge-patch).
+// The merge order under json_patch decides the winner: json_patch(a, b) has b override a.
+func (s *Store) MergeClaimsAllUsers(patch map[string]any, now int64, onlyMissing bool) (int64, error) {
+	blob, err := json.Marshal(patch)
+	if err != nil {
+		return 0, common.BadRequest("claims must be a JSON object")
+	}
+	sql := `UPDATE users SET claims = json_patch(claims, ?), updated = ?` // patch wins
+	if onlyMissing {
+		sql = `UPDATE users SET claims = json_patch(?, claims), updated = ?` // existing wins
+	}
+	res, err := s.db.Exec(sql, string(blob), now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // SetProfile replaces an end user's PROFILE (the self-asserted signup bag). Safe to expose as
 // a self-service "edit my profile" path — profile is never authoritative, so a user editing it
 // can't escalate. Rules read it as `$auth.profile.X`.

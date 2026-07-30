@@ -349,6 +349,54 @@ func TestSetClaimsBackfillsAnOlderAccount(t *testing.T) {
 	}
 }
 
+func TestMergeClaimsAllUsersBackfill(t *testing.T) {
+	m := NewManager("")
+	s, err := m.Open("inst-" + t.Name())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	a, _ := s.CreateUser("a@example.com", "pw", nil, 1)
+	b, _ := s.CreateUser("b@example.com", "pw", nil, 1)
+	if _, err := s.SetClaims(a.UID, map[string]any{"role": "admin", "team": "x"}, 1); err != nil {
+		t.Fatalf("seed a: %v", err)
+	}
+	if _, err := s.SetClaims(b.UID, map[string]any{"team": "y"}, 1); err != nil {
+		t.Fatalf("seed b: %v", err)
+	}
+
+	// only_missing=true: fill `role` where absent, but DON'T clobber a's existing admin.
+	n, err := s.MergeClaimsAllUsers(map[string]any{"role": "member"}, 2, true)
+	if err != nil || n != 2 {
+		t.Fatalf("fill-gaps -> %d, %v (want 2)", n, err)
+	}
+	ga, _ := s.ByUID(a.UID)
+	gb, _ := s.ByUID(b.UID)
+	if ga.Claims["role"] != "admin" || gb.Claims["role"] != "member" {
+		t.Fatalf("fill-gaps wrong: a=%v b=%v", ga.Claims, gb.Claims)
+	}
+
+	// only_missing=false: force role=member on everyone (patch wins).
+	if _, err := s.MergeClaimsAllUsers(map[string]any{"role": "member"}, 3, false); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if ga, _ = s.ByUID(a.UID); ga.Claims["role"] != "member" {
+		t.Fatalf("override should have set a.role=member: %v", ga.Claims)
+	}
+
+	// A null value deletes that claim across all users (RFC 7386 merge-patch).
+	if _, err := s.MergeClaimsAllUsers(map[string]any{"team": nil}, 4, false); err != nil {
+		t.Fatalf("null-delete: %v", err)
+	}
+	ga, _ = s.ByUID(a.UID)
+	gb, _ = s.ByUID(b.UID)
+	if _, ok := ga.Claims["team"]; ok {
+		t.Fatalf("null should have deleted a.team: %v", ga.Claims)
+	}
+	if _, ok := gb.Claims["team"]; ok {
+		t.Fatalf("null should have deleted b.team: %v", gb.Claims)
+	}
+}
+
 // The profile/claims split is a SECURITY BOUNDARY: `profile` is self-asserted (a user
 // chooses their own signup values), `claims` is admin-set and authoritative. A rule that
 // authorizes on `$auth.claims.role` must therefore NEVER be satisfiable by a profile value —

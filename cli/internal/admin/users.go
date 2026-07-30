@@ -65,6 +65,38 @@ func (h *Handler) authSetClaims(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// authBulkClaims merges a claims patch into EVERY user of an auth instance (backfill) — the
+// recovery path when a rule starts requiring a claim that accounts created earlier don't have.
+// only_missing (default true) fills gaps without overwriting per-user values; false forces the
+// patch everywhere; a null value deletes a claim across all users. Distinct path from
+// /users/{uid}/claims, so no route collision.
+func (h *Handler) authBulkClaims(w http.ResponseWriter, r *http.Request) error {
+	s, err := h.authStore(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Claims      map[string]any `json:"claims"`
+		OnlyMissing *bool          `json:"only_missing"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	if len(body.Claims) == 0 {
+		return common.BadRequest("claims must be a non-empty object")
+	}
+	onlyMissing := true
+	if body.OnlyMissing != nil {
+		onlyMissing = *body.OnlyMissing
+	}
+	n, err := s.MergeClaimsAllUsers(body.Claims, time.Now().UnixMilli(), onlyMissing)
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"updated": n, "only_missing": onlyMissing})
+	return nil
+}
+
 func (h *Handler) authDeleteUser(w http.ResponseWriter, r *http.Request) error {
 	s, err := h.authStore(r)
 	if err != nil {
