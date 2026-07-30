@@ -178,11 +178,11 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 	if user != nil {
 		// An identity write is row-scoped: create/update rules decide per document (owner
 		// match, immutable fields) and server `stamp` fields are applied from the token.
-		create, err := user.DatastoreWritePolicy(inst.Name, collection, "create")
+		create, err := user.DatastoreWritePolicy(inst.Name, decodeNs(r.PathValue("ns")), collection, "create")
 		if err != nil {
 			return err
 		}
-		update, err := user.DatastoreWritePolicy(inst.Name, collection, "update")
+		update, err := user.DatastoreWritePolicy(inst.Name, decodeNs(r.PathValue("ns")), collection, "update")
 		if err != nil {
 			return err
 		}
@@ -220,7 +220,7 @@ func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
 	if user != nil {
 		// A point-read can't be scoped in SQL, so the read rules are applied server-side:
 		// a row the caller may not read is omitted, never leaked.
-		filters, err := h.readFilters(user, inst, collection)
+		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
 		if err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
 	}
 	var n int
 	if user != nil {
-		del, err := user.DatastoreWritePolicy(inst.Name, collection, "delete")
+		del, err := user.DatastoreWritePolicy(inst.Name, decodeNs(r.PathValue("ns")), collection, "delete")
 		if err != nil {
 			return err
 		}
@@ -295,7 +295,7 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 	// Row-level read rules are ANDed into the query BEFORE the index-served guard runs, so
 	// the guard sees (and can auto-index for) the filters that will actually execute.
 	if user != nil {
-		filters, err := h.readFilters(user, inst, collection)
+		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
 		if err != nil {
 			return err
 		}
@@ -324,7 +324,7 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 	collection := r.PathValue("collection")
 	// Same row scoping as query: an identity aggregates only over rows it may read.
 	if user != nil {
-		filters, err := h.readFilters(user, inst, collection)
+		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
 		if err != nil {
 			return err
 		}
@@ -447,8 +447,8 @@ func (h *Handler) dropIndex(w http.ResponseWriter, r *http.Request) error {
 
 // readFilters resolves the row-level read rules for an identity into datastore filters.
 // Empty means unconstrained; a collection the rules don't cover is a 403.
-func (h *Handler) readFilters(user *identity.EndUser, inst *control.Instance, collection string) ([]Filter, error) {
-	fs, err := user.DatastoreReadFilters(inst.Name, collection)
+func (h *Handler) readFilters(user *identity.EndUser, inst *control.Instance, namespace, collection string) ([]Filter, error) {
+	fs, err := user.DatastoreReadFilters(inst.Name, namespace, collection)
 	if err != nil {
 		return nil, err
 	}

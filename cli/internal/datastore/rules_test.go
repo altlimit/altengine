@@ -22,35 +22,38 @@ func rulesFixture() map[string]any {
 	return map[string]any{
 		"datastore:appdb": map[string]any{
 			"level": "full",
+			// rules are keyed by namespace ("_default" = the empty default ns) → collection.
 			"rules": map[string]any{
-				"posts": map[string]any{
-					"read": "authenticated",
-					"create": map[string]any{
-						// `author_name` is stamped from the self-asserted PROFILE (a display
-						// value); `author_uid` from the authoritative token uid.
-						"stamp": map[string]any{"author_uid": "$auth.uid", "author_name": "$auth.profile.name"},
+				"_default": map[string]any{
+					"posts": map[string]any{
+						"read": "authenticated",
+						"create": map[string]any{
+							// `author_name` is stamped from the self-asserted PROFILE (a display
+							// value); `author_uid` from the authoritative token uid.
+							"stamp": map[string]any{"author_uid": "$auth.uid", "author_name": "$auth.profile.name"},
+						},
+						"update": map[string]any{
+							"match":     []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
+							"immutable": []any{"author_uid", "board"},
+						},
+						"delete": map[string]any{
+							"match": []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
+						},
 					},
-					"update": map[string]any{
-						"match":     []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
-						"immutable": []any{"author_uid", "board"},
+					"notes": map[string]any{
+						"read":   []any{map[string]any{"field": "owner", "op": "=", "value": "$auth.uid"}},
+						"create": map[string]any{"stamp": map[string]any{"owner": "$auth.uid"}},
 					},
-					"delete": map[string]any{
-						"match": []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
-					},
-				},
-				"notes": map[string]any{
-					"read":   []any{map[string]any{"field": "owner", "op": "=", "value": "$auth.uid"}},
-					"create": map[string]any{"stamp": map[string]any{"owner": "$auth.uid"}},
-				},
-				// `author_uid` is BOTH stamped on update AND immutable — the overlap that
-				// pins the order of those two steps (TestImmutableIsCheckedBeforeStamping).
-				"articles": map[string]any{
-					"read":   "authenticated",
-					"create": map[string]any{"stamp": map[string]any{"author_uid": "$auth.uid"}},
-					"update": map[string]any{
-						"match":     []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
-						"stamp":     map[string]any{"author_uid": "$auth.uid"},
-						"immutable": []any{"author_uid"},
+					// `author_uid` is BOTH stamped on update AND immutable — the overlap that
+					// pins the order of those two steps (TestImmutableIsCheckedBeforeStamping).
+					"articles": map[string]any{
+						"read":   "authenticated",
+						"create": map[string]any{"stamp": map[string]any{"author_uid": "$auth.uid"}},
+						"update": map[string]any{
+							"match":     []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}},
+							"stamp":     map[string]any{"author_uid": "$auth.uid"},
+							"immutable": []any{"author_uid"},
+						},
 					},
 				},
 			},
@@ -326,8 +329,10 @@ func TestUnresolvablePlaceholderIsAHardDeny(t *testing.T) {
 		"datastore:appdb": map[string]any{
 			"level": "full",
 			"rules": map[string]any{
-				"team": map[string]any{
-					"read": []any{map[string]any{"field": "team", "op": "=", "value": "$auth.claims.team"}},
+				"_default": map[string]any{
+					"team": map[string]any{
+						"read": []any{map[string]any{"field": "team", "op": "=", "value": "$auth.claims.team"}},
+					},
 				},
 			},
 		},

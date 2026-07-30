@@ -56,10 +56,33 @@ type WriteRule struct {
 
 // AccessEntry is one target instance an end-user token may reach.
 type AccessEntry struct {
-	Level    string // read | write | full
-	Rules    map[string]CollectionRules
+	Level string // read | write | full
+	// Rules is keyed by NAMESPACE (wire form; "_default" = the empty default ns) → collection.
+	// An identity token is default-denied in any namespace not listed, so a namespace is a real
+	// isolation boundary (a shared auth instance can front many namespaces without one
+	// namespace's users reaching another's rows).
+	Rules    map[string]map[string]CollectionRules
 	HasRules bool
 	Channels []string
+}
+
+// nsKey maps a decoded namespace ("" for default) to its rules-map key (wire form "_default").
+func nsKey(namespace string) string {
+	if namespace == "" {
+		return "_default"
+	}
+	return namespace
+}
+
+// collectionRulesFor looks up the rules for (namespace, collection); ok=false when the
+// namespace isn't listed at all (which callers treat as default-deny).
+func (e AccessEntry) collectionRulesFor(namespace, collection string) (CollectionRules, bool) {
+	byColl, ok := e.Rules[nsKey(namespace)]
+	if !ok {
+		return CollectionRules{}, false
+	}
+	cr, ok := byColl[collection]
+	return cr, ok
 }
 
 // AccessConfig is keyed "<service>:<instance>", e.g. "datastore:appdb".
@@ -97,14 +120,27 @@ func parseAccess(v any) AccessConfig {
 			}
 		}
 		if rm, ok := em["rules"].(map[string]any); ok {
+			// rules: namespace (wire form; "_default" = default ns) → collection → modes.
 			entry.HasRules = true
-			entry.Rules = map[string]CollectionRules{}
-			for coll, cr := range rm {
-				cm, ok := cr.(map[string]any)
+			entry.Rules = map[string]map[string]CollectionRules{}
+			for nsRaw, collsRaw := range rm {
+				colls, ok := collsRaw.(map[string]any)
 				if !ok {
 					continue
 				}
-				entry.Rules[coll] = parseCollectionRules(cm)
+				ns := nsRaw
+				if ns == "" {
+					ns = "_default" // canonicalize the default ns to wire form
+				}
+				byColl := map[string]CollectionRules{}
+				for coll, cr := range colls {
+					cm, ok := cr.(map[string]any)
+					if !ok {
+						continue
+					}
+					byColl[coll] = parseCollectionRules(cm)
+				}
+				entry.Rules[ns] = byColl
 			}
 		}
 		out[target] = entry
@@ -133,18 +169,26 @@ func ValidateAccessLevels(access any) error {
 		if !ok {
 			continue
 		}
-		for coll, cr := range rm {
-			cm, ok := cr.(map[string]any)
+		// rules: namespace → collection → modes. Validate the level ceiling per (ns, collection).
+		for ns, collsRaw := range rm {
+			colls, ok := collsRaw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if _, hasDelete := cm["delete"]; hasDelete && cm["delete"] != nil && level != "full" {
-				return common.BadRequest("access['" + target + "'].rules['" + coll + "'] declares a delete rule, but level '" + level + "' can't reach the delete endpoint — set this target's level to \"full\" (delete requires full).")
-			}
-			_, hasCreate := cm["create"]
-			_, hasUpdate := cm["update"]
-			if (hasCreate && cm["create"] != nil || hasUpdate && cm["update"] != nil) && level == "read" {
-				return common.BadRequest("access['" + target + "'].rules['" + coll + "'] declares a create/update rule, but level 'read' is read-only — set this target's level to \"write\" or \"full\".")
+			for coll, cr := range colls {
+				cm, ok := cr.(map[string]any)
+				if !ok {
+					continue
+				}
+				loc := "access['" + target + "'].rules['" + ns + "']['" + coll + "']"
+				if _, hasDelete := cm["delete"]; hasDelete && cm["delete"] != nil && level != "full" {
+					return common.BadRequest(loc + " declares a delete rule, but level '" + level + "' can't reach the delete endpoint — set this target's level to \"full\" (delete requires full).")
+				}
+				_, hasCreate := cm["create"]
+				_, hasUpdate := cm["update"]
+				if (hasCreate && cm["create"] != nil || hasUpdate && cm["update"] != nil) && level == "read" {
+					return common.BadRequest(loc + " declares a create/update rule, but level 'read' is read-only — set this target's level to \"write\" or \"full\".")
+				}
 			}
 		}
 	}
@@ -306,7 +350,7 @@ func (u *EndUser) entryFor(service, instance string) (AccessEntry, error) {
 // DatastoreReadFilters returns the filters to AND into a datastore read for this
 // identity. An empty slice means unconstrained (a rules-less entry, or a `public`/
 // `authenticated` read policy). Returns 403 when the rules don't permit the read.
-func (u *EndUser) DatastoreReadFilters(instance, collection string) ([]Filter, error) {
+func (u *EndUser) DatastoreReadFilters(instance, namespace, collection string) ([]Filter, error) {
 	entry, err := u.entryFor("datastore", instance)
 	if err != nil {
 		return nil, err
@@ -314,9 +358,11 @@ func (u *EndUser) DatastoreReadFilters(instance, collection string) ([]Filter, e
 	if !entry.HasRules {
 		return nil, nil // level-only access
 	}
-	cr, ok := entry.Rules[collection]
+	// An unlisted namespace is default-deny — a token can't reach a collection by switching the
+	// namespace segment to one it wasn't granted rules for.
+	cr, ok := entry.collectionRulesFor(namespace, collection)
 	if !ok || cr.ReadPolicy == "" {
-		return nil, deny("read on '" + collection + "'")
+		return nil, deny("read on '" + collection + "' in namespace '" + nsKey(namespace) + "'")
 	}
 	if cr.ReadPolicy != "filters" {
 		return nil, nil // public / authenticated
@@ -337,7 +383,7 @@ type WritePolicy struct {
 
 // DatastoreWritePolicy resolves the create/update/delete policy for a collection.
 // An unconstrained policy (no rules on the entry) has Denied=false and no constraints.
-func (u *EndUser) DatastoreWritePolicy(instance, collection, mode string) (WritePolicy, error) {
+func (u *EndUser) DatastoreWritePolicy(instance, namespace, collection, mode string) (WritePolicy, error) {
 	entry, err := u.entryFor("datastore", instance)
 	if err != nil {
 		return WritePolicy{}, err
@@ -345,7 +391,8 @@ func (u *EndUser) DatastoreWritePolicy(instance, collection, mode string) (Write
 	if !entry.HasRules {
 		return WritePolicy{}, nil // level-only access
 	}
-	cr, ok := entry.Rules[collection]
+	// An unlisted namespace (or collection) is default-deny — no cross-namespace writes.
+	cr, ok := entry.collectionRulesFor(namespace, collection)
 	if !ok {
 		return WritePolicy{Denied: true}, nil
 	}

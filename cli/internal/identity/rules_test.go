@@ -10,8 +10,9 @@ func TestValidateAccessLevels(t *testing.T) {
 	deleteRule := map[string]any{"match": []any{map[string]any{"field": "author_uid", "op": "=", "value": "$auth.uid"}}}
 	createRule := map[string]any{"stamp": map[string]any{"author_uid": "$auth.uid"}}
 
+	// rules are keyed by namespace ("_default" = the default ns) → collection.
 	entry := func(level string, coll map[string]any) map[string]any {
-		return map[string]any{"datastore:db": map[string]any{"level": level, "rules": map[string]any{"c": coll}}}
+		return map[string]any{"datastore:db": map[string]any{"level": level, "rules": map[string]any{"_default": map[string]any{"c": coll}}}}
 	}
 
 	cases := []struct {
