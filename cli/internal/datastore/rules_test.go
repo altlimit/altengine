@@ -304,6 +304,26 @@ func TestBackendOnlySurfacesRefuseIdentityTokens(t *testing.T) {
 	}
 }
 
+// A query join reads a SECOND collection by primary key WITHOUT applying that collection's
+// read rules, so it must be refused for an end-user token (an org API key only) — otherwise
+// an identity could dump any collection it can name by joining to it. Matches the hosted fix.
+func TestQueryJoinRefusedForIdentityToken(t *testing.T) {
+	e := newRuleEnv(t)
+	alice := e.token("alice", "Alice")
+
+	// Baseline: a join-less query with a valid grant succeeds, so the 403 below is specific
+	// to the join, not a default-deny.
+	if status, out := e.call(t, "/notes/query", `{}`, alice); status != 200 {
+		t.Fatalf("plain query -> %d: %v", status, out)
+	}
+
+	// The bypass: joining `secrets` would read it unscoped. Refused up front.
+	status, out := e.call(t, "/notes/query", `{"join":[{"as":"leak","collection":"secrets","local_field":"target"}]}`, alice)
+	if status != 403 {
+		t.Fatalf("join with an identity token -> %d (want 403): %v", status, out)
+	}
+}
+
 func TestApiKeyBypassesRowRules(t *testing.T) {
 	e := newRuleEnv(t)
 	alice := e.token("alice", "Alice")

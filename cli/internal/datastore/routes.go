@@ -292,6 +292,12 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	collection := r.PathValue("collection")
+	// A join reads a SECOND collection by key WITHOUT applying that collection's read rules,
+	// so joins require an org API key, never an end-user token — an identity reads one
+	// collection at a time through its own scoped filters below.
+	if user != nil && len(req.Join) > 0 {
+		return common.PermissionDenied("query joins require an org API key, not an end-user token")
+	}
 	// Row-level read rules are ANDed into the query BEFORE the index-served guard runs, so
 	// the guard sees (and can auto-index for) the filters that will actually execute.
 	if user != nil {
