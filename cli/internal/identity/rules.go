@@ -227,10 +227,8 @@ func ValidateAccessLevels(access any) error {
 // hosted validateMatch + top-level field-key guard so a config that stores in dev stores in prod.
 func validateCollectionShape(cm map[string]any, loc string) error {
 	if v, ok := cm["read"]; ok && v != nil {
-		if _, isStr := v.(string); !isStr {
-			if err := validateMatchShape(v, loc+".read"); err != nil {
-				return err
-			}
+		if err := validateReadPolicyShape(v, loc+".read"); err != nil {
+			return err
 		}
 	}
 	for _, mode := range []string{"create", "update", "delete"} {
@@ -257,10 +255,8 @@ func validateCollectionShape(cm map[string]any, loc string) error {
 			continue
 		}
 		if v, ok := fm["read"]; ok && v != nil {
-			if _, isStr := v.(string); !isStr {
-				if err := validateMatchShape(v, loc+".fields['"+fname+"'].read"); err != nil {
-					return err
-				}
+			if err := validateReadPolicyShape(v, loc+".fields['"+fname+"'].read"); err != nil {
+				return err
 			}
 		}
 		if v, ok := fm["write"]; ok && v != nil {
@@ -272,12 +268,27 @@ func validateCollectionShape(cm map[string]any, loc string) error {
 	return nil
 }
 
+// validateReadPolicyShape validates a read policy: the string "public"/"authenticated", or a
+// Match. A string that ISN'T one of the two keywords is rejected — the tolerant read path leaves
+// such a value with an empty policy, which at COLLECTION level is default-deny (fail-closed) but
+// at FIELD level means "no mask → always visible" (fail-OPEN, a silent field leak). Mirrors the
+// hosted validator, which routes a non-keyword read string through validateMatch and throws.
+func validateReadPolicyShape(v any, loc string) error {
+	if s, ok := v.(string); ok {
+		if s != "public" && s != "authenticated" {
+			return common.BadRequest(loc + ` must be "public", "authenticated", an array of filters, or { any: [[...], ...] }`)
+		}
+		return nil
+	}
+	return validateMatchShape(v, loc)
+}
+
 // validateMatchShape rejects a Match that isn't a flat filter array or a well-formed
-// `{ any: [[...], ...] }` (non-empty, ≤ maxMatchGroups, each group an array).
+// `{ any: [[...], ...] }` (non-empty, ≤ maxMatchGroups, each group a valid filter list).
 func validateMatchShape(v any, loc string) error {
 	switch t := v.(type) {
 	case []any:
-		return nil
+		return validateFilterList(v, loc)
 	case map[string]any:
 		anyRaw, ok := t["any"].([]any)
 		if !ok {
@@ -290,13 +301,39 @@ func validateMatchShape(v any, loc string) error {
 			return common.BadRequest(loc + ".any allows at most 4 OR-groups")
 		}
 		for i, g := range anyRaw {
-			if _, ok := g.([]any); !ok {
-				return common.BadRequest(loc + ".any[" + itoa(i) + "] must be an array of filters")
+			if err := validateFilterList(g, loc+".any["+itoa(i)+"]"); err != nil {
+				return err
 			}
 		}
 		return nil
 	}
 	return common.BadRequest(loc + " must be an array of filters or { any: [[...], ...] }")
+}
+
+// validateFilterList rejects a filter list whose entries aren't well-formed — an entry that
+// isn't an object, a missing/empty field, or an UNSUPPORTED OPERATOR. The last is the important
+// one: the tolerant read path silently DROPS a filter with a bad op, and a group that drops all
+// of its filters collapses to an empty (match-all) group — a fail-open that OR amplifies (one
+// malformed branch makes the whole disjunction match every row). Mirrors the hosted
+// validateFilters op check so a rule rejected in prod is rejected here too.
+func validateFilterList(v any, loc string) error {
+	arr, ok := v.([]any)
+	if !ok {
+		return common.BadRequest(loc + " must be an array of filters")
+	}
+	for i, fv := range arr {
+		fm, ok := fv.(map[string]any)
+		if !ok {
+			return common.BadRequest(loc + "[" + itoa(i) + "] must be an object")
+		}
+		if field, _ := fm["field"].(string); field == "" {
+			return common.BadRequest(loc + "[" + itoa(i) + "].field must be a non-empty string")
+		}
+		if op, _ := fm["op"].(string); !ruleOps[op] {
+			return common.BadRequest(loc + "[" + itoa(i) + "].op must be one of =, !=, <, <=, >, >=, in")
+		}
+	}
+	return nil
 }
 
 func parseCollectionRules(cm map[string]any) CollectionRules {

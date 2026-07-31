@@ -1,9 +1,10 @@
 package datastore
 
 import (
-	"time"
-
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/altlimit/altengine/cli/internal/identity"
 )
@@ -203,6 +204,34 @@ func TestFieldWriteGateReservesField(t *testing.T) {
 	// A silver caller can't set featured on a gold doc either.
 	if s, out := e.call(t, "/items/documents", `{"documents":[{"key":"i4","data":{"tier":"gold","featured":true}}]}`, silver); s != 403 {
 		t.Fatalf("silver setting featured on a gold doc -> %d (want 403): %v", s, out)
+	}
+}
+
+// MaskFields removes a masked field but must re-encode the rest faithfully: no HTML-escaping of
+// `<`/`>`/`&` and no float64 coercion of large integers (a masked doc must not render differently
+// from its unmasked neighbors).
+func TestMaskFieldsPreservesFidelity(t *testing.T) {
+	// owner-only email mask; caller ("bob") does not own this row → email is stripped.
+	fieldReads := map[string][][]Filter{
+		"email": {{{Field: "owner", Op: "=", Value: "bob"}}},
+	}
+	docs := []StoredDoc{{
+		Key:  "alice",
+		Data: json.RawMessage(`{"owner":"alice","email":"a@x.io","bio":"<b>hi & bye</b>","count":90071992547409911}`),
+	}}
+	out := MaskFields(docs, fieldReads)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 doc, got %d", len(out))
+	}
+	body := string(out[0].Data)
+	if strings.Contains(body, "email") {
+		t.Fatalf("email should be masked: %s", body)
+	}
+	if !strings.Contains(body, "<b>hi & bye</b>") {
+		t.Fatalf("HTML must not be escaped in a masked doc: %s", body)
+	}
+	if !strings.Contains(body, "90071992547409911") {
+		t.Fatalf("large integer must survive re-encode without precision loss: %s", body)
 	}
 }
 

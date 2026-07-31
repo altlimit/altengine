@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"strings"
@@ -298,9 +299,9 @@ func MaskFields(docs []StoredDoc, fieldReads map[string][][]Filter) []StoredDoc 
 	}
 	out := make([]StoredDoc, len(docs))
 	for i, d := range docs {
-		var data map[string]any
-		if err := json.Unmarshal(d.Data, &data); err != nil || data == nil {
-			out[i] = d
+		data, ok := decodeFaithful(d.Data)
+		if !ok {
+			out[i] = d // non-object / null / undecodable → return verbatim (nothing to mask)
 			continue
 		}
 		var remove []string
@@ -316,7 +317,7 @@ func MaskFields(docs []StoredDoc, fieldReads map[string][][]Filter) []StoredDoc 
 		for _, f := range remove {
 			delete(data, f)
 		}
-		nb, err := json.Marshal(data)
+		nb, err := encodeFaithful(data)
 		if err != nil {
 			out[i] = d
 			continue
@@ -326,6 +327,32 @@ func MaskFields(docs []StoredDoc, fieldReads map[string][][]Filter) []StoredDoc 
 		out[i] = nd
 	}
 	return out
+}
+
+// decodeFaithful unmarshals a JSON object using json.Number so large integers survive a
+// re-encode without being coerced to float64 (and losing precision above 2^53). Returns
+// ok=false for a non-object or undecodable body.
+func decodeFaithful(raw json.RawMessage) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var data map[string]any
+	if err := dec.Decode(&data); err != nil || data == nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// encodeFaithful marshals a masked document WITHOUT Go's default HTML escaping, so `<`, `>`
+// and `&` in string values round-trip byte-for-byte (matching the stored/hosted representation
+// — otherwise a masked doc would render `<` while its unmasked neighbors keep `<`).
+func encodeFaithful(data map[string]any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(data); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil // Encoder appends a trailing newline
 }
 
 // --- in-Go filter evaluation (the point-read / write-guard counterpart of the SQL compiler) ---

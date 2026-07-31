@@ -66,6 +66,17 @@ func TestValidateAccessShapeRejections(t *testing.T) {
 		{"nested field key is rejected", entry(map[string]any{"fields": map[string]any{"payment.card": map[string]any{"read": filter}}}), true},
 		{"valid field write (Match)", entry(map[string]any{"fields": map[string]any{"pinned": map[string]any{"write": filter}}}), false},
 		{"malformed field write is rejected", entry(map[string]any{"fields": map[string]any{"pinned": map[string]any{"write": map[string]any{"any": []any{}}}}}), true},
+		// An unsupported operator is DROPPED by the tolerant parser, so a group that loses all of
+		// its filters becomes an empty (match-all) group — a fail-open OR amplifies. Reject the bad
+		// op at save time (mirrors the hosted validateFilters op check).
+		{"unsupported op in a read filter is rejected", entry(map[string]any{"read": []any{map[string]any{"field": "x", "op": "==", "value": 1}}}), true},
+		{"unsupported op inside an OR group is rejected", entry(map[string]any{"read": map[string]any{"any": []any{filter, []any{map[string]any{"field": "team", "op": "~=", "value": "$auth.claims.team"}}}}}), true},
+		{"unsupported op in a create match is rejected", entry(map[string]any{"create": map[string]any{"match": []any{map[string]any{"field": "x", "op": "LIKE", "value": 1}}}}), true},
+		// A field-read string that isn't public/authenticated leaves the field VISIBLE (fail-open),
+		// unlike a collection-level read string which is default-deny. Reject it at save time.
+		{"invalid field-read policy string is rejected", entry(map[string]any{"fields": map[string]any{"salary": map[string]any{"read": "private"}}}), true},
+		{"invalid collection-read policy string is rejected", entry(map[string]any{"read": "private"}), true},
+		{"public field-read string is fine", entry(map[string]any{"fields": map[string]any{"salary": map[string]any{"read": "authenticated"}}}), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
