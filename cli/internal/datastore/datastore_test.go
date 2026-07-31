@@ -33,7 +33,7 @@ func TestQueryAutoIndexAndFilter(t *testing.T) {
 		"u2", `{"role":"user","age":20}`,
 		"u3", `{"role":"user","age":33}`)
 
-	res, err := s.Query("users", QueryRequest{Where: []Filter{{Field: "role", Op: "=", Value: "user"}}}, true)
+	res, err := s.Query("users", QueryRequest{Where: []Filter{{Field: "role", Op: "=", Value: "user"}}}, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestQueryAutoIndexAndFilter(t *testing.T) {
 func TestIndexRequiredWhenAutoIndexOff(t *testing.T) {
 	s := openTest(t)
 	mustPut(t, s, "p", "a", `{"x":1}`)
-	_, err := s.Query("p", QueryRequest{Where: []Filter{{Field: "x", Op: "=", Value: float64(1)}}}, false)
+	_, err := s.Query("p", QueryRequest{Where: []Filter{{Field: "x", Op: "=", Value: float64(1)}}}, false, nil)
 	if err == nil {
 		t.Fatalf("expected INDEX_REQUIRED error")
 	}

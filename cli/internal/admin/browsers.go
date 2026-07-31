@@ -183,7 +183,9 @@ func (h *Handler) dsQuery(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	res, err := store.Query(r.PathValue("collection"), req, *autoIndex)
+	// The admin data browser is a full-trust console view (no end-user identity), so no row
+	// rules apply — pass nil read groups.
+	res, err := store.Query(r.PathValue("collection"), req, *autoIndex, nil)
 	if err != nil {
 		return err
 	}
@@ -203,7 +205,7 @@ func (h *Handler) dsAggregate(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	res, err := store.Aggregate(r.PathValue("collection"), req, *autoIndex)
+	res, err := store.Aggregate(r.PathValue("collection"), req, *autoIndex, nil)
 	if err != nil {
 		return err
 	}

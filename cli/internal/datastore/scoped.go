@@ -39,6 +39,30 @@ func ToFilters(fs []identity.Filter) []Filter {
 	return out
 }
 
+// ToGroups converts rule-engine OR-of-AND groups into datastore filter groups.
+func ToGroups(gs [][]identity.Filter) [][]Filter {
+	if len(gs) == 0 {
+		return nil
+	}
+	out := make([][]Filter, len(gs))
+	for i, g := range gs {
+		out[i] = ToFilters(g)
+	}
+	return out
+}
+
+// ToFieldGroups converts a rule-engine field->groups map (masks / write gates) into datastore form.
+func ToFieldGroups(m map[string][][]identity.Filter) map[string][][]Filter {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string][][]Filter, len(m))
+	for k, gs := range m {
+		out[k] = ToGroups(gs)
+	}
+	return out
+}
+
 // LiveDoc is a committed document change, carried to the live bridge.
 type LiveDoc struct {
 	Key  string
@@ -54,8 +78,10 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 	if len(docs) > maxDocsPerBatch {
 		return nil, nil, common.BadRequest("too many documents")
 	}
-	createMatch := ToFilters(create.Match)
-	updateMatch := ToFilters(update.Match)
+	createMatch := ToGroups(create.Match)
+	updateMatch := ToGroups(update.Match)
+	createFieldWrites := ToFieldGroups(create.FieldWrites)
+	updateFieldWrites := ToFieldGroups(update.FieldWrites)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -101,7 +127,7 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 			if update.Denied {
 				return nil, nil, common.PermissionDenied("not permitted: update on '" + collection + "'")
 			}
-			if !matchDoc(existing, key, created, updated, updateMatch) {
+			if !matchGroups(existing, key, created, updated, updateMatch) {
 				return nil, nil, common.PermissionDenied("not permitted: update on '" + collection + "' (row does not match the rule)")
 			}
 			// Immutable is compared against the CLIENT's document, BEFORE stamping.
@@ -117,6 +143,19 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 					return nil, nil, common.PermissionDenied("not permitted: field '" + field + "' is immutable")
 				}
 			}
+			// Per-field write gates: a field may only CHANGE when the EXISTING row satisfies its
+			// write rule (evaluated on the row as it is — "may I change this field on this row").
+			// A server-stamped field is authoritative, so it's exempt from the client's gate.
+			// Checked against the CLIENT's document, BEFORE stamping, like the immutable guard.
+			for field, groups := range updateFieldWrites {
+				if _, stamped := update.Stamp[field]; stamped {
+					continue
+				}
+				if !valuesEqual(lookupField(existing, field), lookupField(doc, field)) &&
+					!matchGroups(existing, key, created, updated, groups) {
+					return nil, nil, common.PermissionDenied("not permitted: change field '" + field + "' on '" + collection + "'")
+				}
+			}
 			applyStamp(doc, update.Stamp)
 		} else {
 			if create.Denied {
@@ -128,8 +167,19 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 					return nil, nil, err
 				}
 			}
-			if !matchDoc(doc, key, now, now, createMatch) {
+			if !matchGroups(doc, key, now, now, createMatch) {
 				return nil, nil, common.PermissionDenied("not permitted: create on '" + collection + "' (document does not match the rule)")
+			}
+			// Per-field write gates on create: a (non-stamped) field may only be SET when the new
+			// doc satisfies its write rule. Lets a collection be creatable by anyone but reserve a
+			// field (e.g. `pinned`) to docs meeting a condition.
+			for field, groups := range createFieldWrites {
+				if _, stamped := create.Stamp[field]; stamped {
+					continue
+				}
+				if _, present := doc[field]; present && !matchGroups(doc, key, now, now, groups) {
+					return nil, nil, common.PermissionDenied("not permitted: set field '" + field + "' on '" + collection + "'")
+				}
 			}
 		}
 
@@ -155,7 +205,7 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 // DeleteScoped removes documents whose EXISTING row satisfies the delete rule's match.
 // A row that doesn't match is refused outright (rather than silently skipped) so a client
 // gets a clear 403 instead of a confusing "deleted: 0".
-func (s *Store) DeleteScoped(collection string, keys []any, match []Filter) (int, error) {
+func (s *Store) DeleteScoped(collection string, keys []any, match [][]Filter) (int, error) {
 	if len(keys) > maxKeysPerDelete {
 		return 0, common.BadRequest("too many keys")
 	}
@@ -182,7 +232,7 @@ func (s *Store) DeleteScoped(collection string, keys []any, match []Filter) (int
 		}
 		doc := map[string]any{}
 		_ = json.Unmarshal([]byte(raw), &doc)
-		if !matchDoc(doc, sk, created, updated, match) {
+		if !matchGroups(doc, sk, created, updated, match) {
 			return 0, common.PermissionDenied("not permitted: delete on '" + collection + "' (row does not match the rule)")
 		}
 		res, err := tx.Exec(`DELETE FROM docs WHERE collection=? AND key=?`, collection, sk)
@@ -198,24 +248,84 @@ func (s *Store) DeleteScoped(collection string, keys []any, match []Filter) (int
 	return total, nil
 }
 
-// BatchGetScoped is BatchGet with the caller's read filters applied server-side.
-func (s *Store) BatchGetScoped(collection string, keys []any, filters []Filter) ([]StoredDoc, error) {
+// BatchGetScoped is BatchGet with the caller's row-level read groups AND per-field read masks
+// applied server-side: a row the caller may not read is omitted (never leaked), and a masked
+// field is projected out of the rows they can read.
+func (s *Store) BatchGetScoped(collection string, keys []any, groups [][]Filter, fieldReads map[string][][]Filter) ([]StoredDoc, error) {
 	docs, err := s.BatchGet(collection, keys)
 	if err != nil {
 		return nil, err
 	}
-	if len(filters) == 0 {
-		return docs, nil
-	}
-	out := make([]StoredDoc, 0, len(docs))
-	for _, d := range docs {
-		m := map[string]any{}
-		_ = json.Unmarshal(d.Data, &m)
-		if matchDoc(m, d.Key, d.Created, d.Updated, filters) {
-			out = append(out, d)
+	var admitted []StoredDoc
+	if len(groups) == 0 {
+		admitted = docs
+	} else {
+		admitted = make([]StoredDoc, 0, len(docs))
+		for _, d := range docs {
+			m := map[string]any{}
+			_ = json.Unmarshal(d.Data, &m)
+			if matchGroups(m, d.Key, d.Created, d.Updated, groups) {
+				admitted = append(admitted, d)
+			}
 		}
 	}
-	return out, nil
+	return MaskFields(admitted, fieldReads), nil
+}
+
+// matchGroups evaluates OR-of-AND groups (disjunctive normal form) against a decoded document.
+// Each inner group is an AND (via matchDoc); the doc matches if it satisfies ANY group. No groups
+// means unconstrained → true (org key / public / authenticated / rules-less).
+func matchGroups(doc map[string]any, key string, created, updated int64, groups [][]Filter) bool {
+	if len(groups) == 0 {
+		return true
+	}
+	for _, g := range groups {
+		if matchDoc(doc, key, created, updated, g) {
+			return true
+		}
+	}
+	return false
+}
+
+// MaskFields projects restricted fields OUT of docs the caller may read at the row level: for
+// each field in fieldReads, remove it from a doc that doesn't satisfy that field's mask groups
+// (nil groups = always visible). Returns NEW StoredDocs only where a field was actually removed
+// — the input docs are never mutated. Fields are top-level; each field's mask is evaluated
+// against the doc's ORIGINAL data (removals are decided before any deletion is applied).
+func MaskFields(docs []StoredDoc, fieldReads map[string][][]Filter) []StoredDoc {
+	if len(fieldReads) == 0 {
+		return docs
+	}
+	out := make([]StoredDoc, len(docs))
+	for i, d := range docs {
+		var data map[string]any
+		if err := json.Unmarshal(d.Data, &data); err != nil || data == nil {
+			out[i] = d
+			continue
+		}
+		var remove []string
+		for field, groups := range fieldReads {
+			if _, present := data[field]; present && !matchGroups(data, d.Key, d.Created, d.Updated, groups) {
+				remove = append(remove, field)
+			}
+		}
+		if len(remove) == 0 {
+			out[i] = d
+			continue
+		}
+		for _, f := range remove {
+			delete(data, f)
+		}
+		nb, err := json.Marshal(data)
+		if err != nil {
+			out[i] = d
+			continue
+		}
+		nd := d
+		nd.Data = json.RawMessage(nb)
+		out[i] = nd
+	}
+	return out
 }
 
 // --- in-Go filter evaluation (the point-read / write-guard counterpart of the SQL compiler) ---

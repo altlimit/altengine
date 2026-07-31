@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -392,20 +393,58 @@ func (s *Store) indexServed(collection string, filters []Filter, orders []Order)
 // --- query execution ---
 
 // Query runs a QueryRequest. autoIndex controls whether an INDEX_REQUIRED failure
-// auto-creates the suggested index and retries.
-func (s *Store) Query(collection string, req QueryRequest, autoIndex bool) (*QueryResult, error) {
+// auto-creates the suggested index and retries. readGroups carries the caller's row-level read
+// rules as OR-of-AND groups: 0/1 group ANDs into the query, ≥2 groups run the multi-query
+// (UNION) merge — each branch independently index-served.
+func (s *Store) Query(collection string, req QueryRequest, autoIndex bool, readGroups [][]Filter) (*QueryResult, error) {
 	if err := validateCollection(collection); err != nil {
 		return nil, err
 	}
 	if len(req.Join) > maxJoins {
 		return nil, common.BadRequest(fmt.Sprintf("at most %d joins", maxJoins))
 	}
-	served, suggested, err := s.indexServed(collection, req.Where, req.Order)
+	// Every branch (each read group ANDed with the user's where) must be index-served.
+	autoInfo, err := s.ensureServed(collection, branchWheres(req.Where, readGroups), req.Order, autoIndex)
 	if err != nil {
 		return nil, err
 	}
+	res, err := s.runQuery(collection, req, readGroups)
+	if err != nil {
+		return nil, err
+	}
+	res.AutoIndexed = autoInfo
+	return res, nil
+}
+
+// branchWheres expands a base where + read groups into the effective where of each query branch.
+// No groups -> a single branch (the base where); N groups -> N branches (base where AND group).
+func branchWheres(where []Filter, groups [][]Filter) [][]Filter {
+	if len(groups) == 0 {
+		return [][]Filter{where}
+	}
+	out := make([][]Filter, len(groups))
+	for i, g := range groups {
+		b := make([]Filter, 0, len(where)+len(g))
+		b = append(b, where...)
+		b = append(b, g...)
+		out[i] = b
+	}
+	return out
+}
+
+// ensureServed checks each branch is index-served, auto-creating the suggested index when
+// autoIndex is on (else returns INDEX_REQUIRED for the first unserved branch). Returns the
+// combined auto-index info (last suggested fields + summed rows) when anything was built.
+func (s *Store) ensureServed(collection string, branches [][]Filter, order []Order, autoIndex bool) (*AutoIndexInfo, error) {
 	var autoInfo *AutoIndexInfo
-	if !served {
+	for _, w := range branches {
+		served, suggested, err := s.indexServed(collection, w, order)
+		if err != nil {
+			return nil, err
+		}
+		if served {
+			continue
+		}
 		if !autoIndex {
 			return nil, common.NewError(400, "query requires an index", "INDEX_REQUIRED").
 				WithDetails(map[string]any{"suggested_index": suggested})
@@ -414,57 +453,61 @@ func (s *Store) Query(collection string, req QueryRequest, autoIndex bool) (*Que
 		if err != nil {
 			return nil, err
 		}
-		autoInfo = &AutoIndexInfo{Fields: suggested, RowsWritten: rw}
+		if autoInfo == nil {
+			autoInfo = &AutoIndexInfo{}
+		}
+		autoInfo.Fields = suggested
+		autoInfo.RowsWritten += rw
 	}
-	res, err := s.runQuery(collection, req)
-	if err != nil {
-		return nil, err
-	}
-	res.AutoIndexed = autoInfo
-	return res, nil
+	return autoInfo, nil
 }
 
-func (s *Store) runQuery(collection string, req QueryRequest) (*QueryResult, error) {
-	limit := req.Limit
-	if limit <= 0 {
-		limit = defaultLimit
+// compileOrGroups compiles OR-of-AND groups into an inline ` AND ((g1) OR (g2) ...)` fragment
+// (used by aggregates, which count each row once — a single WHERE disjunction is correct, no
+// merge/de-dup). An empty group matches all. Returns "" for no groups.
+func compileOrGroups(groups [][]Filter) (string, []any, error) {
+	if len(groups) == 0 {
+		return "", nil, nil
 	}
-	if limit > maxLimit {
-		limit = maxLimit
+	var parts []string
+	var args []any
+	for _, g := range groups {
+		clause, a, err := compileFilters(g)
+		if err != nil {
+			return "", nil, err
+		}
+		if clause == "" {
+			parts = append(parts, "1") // an empty group matches all
+			continue
+		}
+		parts = append(parts, "("+clause+")")
+		args = append(args, a...)
 	}
-	whereSQL, args, err := compileFilters(req.Where)
-	if err != nil {
-		return nil, err
-	}
-	keys, err := buildOrderKeys(req.Order)
-	if err != nil {
-		return nil, err
-	}
+	return " AND (" + strings.Join(parts, " OR ") + ")", args, nil
+}
 
+// compileSingleSelect builds the plain single-branch page query: SELECT key, data, created,
+// updated, <order exprs> FROM docs WHERE collection AND <where> [AND cursor] ORDER BY <order>.
+func compileSingleSelect(collection string, where []Filter, keys []orderKey, cursorVals []any, limit int) (string, []any, error) {
+	whereSQL, args, err := compileFilters(where)
+	if err != nil {
+		return "", nil, err
+	}
 	full := []any{collection}
-	var conds []string
-	conds = append(conds, "collection=?")
+	conds := []string{"collection=?"}
 	if whereSQL != "" {
 		conds = append(conds, whereSQL)
 		full = append(full, args...)
 	}
-	if req.Cursor != "" {
-		vals, err := decodeCursor(req.Cursor, len(keys))
-		if err != nil {
-			return nil, err
-		}
-		pred, cargs := cursorPredicate(keys, vals)
+	if cursorVals != nil {
+		pred, cargs := cursorPredicate(keys, cursorVals)
 		conds = append(conds, pred)
 		full = append(full, cargs...)
 	}
-
-	// SELECT key, data, created, updated, <order exprs...>
 	sel := []string{"key", "data", "created", "updated"}
-	for _, k := range keys {
-		sel = append(sel, k.expr)
-	}
 	var orderBy []string
 	for _, k := range keys {
+		sel = append(sel, k.expr)
 		dir := "ASC"
 		if k.desc {
 			dir = "DESC"
@@ -473,6 +516,94 @@ func (s *Store) runQuery(collection string, req QueryRequest) (*QueryResult, err
 	}
 	query := "SELECT " + strings.Join(sel, ", ") + " FROM docs WHERE " + strings.Join(conds, " AND ") +
 		" ORDER BY " + strings.Join(orderBy, ", ") + fmt.Sprintf(" LIMIT %d", limit+1)
+	return query, full, nil
+}
+
+// compileMergedSelect compiles an OR read policy (≥2 AND-groups) into ONE compound SELECT: each
+// branch scans `where AND <group>`, the branches are UNION-ed (de-duping a row that matches
+// several branches), then SQLite orders + limits the whole union — the multi-query merge in one
+// round trip. Every branch shares the same ORDER BY and cursor predicate, so the projected order
+// aliases (o0..oN) give a keyset cursor identical to the single-query path. Order expressions are
+// aliased because a compound SELECT's ORDER BY must reference output columns.
+func compileMergedSelect(collection string, where []Filter, groups [][]Filter, keys []orderKey, cursorVals []any, limit int) (string, []any, error) {
+	var selExtra []string
+	for i, k := range keys {
+		selExtra = append(selExtra, k.expr+" AS o"+strconv.Itoa(i))
+	}
+	var cursorPred string
+	var cursorArgs []any
+	if cursorVals != nil {
+		cursorPred, cursorArgs = cursorPredicate(keys, cursorVals)
+	}
+	var branches []string
+	var full []any
+	for _, g := range groups {
+		bw := append(append([]Filter{}, where...), g...)
+		whereSQL, args, err := compileFilters(bw)
+		if err != nil {
+			return "", nil, err
+		}
+		conds := []string{"collection=?"}
+		full = append(full, collection)
+		if whereSQL != "" {
+			conds = append(conds, whereSQL)
+			full = append(full, args...)
+		}
+		if cursorPred != "" {
+			conds = append(conds, cursorPred)
+			full = append(full, cursorArgs...)
+		}
+		branches = append(branches, "SELECT key, data, created, updated, "+strings.Join(selExtra, ", ")+
+			" FROM docs WHERE "+strings.Join(conds, " AND "))
+	}
+	var orderBy []string
+	for i, k := range keys {
+		dir := "ASC"
+		if k.desc {
+			dir = "DESC"
+		}
+		orderBy = append(orderBy, "o"+strconv.Itoa(i)+" "+dir)
+	}
+	query := strings.Join(branches, " UNION ") + " ORDER BY " + strings.Join(orderBy, ", ") + fmt.Sprintf(" LIMIT %d", limit+1)
+	return query, full, nil
+}
+
+func (s *Store) runQuery(collection string, req QueryRequest, readGroups [][]Filter) (*QueryResult, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	keys, err := buildOrderKeys(req.Order)
+	if err != nil {
+		return nil, err
+	}
+	var cursorVals0 []any
+	if req.Cursor != "" {
+		if cursorVals0, err = decodeCursor(req.Cursor, len(keys)); err != nil {
+			return nil, err
+		}
+	}
+
+	// 0/1 read group compiles to one plain SELECT (the single group ANDs into the where); ≥2
+	// groups run the multi-query merge (UNION), each branch independently index-served (asserted
+	// by the caller). Both shapes project key, data, created, updated + the order expressions.
+	var query string
+	var full []any
+	if len(readGroups) <= 1 {
+		where := req.Where
+		if len(readGroups) == 1 {
+			where = append(append([]Filter{}, req.Where...), readGroups[0]...)
+		}
+		query, full, err = compileSingleSelect(collection, where, keys, cursorVals0, limit)
+	} else {
+		query, full, err = compileMergedSelect(collection, req.Where, readGroups, keys, cursorVals0, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := s.db.Query(query, full...)
 	if err != nil {

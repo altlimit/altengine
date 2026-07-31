@@ -218,13 +218,18 @@ func (h *Handler) batchGet(w http.ResponseWriter, r *http.Request) error {
 	collection := r.PathValue("collection")
 	var docs []StoredDoc
 	if user != nil {
-		// A point-read can't be scoped in SQL, so the read rules are applied server-side:
-		// a row the caller may not read is omitted, never leaked.
-		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
+		// A point-read can't be scoped in SQL, so the read rules are applied server-side: a row
+		// the caller may not read is omitted (never leaked), and masked fields are projected out.
+		ns := decodeNs(r.PathValue("ns"))
+		groups, err := h.readGroups(user, inst, ns, collection)
 		if err != nil {
 			return err
 		}
-		docs, err = store.BatchGetScoped(collection, body.Keys, filters)
+		fieldReads, err := h.fieldReads(user, inst, ns, collection)
+		if err != nil {
+			return err
+		}
+		docs, err = store.BatchGetScoped(collection, body.Keys, groups, fieldReads)
 		if err != nil {
 			return err
 		}
@@ -269,7 +274,7 @@ func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
 		if del.Denied {
 			return common.PermissionDenied("not permitted: delete on '" + collection + "'")
 		}
-		if n, err = store.DeleteScoped(collection, body.Keys, ToFilters(del.Match)); err != nil {
+		if n, err = store.DeleteScoped(collection, body.Keys, ToGroups(del.Match)); err != nil {
 			return err
 		}
 	} else if n, err = store.Delete(collection, body.Keys); err != nil {
@@ -298,18 +303,27 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 	if user != nil && len(req.Join) > 0 {
 		return common.PermissionDenied("query joins require an org API key, not an end-user token")
 	}
-	// Row-level read rules are ANDed into the query BEFORE the index-served guard runs, so
-	// the guard sees (and can auto-index for) the filters that will actually execute.
+	// Row-level read rules scope the query (0/1 group ANDed in; ≥2 run the UNION merge) and are
+	// resolved BEFORE Query runs so its index guard covers the filters that actually execute.
+	// Per-field read masks are applied to the result docs afterward (masking is an output
+	// projection, layered under the row-level read).
+	var readGroups [][]Filter
+	var fieldReads map[string][][]Filter
 	if user != nil {
-		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
-		if err != nil {
+		ns := decodeNs(r.PathValue("ns"))
+		if readGroups, err = h.readGroups(user, inst, ns, collection); err != nil {
 			return err
 		}
-		req.Where = append(req.Where, filters...)
+		if fieldReads, err = h.fieldReads(user, inst, ns, collection); err != nil {
+			return err
+		}
 	}
-	res, err := store.Query(collection, req, autoIndexEnabled(inst))
+	res, err := store.Query(collection, req, autoIndexEnabled(inst), readGroups)
 	if err != nil {
 		return err
+	}
+	if user != nil && len(res.Documents) > 0 {
+		res.Documents = MaskFields(res.Documents, fieldReads)
 	}
 	if res.Documents == nil && !req.KeysOnly {
 		res.Documents = []StoredDoc{}
@@ -328,15 +342,15 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	collection := r.PathValue("collection")
-	// Same row scoping as query: an identity aggregates only over rows it may read.
+	// Same row scoping as query: an identity aggregates only over rows it may read. 0/1 group
+	// ANDs into the where; ≥2 groups inject an inline OR (aggregates count each row once).
+	var readGroups [][]Filter
 	if user != nil {
-		filters, err := h.readFilters(user, inst, decodeNs(r.PathValue("ns")), collection)
-		if err != nil {
+		if readGroups, err = h.readGroups(user, inst, decodeNs(r.PathValue("ns")), collection); err != nil {
 			return err
 		}
-		req.Where = append(req.Where, filters...)
 	}
-	res, err := store.Aggregate(collection, req, autoIndexEnabled(inst))
+	res, err := store.Aggregate(collection, req, autoIndexEnabled(inst), readGroups)
 	if err != nil {
 		return err
 	}
@@ -451,14 +465,24 @@ func (h *Handler) dropIndex(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// readFilters resolves the row-level read rules for an identity into datastore filters.
-// Empty means unconstrained; a collection the rules don't cover is a 403.
-func (h *Handler) readFilters(user *identity.EndUser, inst *control.Instance, namespace, collection string) ([]Filter, error) {
-	fs, err := user.DatastoreReadFilters(inst.Name, namespace, collection)
+// readGroups resolves the row-level read rules for an identity into datastore OR-of-AND filter
+// groups. nil means unconstrained; a collection the rules don't cover is a 403.
+func (h *Handler) readGroups(user *identity.EndUser, inst *control.Instance, namespace, collection string) ([][]Filter, error) {
+	gs, err := user.DatastoreReadGroups(inst.Name, namespace, collection)
 	if err != nil {
 		return nil, err
 	}
-	return ToFilters(fs), nil
+	return ToGroups(gs), nil
+}
+
+// fieldReads resolves the per-field read masks for an identity: field -> OR-groups the doc must
+// satisfy for that field to be returned. nil means nothing is masked.
+func (h *Handler) fieldReads(user *identity.EndUser, inst *control.Instance, namespace, collection string) (map[string][][]Filter, error) {
+	fr, err := user.DatastoreFieldReads(inst.Name, namespace, collection)
+	if err != nil {
+		return nil, err
+	}
+	return ToFieldGroups(fr), nil
 }
 
 // livePublishes reports whether a collection emits live change events.

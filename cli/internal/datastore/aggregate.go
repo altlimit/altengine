@@ -34,25 +34,32 @@ type AggregateResult struct {
 
 var aggFns = map[string]bool{"count": true, "sum": true, "avg": true, "min": true, "max": true}
 
-// Aggregate runs a grouped metrics query. Group dimensions are guarded like sort keys.
-func (s *Store) Aggregate(collection string, req AggregateRequest, autoIndex bool) (*AggregateResult, error) {
+// Aggregate runs a grouped metrics query. Group dimensions are guarded like sort keys. orGroups
+// carries the caller's row-level read rules as OR-of-AND groups: 0/1 group ANDs into the where,
+// ≥2 groups inject an inline `AND ((g1) OR (g2))` — aggregates count each row once, so no
+// merge/de-dup is needed (unlike a query). Each branch is independently index-served.
+func (s *Store) Aggregate(collection string, req AggregateRequest, autoIndex bool, orGroups [][]Filter) (*AggregateResult, error) {
 	if err := validateCollection(collection); err != nil {
 		return nil, err
 	}
 	if len(req.Metrics) == 0 {
 		return nil, common.BadRequest("aggregate requires at least one metric")
 	}
-	// Guard: group dimensions behave like an ordering requirement.
+	// Guard: group dimensions behave like an ordering requirement. Each read-group branch
+	// (its filters ANDed with the user's where) must be independently index-served.
 	var groupAsOrder []Order
 	for _, g := range req.Group {
 		groupAsOrder = append(groupAsOrder, Order{Field: g})
 	}
-	served, suggested, err := s.indexServed(collection, req.Where, groupAsOrder)
-	if err != nil {
-		return nil, err
-	}
 	var autoInfo *AutoIndexInfo
-	if !served {
+	for _, w := range branchWheres(req.Where, orGroups) {
+		served, suggested, err := s.indexServed(collection, w, groupAsOrder)
+		if err != nil {
+			return nil, err
+		}
+		if served {
+			continue
+		}
 		if !autoIndex {
 			return nil, common.NewError(400, "aggregate requires an index", "INDEX_REQUIRED").
 				WithDetails(map[string]any{"suggested_index": suggested})
@@ -61,12 +68,28 @@ func (s *Store) Aggregate(collection string, req AggregateRequest, autoIndex boo
 		if err != nil {
 			return nil, err
 		}
-		autoInfo = &AutoIndexInfo{Fields: suggested, RowsWritten: rw}
+		if autoInfo == nil {
+			autoInfo = &AutoIndexInfo{}
+		}
+		autoInfo.Fields = suggested
+		autoInfo.RowsWritten += rw
 	}
 
-	whereSQL, args, err := compileFilters(req.Where)
+	// 0/1 group ANDs into the base where; ≥2 groups add the inline OR fragment after it.
+	effWhere := req.Where
+	if len(orGroups) == 1 {
+		effWhere = append(append([]Filter{}, req.Where...), orGroups[0]...)
+	}
+	whereSQL, args, err := compileFilters(effWhere)
 	if err != nil {
 		return nil, err
+	}
+	var orSQL string
+	var orArgs []any
+	if len(orGroups) >= 2 {
+		if orSQL, orArgs, err = compileOrGroups(orGroups); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build metric select expressions + aliases.
@@ -117,6 +140,10 @@ func (s *Store) Aggregate(collection string, req AggregateRequest, autoIndex boo
 	if whereSQL != "" {
 		sql += " AND " + whereSQL
 		full = append(full, args...)
+	}
+	if orSQL != "" {
+		sql += orSQL
+		full = append(full, orArgs...)
 	}
 	if len(groupExprs) > 0 {
 		sql += " GROUP BY " + strings.Join(groupExprs, ", ")

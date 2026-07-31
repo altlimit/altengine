@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -37,19 +38,41 @@ type RuleFilter struct {
 	Value any
 }
 
+// Match is a row condition in disjunctive normal form: OR-of-AND groups. A flat filter list
+// (wire `[...]`) is one AND-group; `{ any: [[...], ...] }` is the groups directly. A row
+// satisfies a Match if it satisfies ANY group (each group is an AND of its filters). An empty
+// Match (`nil`) is unconstrained (matches everything) — the public/authenticated/org-key case.
+type Match [][]RuleFilter
+
+// maxMatchGroups bounds an OR disjunction so the multi-query merge stays a small, bounded
+// compound SELECT. Matches the hosted service's limit so a rule that stores there stores here.
+const maxMatchGroups = 4
+
 // CollectionRules is the per-collection rule set for a datastore target.
 type CollectionRules struct {
-	// Read is "public", "authenticated", a []RuleFilter, or absent (deny).
-	ReadPolicy  string // "public" | "authenticated" | "filters" | "" (absent => deny)
-	ReadFilters []RuleFilter
-	Create      *WriteRule
-	Update      *WriteRule
-	Delete      *WriteRule
+	// Read is "public", "authenticated", a Match, or absent (deny).
+	ReadPolicy string // "public" | "authenticated" | "match" | "" (absent => deny)
+	ReadMatch  Match  // set when ReadPolicy == "match"
+	Create     *WriteRule
+	Update     *WriteRule
+	Delete     *WriteRule
+	// Fields carries per-field access under the row rules (read masking + write gates).
+	Fields map[string]FieldRule
+}
+
+// FieldRule is per-field access layered under the row-level rules. `read` masks the field OUT
+// of returned docs unless the caller matches (row-level read still applies first — masking only
+// narrows what a readable doc exposes); `write` gates setting/changing the field.
+type FieldRule struct {
+	ReadPolicy string // "public" | "authenticated" | "match" | "" (absent => field always visible)
+	ReadMatch  Match  // set when ReadPolicy == "match"
+	Write      Match  // gate for setting/changing the field (nil => no gate)
+	HasWrite   bool
 }
 
 // WriteRule is the create/update/delete side of a collection rule.
 type WriteRule struct {
-	Match     []RuleFilter
+	Match     Match
 	Stamp     map[string]string
 	Immutable []string
 }
@@ -189,10 +212,91 @@ func ValidateAccessLevels(access any) error {
 				if (hasCreate && cm["create"] != nil || hasUpdate && cm["update"] != nil) && level == "read" {
 					return common.BadRequest(loc + " declares a create/update rule, but level 'read' is read-only — set this target's level to \"write\" or \"full\".")
 				}
+				if err := validateCollectionShape(cm, loc); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// validateCollectionShape rejects, at admin save time, the structural mistakes the tolerant
+// read path silently drops — an OR that's empty / over-cap / malformed, and a nested (dotted)
+// field-rule key whose read mask would silently no-op (a fail-open field leak). Mirrors the
+// hosted validateMatch + top-level field-key guard so a config that stores in dev stores in prod.
+func validateCollectionShape(cm map[string]any, loc string) error {
+	if v, ok := cm["read"]; ok && v != nil {
+		if _, isStr := v.(string); !isStr {
+			if err := validateMatchShape(v, loc+".read"); err != nil {
+				return err
+			}
+		}
+	}
+	for _, mode := range []string{"create", "update", "delete"} {
+		wm, ok := cm[mode].(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, ok := wm["match"]; ok && v != nil {
+			if err := validateMatchShape(v, loc+"."+mode+".match"); err != nil {
+				return err
+			}
+		}
+	}
+	fields, ok := cm["fields"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for fname, fr := range fields {
+		if !topLevelFieldRe.MatchString(fname) {
+			return common.BadRequest(loc + ".fields key '" + fname + "' must be a single top-level field name (letters/numbers/underscore, no nested paths)")
+		}
+		fm, ok := fr.(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, ok := fm["read"]; ok && v != nil {
+			if _, isStr := v.(string); !isStr {
+				if err := validateMatchShape(v, loc+".fields['"+fname+"'].read"); err != nil {
+					return err
+				}
+			}
+		}
+		if v, ok := fm["write"]; ok && v != nil {
+			if err := validateMatchShape(v, loc+".fields['"+fname+"'].write"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateMatchShape rejects a Match that isn't a flat filter array or a well-formed
+// `{ any: [[...], ...] }` (non-empty, ≤ maxMatchGroups, each group an array).
+func validateMatchShape(v any, loc string) error {
+	switch t := v.(type) {
+	case []any:
+		return nil
+	case map[string]any:
+		anyRaw, ok := t["any"].([]any)
+		if !ok {
+			return common.BadRequest(loc + " must be an array of filters or { any: [[...], ...] }")
+		}
+		if len(anyRaw) == 0 {
+			return common.BadRequest(loc + ".any must have at least one filter group")
+		}
+		if len(anyRaw) > maxMatchGroups {
+			return common.BadRequest(loc + ".any allows at most 4 OR-groups")
+		}
+		for i, g := range anyRaw {
+			if _, ok := g.([]any); !ok {
+				return common.BadRequest(loc + ".any[" + itoa(i) + "] must be an array of filters")
+			}
+		}
+		return nil
+	}
+	return common.BadRequest(loc + " must be an array of filters or { any: [[...], ...] }")
 }
 
 func parseCollectionRules(cm map[string]any) CollectionRules {
@@ -202,13 +306,86 @@ func parseCollectionRules(cm map[string]any) CollectionRules {
 		if rv == "public" || rv == "authenticated" {
 			out.ReadPolicy = rv
 		}
-	case []any:
-		out.ReadPolicy = "filters"
-		out.ReadFilters = parseRuleFilters(rv)
+	default:
+		if m, ok := parseMatch(rv); ok {
+			out.ReadPolicy = "match"
+			out.ReadMatch = m
+		}
 	}
 	out.Create = parseWriteRule(cm["create"])
 	out.Update = parseWriteRule(cm["update"])
 	out.Delete = parseWriteRule(cm["delete"])
+	out.Fields = parseFields(cm["fields"])
+	return out
+}
+
+// parseMatch tolerantly reads a Match: a flat filter array (one AND-group) OR
+// `{ any: [[...], ...] }` (OR of AND-groups, bounded to maxMatchGroups). ok=false when the
+// value is neither shape (so the caller drops it). Empty/over-cap disjunctions collapse to
+// ok=false rather than widening access.
+func parseMatch(v any) (Match, bool) {
+	switch t := v.(type) {
+	case []any:
+		return Match{parseRuleFilters(t)}, true
+	case map[string]any:
+		anyRaw, ok := t["any"].([]any)
+		if !ok || len(anyRaw) == 0 || len(anyRaw) > maxMatchGroups {
+			return nil, false
+		}
+		groups := make(Match, 0, len(anyRaw))
+		for _, g := range anyRaw {
+			ga, ok := g.([]any)
+			if !ok {
+				return nil, false
+			}
+			groups = append(groups, parseRuleFilters(ga))
+		}
+		return groups, true
+	}
+	return nil, false
+}
+
+// topLevelFieldRe matches a single top-level field name — masking removes a top-level key, so a
+// dotted/nested field rule can't be enforced. A dotted key is dropped here (its mask would
+// no-op, matching the hosted runtime) and rejected at admin save time (ValidateAccessLevels).
+var topLevelFieldRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// parseFields reads the per-field access map. Non-top-level (dotted) field keys are dropped.
+func parseFields(v any) map[string]FieldRule {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]FieldRule{}
+	for fname, fr := range m {
+		if !topLevelFieldRe.MatchString(fname) {
+			continue // unenforceable nested mask — drop (no-op), rejected at save time
+		}
+		fm, ok := fr.(map[string]any)
+		if !ok {
+			continue
+		}
+		var pf FieldRule
+		switch rv := fm["read"].(type) {
+		case string:
+			if rv == "public" || rv == "authenticated" {
+				pf.ReadPolicy = rv
+			}
+		default:
+			if mm, ok := parseMatch(rv); ok {
+				pf.ReadPolicy = "match"
+				pf.ReadMatch = mm
+			}
+		}
+		if w, ok := parseMatch(fm["write"]); ok {
+			pf.Write = w
+			pf.HasWrite = true
+		}
+		out[fname] = pf
+	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 
@@ -218,8 +395,8 @@ func parseWriteRule(v any) *WriteRule {
 		return nil
 	}
 	wr := &WriteRule{}
-	if arr, ok := m["match"].([]any); ok {
-		wr.Match = parseRuleFilters(arr)
+	if match, ok := parseMatch(m["match"]); ok {
+		wr.Match = match
 	}
 	if sm, ok := m["stamp"].(map[string]any); ok {
 		wr.Stamp = map[string]string{}
@@ -347,10 +524,29 @@ func (u *EndUser) entryFor(service, instance string) (AccessEntry, error) {
 	return e, nil
 }
 
-// DatastoreReadFilters returns the filters to AND into a datastore read for this
-// identity. An empty slice means unconstrained (a rules-less entry, or a `public`/
-// `authenticated` read policy). Returns 403 when the rules don't permit the read.
-func (u *EndUser) DatastoreReadFilters(instance, namespace, collection string) ([]Filter, error) {
+// toGroups substitutes a Match into OR-of-AND groups of concrete Filters (disjunctive normal
+// form). A nil Match yields nil (unconstrained). Enforcement treats the outer slice as OR, each
+// inner slice as AND.
+func toGroups(m Match, u *EndUser) ([][]Filter, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+	out := make([][]Filter, 0, len(m))
+	for _, g := range m {
+		fs, err := toFilters(g, u)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fs)
+	}
+	return out, nil
+}
+
+// DatastoreReadGroups returns the OR-of-AND filter groups to scope a datastore read for this
+// identity. `nil` means unconstrained (a rules-less entry, or a `public`/`authenticated` read
+// policy). Returns 403 when the rules don't permit the read (an unlisted namespace or collection
+// is default-deny). 0/1 group ANDs into the query; ≥2 groups drive the multi-query merge.
+func (u *EndUser) DatastoreReadGroups(instance, namespace, collection string) ([][]Filter, error) {
 	entry, err := u.entryFor("datastore", instance)
 	if err != nil {
 		return nil, err
@@ -364,10 +560,48 @@ func (u *EndUser) DatastoreReadFilters(instance, namespace, collection string) (
 	if !ok || cr.ReadPolicy == "" {
 		return nil, deny("read on '" + collection + "' in namespace '" + nsKey(namespace) + "'")
 	}
-	if cr.ReadPolicy != "filters" {
+	if cr.ReadPolicy != "match" {
 		return nil, nil // public / authenticated
 	}
-	return toFilters(cr.ReadFilters, u)
+	return toGroups(cr.ReadMatch, u)
+}
+
+// DatastoreFieldReads returns the per-field read masks for this identity: field name -> OR-groups
+// a doc must satisfy for the field to be returned. A `public`/`authenticated` field read maps to
+// `nil` groups (always visible to an identity — they're authenticated); a field with no read rule
+// is absent from the map (always visible). Row-level read access is enforced separately by
+// DatastoreReadGroups; this only projects fields OUT of docs the caller may already read.
+func (u *EndUser) DatastoreFieldReads(instance, namespace, collection string) (map[string][][]Filter, error) {
+	entry, err := u.entryFor("datastore", instance)
+	if err != nil {
+		return nil, err
+	}
+	if !entry.HasRules {
+		return nil, nil
+	}
+	cr, ok := entry.collectionRulesFor(namespace, collection)
+	if !ok || len(cr.Fields) == 0 {
+		return nil, nil
+	}
+	out := map[string][][]Filter{}
+	for field, fr := range cr.Fields {
+		if fr.ReadPolicy == "" {
+			continue // no read rule => field always visible
+		}
+		if fr.ReadPolicy != "match" {
+			out[field] = nil // public / authenticated => always visible
+			continue
+		}
+		g, err := toGroups(fr.ReadMatch, u)
+		if err != nil {
+			return nil, err
+		}
+		out[field] = g
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // WritePolicy is the resolved constraint set for one create/update/delete.
@@ -375,10 +609,15 @@ type WritePolicy struct {
 	// Denied is set when the identity's rules don't cover this collection/mode. An
 	// upsert can't know create-vs-update until it reads the row, so the policy is
 	// carried (not thrown) and only refused on the branch actually taken.
-	Denied    bool
-	Match     []Filter       // the existing row (update/delete) or resulting doc (create)
+	Denied bool
+	// Match is OR-of-AND groups (DNF) the existing row (update/delete) or resulting doc (create)
+	// must satisfy; nil = unconstrained.
+	Match     [][]Filter
 	Stamp     map[string]any // server-set fields from the identity (create/update)
 	Immutable []string       // fields that may not change (update)
+	// FieldWrites gates per-field set (create) / change (update): field -> OR-groups the target
+	// doc must satisfy for that field to be written. Empty = no per-field gates.
+	FieldWrites map[string][][]Filter
 }
 
 // DatastoreWritePolicy resolves the create/update/delete policy for a collection.
@@ -408,7 +647,7 @@ func (u *EndUser) DatastoreWritePolicy(instance, namespace, collection, mode str
 	if spec == nil {
 		return WritePolicy{Denied: true}, nil
 	}
-	match, err := toFilters(spec.Match, u)
+	match, err := toGroups(spec.Match, u)
 	if err != nil {
 		return WritePolicy{}, err
 	}
@@ -425,6 +664,24 @@ func (u *EndUser) DatastoreWritePolicy(instance, namespace, collection, mode str
 	}
 	if mode == "update" {
 		pol.Immutable = spec.Immutable
+	}
+	// Per-field write gates apply to create + update (not delete). Substitute each field's write
+	// Match into OR-groups; the store checks a field is only set/changed when the doc satisfies them.
+	if mode != "delete" && len(cr.Fields) > 0 {
+		fw := map[string][][]Filter{}
+		for field, fr := range cr.Fields {
+			if !fr.HasWrite {
+				continue
+			}
+			g, err := toGroups(fr.Write, u)
+			if err != nil {
+				return WritePolicy{}, err
+			}
+			fw[field] = g
+		}
+		if len(fw) > 0 {
+			pol.FieldWrites = fw
+		}
 	}
 	return pol, nil
 }
