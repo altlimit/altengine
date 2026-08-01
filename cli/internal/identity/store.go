@@ -111,9 +111,10 @@ func ensureSchema(db *sql.DB) error {
 			pw_hash    TEXT NOT NULL,
 			profile    TEXT NOT NULL DEFAULT '{}',
 			claims     TEXT NOT NULL DEFAULT '{}',
-			disabled   INTEGER NOT NULL DEFAULT 0,
-			created    INTEGER NOT NULL,
-			updated    INTEGER NOT NULL
+			disabled       INTEGER NOT NULL DEFAULT 0,
+			email_verified INTEGER NOT NULL DEFAULT 0,
+			created        INTEGER NOT NULL,
+			updated        INTEGER NOT NULL
 		)`,
 		// Only the hash of a refresh token is stored, so reading the database never
 		// yields a usable credential.
@@ -162,6 +163,16 @@ func ensureSchema(db *sql.DB) error {
 			return err
 		}
 	}
+	// Email-verification column (added with the verify-gate feature) — idempotent for older stores.
+	hasEV, err := hasColumn(db, "users", "email_verified")
+	if err != nil {
+		return err
+	}
+	if !hasEV {
+		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -192,26 +203,28 @@ type Store struct{ db *sql.DB }
 // UserRow is the stored end-user record. `Profile` is the user-supplied signup bag;
 // `Claims` is the server/admin-set authoritative bag (see the security note on the schema).
 type UserRow struct {
-	UID        string
-	Identifier string
-	PwHash     string
-	Profile    map[string]any
-	Claims     map[string]any
-	Disabled   bool
-	Created    int64
-	Updated    int64
+	UID           string
+	Identifier    string
+	PwHash        string
+	Profile       map[string]any
+	Claims        map[string]any
+	Disabled      bool
+	EmailVerified bool
+	Created       int64
+	Updated       int64
 }
 
 // PublicUser is the wire shape of a user (snake_case JSON, matching the hosted API).
 type PublicUser struct {
-	UID         string         `json:"uid"`
-	Identifier  string         `json:"identifier"`
-	Profile     map[string]any `json:"profile"` // user-supplied (signup)
-	Claims      map[string]any `json:"claims"`  // server/admin-set (authoritative)
-	Disabled    bool           `json:"disabled"`
-	TotpEnabled bool           `json:"totpEnabled"`
-	Created     int64          `json:"created"`
-	Updated     int64          `json:"updated"`
+	UID           string         `json:"uid"`
+	Identifier    string         `json:"identifier"`
+	Profile       map[string]any `json:"profile"` // user-supplied (signup)
+	Claims        map[string]any `json:"claims"`  // server/admin-set (authoritative)
+	Disabled      bool           `json:"disabled"`
+	TotpEnabled   bool           `json:"totpEnabled"`
+	EmailVerified bool           `json:"emailVerified"`
+	Created       int64          `json:"created"`
+	Updated       int64          `json:"updated"`
 }
 
 func (r *UserRow) public() PublicUser {
@@ -224,7 +237,7 @@ func (r *UserRow) public() PublicUser {
 		c = map[string]any{}
 	}
 	return PublicUser{UID: r.UID, Identifier: r.Identifier, Profile: p, Claims: c, Disabled: r.Disabled,
-		TotpEnabled: false, Created: r.Created, Updated: r.Updated}
+		TotpEnabled: false, EmailVerified: r.EmailVerified, Created: r.Created, Updated: r.Updated}
 }
 
 // NormalizeEmail lowercases/trims an address and applies a deliberately permissive check
@@ -318,8 +331,8 @@ func (s *Store) CreateUser(identifier, pwHash string, profile map[string]any, no
 func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 	var r UserRow
 	var profile, claims string
-	var disabled int
-	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &r.Created, &r.Updated)
+	var disabled, emailVerified int
+	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &emailVerified, &r.Created, &r.Updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -327,6 +340,7 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 		return nil, err
 	}
 	r.Disabled = disabled == 1
+	r.EmailVerified = emailVerified == 1
 	r.Profile = parseJSONObject(profile)
 	r.Claims = parseJSONObject(claims)
 	return &r, nil
@@ -335,13 +349,13 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 // ByIdentifier looks a user up by their unique login handle (nil when absent).
 func (s *Store) ByIdentifier(identifier string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated FROM users WHERE identifier = ?`, identifier))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated FROM users WHERE identifier = ?`, identifier))
 }
 
 // ByUID looks a user up by uid (nil when absent).
 func (s *Store) ByUID(uid string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated FROM users WHERE uid = ?`, uid))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated FROM users WHERE uid = ?`, uid))
 }
 
 // ListUsers returns end users newest-first, for the local console's browser. The password
@@ -351,7 +365,7 @@ func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
 		limit = 100
 	}
 	rows, err := s.db.Query(
-		`SELECT uid, identifier, pw_hash, profile, claims, disabled, created, updated
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated
 		   FROM users ORDER BY created DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -361,11 +375,12 @@ func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
 	for rows.Next() {
 		var r UserRow
 		var profile, claims string
-		var disabled int
-		if err := rows.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &r.Created, &r.Updated); err != nil {
+		var disabled, emailVerified int
+		if err := rows.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &emailVerified, &r.Created, &r.Updated); err != nil {
 			return nil, err
 		}
 		r.Disabled = disabled == 1
+		r.EmailVerified = emailVerified == 1
 		r.Profile = parseJSONObject(profile)
 		r.Claims = parseJSONObject(claims)
 		out = append(out, r.public())
@@ -450,11 +465,22 @@ func (s *Store) DeleteUser(uid string) (bool, error) {
 // SetPassword replaces a user's password hash and revokes every outstanding refresh
 // token (a reset must invalidate sessions minted with the old credential).
 func (s *Store) SetPassword(uid, pwHash string, now int64) error {
-	if _, err := s.db.Exec(`UPDATE users SET pw_hash = ?, updated = ? WHERE uid = ?`, pwHash, now, uid); err != nil {
+	// A completed reset also marks the email verified — the user proved control by consuming the code.
+	if _, err := s.db.Exec(`UPDATE users SET pw_hash = ?, email_verified = 1, updated = ? WHERE uid = ?`, pwHash, now, uid); err != nil {
 		return err
 	}
 	_, err := s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE uid = ?`, uid)
 	return err
+}
+
+// SetEmailVerified marks a user's email verified (they consumed a verify/passwordless code).
+func (s *Store) SetEmailVerified(uid string, now int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE users SET email_verified = 1, updated = ? WHERE uid = ?`, now, uid)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // --- refresh tokens ---

@@ -51,6 +51,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+p+"/passwordless/verify", common.Wrap(h.passwordlessVerify))
 	mux.HandleFunc("POST "+p+"/password/reset/start", common.Wrap(h.resetStart))
 	mux.HandleFunc("POST "+p+"/password/reset/verify", common.Wrap(h.resetVerify))
+	mux.HandleFunc("POST "+p+"/email/verify/start", common.Wrap(h.verifyStart))
+	mux.HandleFunc("POST "+p+"/email/verify/confirm", common.Wrap(h.verifyConfirm))
 
 	// Not emulated: TOTP 2FA and passkeys need a real authenticator app / platform
 	// authenticator, which a local emulator can't stand in for. They answer with a clear
@@ -150,6 +152,20 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// Email-verify gate: when required, the account is created UNVERIFIED and gets no session —
+	// instead we issue a verify code and the client must confirm before it can sign in.
+	if cfg.RequireEmailVerification {
+		code, err := h.issueCode(cfg, store, identifier, "verify")
+		if err != nil {
+			return err
+		}
+		out := map[string]any{"verification_required": true, "user": user.public()}
+		if h.Svc.DevOpen && code != "" {
+			out["dev_code"] = code // LOCAL DEV ONLY
+		}
+		common.WriteJSON(w, 201, out)
+		return nil
+	}
 	tokens, err := h.issueTokens(inst, cfg, store, user)
 	if err != nil {
 		return err
@@ -195,6 +211,11 @@ func (h *Handler) signin(w http.ResponseWriter, r *http.Request) error {
 	}
 	if user.Disabled {
 		return common.PermissionDenied("this account is disabled")
+	}
+	// Email-verify gate: a correct password is not enough while verification is required and the
+	// address is unconfirmed. Distinct code so the client can route to the verify flow.
+	if cfg.RequireEmailVerification && !user.EmailVerified {
+		return common.NewError(403, "email address not verified", "EMAIL_UNVERIFIED")
 	}
 	tokens, err := h.issueTokens(inst, cfg, store, user)
 	if err != nil {
@@ -346,6 +367,8 @@ func (h *Handler) issueCode(cfg Config, store *Store, identifier, purpose string
 	label := "sign-in"
 	if purpose == "reset" {
 		label = "password reset"
+	} else if purpose == "verify" {
+		label = "email verification"
 	}
 	log.Printf("[auth] %s code for %s: %s", label, email, code)
 	return code, nil
@@ -420,6 +443,14 @@ func (h *Handler) passwordlessVerify(w http.ResponseWriter, r *http.Request) err
 	if user.Disabled {
 		return common.PermissionDenied("this account is disabled")
 	}
+	// Receiving a passwordless code proves control of the address — mark verified (once) so a
+	// passwordless user is never blocked by the verify gate.
+	if !user.EmailVerified {
+		if _, err := store.SetEmailVerified(user.UID, nowMS()); err != nil {
+			return err
+		}
+		user.EmailVerified = true
+	}
 	tokens, err := h.issueTokens(inst, cfg, store, user)
 	if err != nil {
 		return err
@@ -492,6 +523,81 @@ func (h *Handler) resetVerify(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"ok": true})
+	return nil
+}
+
+// --- email verification (opt-in gate: requireEmailVerification) ---
+
+func (h *Handler) verifyStart(w http.ResponseWriter, r *http.Request) error {
+	_, cfg, store, err := h.instance(r)
+	if err != nil {
+		return err
+	}
+	if !cfg.RequireEmailVerification {
+		return common.PermissionDenied("email verification is not enabled")
+	}
+	var body map[string]any
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	code := ""
+	if identifier, idErr := normalizeBodyIdentifier(cfg, body); idErr == nil {
+		if code, err = h.issueCode(cfg, store, identifier, "verify"); err != nil {
+			return err
+		}
+	}
+	h.codeResponse(w, code) // always 200 — never reveal whether the account exists
+	return nil
+}
+
+func (h *Handler) verifyConfirm(w http.ResponseWriter, r *http.Request) error {
+	inst, cfg, store, err := h.instance(r)
+	if err != nil {
+		return err
+	}
+	if !cfg.RequireEmailVerification {
+		return common.PermissionDenied("email verification is not enabled")
+	}
+	var body map[string]any
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	code, _ := body["code"].(string)
+	if strings.TrimSpace(code) == "" {
+		return common.BadRequest("code is required")
+	}
+	identifier, idErr := normalizeBodyIdentifier(cfg, body)
+	if idErr != nil {
+		return common.Unauthenticated("invalid or expired code")
+	}
+	user, err := store.ByIdentifier(identifier)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return common.Unauthenticated("invalid or expired code")
+	}
+	ok, err := store.ConsumeEmailCode(user.UID, "verify", strings.TrimSpace(code), nowMS())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return common.Unauthenticated("invalid or expired code")
+	}
+	if user.Disabled {
+		return common.PermissionDenied("this account is disabled")
+	}
+	if _, err := store.SetEmailVerified(user.UID, nowMS()); err != nil {
+		return err
+	}
+	user.EmailVerified = true
+	// Confirming proves control of the address → issue a session (auto sign-in).
+	tokens, err := h.issueTokens(inst, cfg, store, user)
+	if err != nil {
+		return err
+	}
+	tokens["user"] = user.public()
+	common.WriteJSON(w, 200, tokens)
 	return nil
 }
 

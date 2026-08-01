@@ -47,17 +47,18 @@ type SignupConfig struct {
 
 // Config is a fully-defaulted auth instance configuration.
 type Config struct {
-	AllowSignup         bool
-	AccessTokenTTL      int64
-	RefreshTokenTTL     int64
-	PasswordlessEnabled bool
-	PasswordlessCodeTTL int64
-	PasskeysEnabled     bool
-	TotpEnabled         bool
-	CaptchaEnabled      bool
-	CaptchaSiteKey      string
-	Signup              SignupConfig
-	Access              AccessConfig
+	AllowSignup              bool
+	AccessTokenTTL           int64
+	RefreshTokenTTL          int64
+	PasswordlessEnabled      bool
+	PasswordlessCodeTTL      int64
+	PasskeysEnabled          bool
+	TotpEnabled              bool
+	RequireEmailVerification bool
+	CaptchaEnabled           bool
+	CaptchaSiteKey           string
+	Signup                   SignupConfig
+	Access                   AccessConfig
 }
 
 // DefaultSignup is the classic email + password form.
@@ -119,17 +120,18 @@ func ParseConfig(cfg map[string]any) Config {
 		cfg = map[string]any{}
 	}
 	return Config{
-		AllowSignup:         boolOr(cfg, "allowSignup", true),
-		AccessTokenTTL:      ttl(cfg, "accessTokenTtl", minAccessTTL, maxAccessTTL, defaultAccessTTL),
-		RefreshTokenTTL:     ttl(cfg, "refreshTokenTtl", minRefreshTTL, maxRefreshTTL, defaultRefresh),
-		PasswordlessEnabled: boolOr(cfg, "passwordlessEnabled", false),
-		PasswordlessCodeTTL: ttl(cfg, "passwordlessCodeTtl", minCodeTTL, maxCodeTTL, defaultCodeTTL),
-		PasskeysEnabled:     boolOr(cfg, "passkeysEnabled", false),
-		TotpEnabled:         boolOr(cfg, "totpEnabled", false),
-		CaptchaEnabled:      boolOr(cfg, "captchaEnabled", false),
-		CaptchaSiteKey:      stringOr(cfg, "captchaSiteKey", ""),
-		Signup:              parseSignup(lookup(cfg, "signup")),
-		Access:              parseAccess(cfg["access"]),
+		AllowSignup:              boolOr(cfg, "allowSignup", true),
+		AccessTokenTTL:           ttl(cfg, "accessTokenTtl", minAccessTTL, maxAccessTTL, defaultAccessTTL),
+		RefreshTokenTTL:          ttl(cfg, "refreshTokenTtl", minRefreshTTL, maxRefreshTTL, defaultRefresh),
+		PasswordlessEnabled:      boolOr(cfg, "passwordlessEnabled", false),
+		PasswordlessCodeTTL:      ttl(cfg, "passwordlessCodeTtl", minCodeTTL, maxCodeTTL, defaultCodeTTL),
+		PasskeysEnabled:          boolOr(cfg, "passkeysEnabled", false),
+		TotpEnabled:              boolOr(cfg, "totpEnabled", false),
+		RequireEmailVerification: boolOr(cfg, "requireEmailVerification", false),
+		CaptchaEnabled:           boolOr(cfg, "captchaEnabled", false),
+		CaptchaSiteKey:           stringOr(cfg, "captchaSiteKey", ""),
+		Signup:                   parseSignup(lookup(cfg, "signup")),
+		Access:                   parseAccess(cfg["access"]),
 	}
 }
 

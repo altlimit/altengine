@@ -276,6 +276,53 @@ func TestConfiguredSignupFormBecomesProfile(t *testing.T) {
 	}
 }
 
+// The email-verification gate (requireEmailVerification): signup issues no session, a correct
+// password is refused EMAIL_UNVERIFIED, and confirming the emailed code lifts the gate. The
+// emulator echoes the code as dev_code (dev-open), so the whole flow is exercisable locally.
+func TestEmailVerifyGate(t *testing.T) {
+	srv, reg := newTestServer(t)
+	base := srv.URL + "/v1/auth/app"
+	reg.SetConfig(reg.GetOrCreate("auth", "app"), map[string]any{"requireEmailVerification": true})
+
+	// Signup creates the account UNVERIFIED — no session, just verification_required + the dev code.
+	status, out := do(t, "POST", base+"/signup", `{"email":"alice@example.com","password":"hunter2hunter"}`, "")
+	if status != 201 || out["verification_required"] != true {
+		t.Fatalf("signup -> %d: %v", status, out)
+	}
+	if out["id_token"] != nil {
+		t.Fatalf("no session should be issued before verification: %v", out)
+	}
+	user, _ := out["user"].(map[string]any)
+	if user["emailVerified"] != false {
+		t.Fatalf("new account should be unverified: %v", user)
+	}
+	code, _ := out["dev_code"].(string)
+	if code == "" {
+		t.Fatalf("dev_code expected in dev-open mode: %v", out)
+	}
+
+	// A correct password is refused with a DISTINCT code until verified.
+	status, si := do(t, "POST", base+"/signin", `{"identifier":"alice@example.com","password":"hunter2hunter"}`, "")
+	if status != 403 || errCode(si) != "EMAIL_UNVERIFIED" {
+		t.Fatalf("unverified signin -> %d %v (want 403 EMAIL_UNVERIFIED)", status, si)
+	}
+
+	// A wrong code is refused; the right one confirms and returns a session.
+	if s, _ := do(t, "POST", base+"/email/verify/confirm", `{"identifier":"alice@example.com","code":"000000x"}`, ""); s != 401 {
+		t.Fatalf("wrong verify code -> %d", s)
+	}
+	status, vc := do(t, "POST", base+"/email/verify/confirm", `{"identifier":"alice@example.com","code":"`+code+`"}`, "")
+	if status != 200 || vc["id_token"] == nil {
+		t.Fatalf("verify confirm -> %d: %v", status, vc)
+	}
+
+	// Now the same password signs in.
+	status, ok := do(t, "POST", base+"/signin", `{"identifier":"alice@example.com","password":"hunter2hunter"}`, "")
+	if status != 200 || ok["id_token"] == nil {
+		t.Fatalf("signin after verification -> %d: %v", status, ok)
+	}
+}
+
 func TestDeferredMethodsReportUnimplemented(t *testing.T) {
 	srv, _ := newTestServer(t)
 	base := srv.URL + "/v1/auth/app"
