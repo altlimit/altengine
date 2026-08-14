@@ -16,6 +16,37 @@ cd cli && go build -o altengine ./cmd/altengine
 
 Point your SDK/base URL at `http://127.0.0.1:9191` and use **any** `Authorization: Bearer <token>`.
 
+## Deploying functions
+
+`deploy` talks to the **hosted** service, not the emulator. It bundles your entry file and
+everything it imports into a single ES module (the server resolves no imports) and uploads it.
+
+```bash
+export ALTENGINE_URL=https://api.altengine.net
+export ALTENGINE_KEY=ak_...          # org API key, 'full' access to the instance
+export ALTENGINE_INSTANCE=prod
+
+altengine deploy --name hello ./hello.js       # bundle + deploy + activate
+altengine deploy --dry-run ./hello.js          # bundle only, report the size
+altengine deploy --minify --no-activate ./hello.js
+
+altengine functions list
+altengine functions versions hello
+altengine functions rollback --version 3 hello
+altengine functions pull --out hello.js hello
+```
+
+Access is granted per function, in the same `service[:instance]=level` form an API key uses:
+
+```bash
+altengine deploy --grants "datastore:appdb=full,search=read" --name hello ./hello.js
+```
+
+Omit `--grants` and the function **keeps the access it already had** — a routine redeploy of
+source never silently strips it. Deploying itself needs `full` on the functions instance:
+it replaces the code that runs with that instance's capabilities, so it is more powerful
+than writing data through them.
+
 ## Why
 
 This emulator re-implements the **data-plane HTTP/WebSocket contracts** the hosted
