@@ -119,7 +119,11 @@ func (s *Store) Resolve(r *http.Request) (*Identity, error) {
 		return id, nil
 	}
 	if s.devOpen {
-		return &Identity{OrgID: DevOrgID, Grants: Grants{"search": "full", "channel": "full", "datastore": "full", "auth": "full"}}, nil
+		// Every service, or a new one silently 403s in dev-open mode — which reads as a
+		// broken emulator rather than a missing line here.
+		return &Identity{OrgID: DevOrgID, Grants: Grants{
+			"search": "full", "channel": "full", "datastore": "full", "auth": "full", "functions": "full",
+		}}, nil
 	}
 	return nil, common.Unauthenticated("invalid API key")
 }

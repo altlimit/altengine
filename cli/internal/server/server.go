@@ -15,6 +15,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
+	"github.com/altlimit/altengine/cli/internal/functions"
 	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
@@ -56,6 +57,13 @@ func New(opts Options) (*Server, error) {
 	channel.NewHandler(reg, a, hub).WithIdentity(idSvc).Register(mux)
 	identity.NewHandler(reg, idSvc).Register(mux)
 
+	// Functions. The stubs a function gets (env.datastore, env.search, ...) dispatch
+	// IN-PROCESS into this same mux, so a call from a function goes through the very
+	// handlers the REST API uses rather than a second implementation of them. Registered
+	// after the data planes it dispatches into — the mux is shared, so the routes those
+	// calls target must already be mounted.
+	functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux).Register(mux)
+
 	// Admin last: its console handler is a catch-all on "/".
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)
 
@@ -78,6 +86,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
 	log.Printf("  api keys:       dev-open (any 'Authorization: Bearer <token>' works)")
 	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
+	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
 	return http.ListenAndServe(s.opts.Addr, s.Handler())
 }
 
