@@ -34,8 +34,8 @@ import (
 //
 // This is a WALL-CLOCK timeout, not the hosted `cpuMs`. It exists so a runaway loop in a
 // local function does not wedge the emulator — not to predict production behaviour. Worth
-// knowing: hosted, `cpuMs` is advisory and Cloudflare does not enforce it at the value we
-// set, so neither number is a guarantee your function will be stopped.
+// knowing: hosted, `cpuMs` is advisory — the platform enforces its own ceiling rather
+// than the value we set — so neither number is a guarantee your function will be stopped.
 const invocationTimeout = 30 * time.Second
 
 func sha256Hex(s string) string {

@@ -3,9 +3,9 @@
 //
 // HOW THESE WORK, AND WHY IT IS DIFFERENT FROM HOSTED
 //
-// Hosted, each stub is an RPC handle into a WorkerEntrypoint running in our own isolate:
-// no HTTP, no credential, and the scoping (org, grants) rides in Worker Loader `props`
-// that the sandbox cannot read or forge.
+// Hosted, each stub is a direct in-process handle into the service itself: no HTTP, no
+// credential, and the scoping (org, grants) is held on the platform's side of the sandbox
+// boundary, where function code can neither read nor forge it.
 //
 // The emulator cannot reproduce that, and imitating it by re-implementing 25 methods
 // against the Go managers would mean two implementations of every rule — with the copy

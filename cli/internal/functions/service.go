@@ -10,7 +10,7 @@
 // Code you deploy here runs there.
 //
 // NOT faithful, and deliberately: this is not a security sandbox. Hosted, tenant code runs
-// in a separate isolate with no ambient capabilities at all. Here it runs in an embedded
+// in a hard sandbox with no ambient capabilities at all. Here it runs in an embedded
 // JS interpreter inside the emulator process, because the point of running locally is to
 // see your own code work — not to defend the machine against it. Never point this at code
 // you would not run yourself, and never expose the emulator beyond localhost.
