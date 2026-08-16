@@ -58,6 +58,10 @@ type Function struct {
 	ActiveVersion int               `json:"activeVersion"`
 	CPUMs         int               `json:"cpuMs"`
 	SubRequests   int               `json:"subRequests"`
+	// Five-field UTC cron expressions. A LIST because one expression cannot express every
+	// schedule: hour and day-of-week are ANDed within an expression, so "09:00 weekdays
+	// AND 12:00 Saturday" is genuinely two.
+	Schedules []string `json:"schedules,omitempty"`
 }
 
 // Version is one immutable deploy of one function.
@@ -204,7 +208,13 @@ type DeployRequest struct {
 	Grants      map[string]string `json:"grants"`
 	CPUMs       int               `json:"cpuMs"`
 	SubRequests int               `json:"subRequests"`
-	Activate    *bool             `json:"activate"`
+	// json.RawMessage, not []string: an ABSENT field must inherit the deployed schedules
+	// while an explicit null clears them, and both decode to a nil slice. Only the raw
+	// bytes tell the two apart. Accepts a list or one newline-separated string.
+	Schedules json.RawMessage `json:"schedules"`
+	// Alias, from before one expression turned out not to be enough.
+	Schedule json.RawMessage `json:"schedule"`
+	Activate *bool           `json:"activate"`
 }
 
 // Deploy stores a new version and (by default) activates it.
@@ -229,6 +239,11 @@ func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, er
 		if strings.TrimSpace(strings.SplitN(k, ":", 2)[0]) == "" {
 			return nil, common.BadRequest("grant key must name a service")
 		}
+	}
+	// Validated BEFORE anything is written, so a bad expression never stores a version.
+	schedules, err := decodeSchedules(req.Schedules, req.Schedule)
+	if err != nil {
+		return nil, common.BadRequest(err.Error())
 	}
 
 	s.mu.Lock()
@@ -279,6 +294,9 @@ func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, er
 	}
 	if req.SubRequests > 0 {
 		fn.SubRequests = req.SubRequests
+	}
+	if schedules != nil {
+		fn.Schedules = *schedules
 	}
 	if activate {
 		fn.ActiveVersion = next

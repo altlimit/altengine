@@ -35,6 +35,7 @@ type Handler struct {
 	store  *Store
 	cache  *compileCache
 	binder *bindings
+	sched  *schedState
 }
 
 // NewHandler builds the functions handler. `mux` is the emulator's own router: stub calls
@@ -47,6 +48,7 @@ func NewHandler(reg *control.Registry, a *auth.Store, store *Store, mux http.Han
 		store:  store,
 		cache:  newCompileCache(),
 		binder: &bindings{mux: mux, token: "emulator-internal"},
+		sched:  newSchedState(),
 	}
 }
 

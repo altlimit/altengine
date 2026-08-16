@@ -75,12 +75,16 @@ func Bundle(entry string, minify bool) (string, error) {
 }
 
 type deployBody struct {
-	Name        string            `json:"name"`
-	Code        string            `json:"code"`
-	Grants      map[string]string `json:"grants,omitempty"`
-	CPUMs       int               `json:"cpuMs,omitempty"`
-	SubRequests int               `json:"subRequests,omitempty"`
-	Activate    *bool             `json:"activate,omitempty"`
+	Name   string            `json:"name"`
+	Code   string            `json:"code"`
+	Grants map[string]string `json:"grants,omitempty"`
+	CPUMs  int               `json:"cpuMs,omitempty"`
+	// A POINTER so the three states stay distinct on the wire: nil is omitted (the server
+	// keeps the deployed schedules), &[] serializes as [] (clear them), and a non-empty
+	// list sets them. A plain []string could not express "clear".
+	Schedules   *[]string `json:"schedules,omitempty"`
+	SubRequests int       `json:"subRequests,omitempty"`
+	Activate    *bool     `json:"activate,omitempty"`
 }
 
 // Result is the server's answer to a successful deploy.
@@ -147,8 +151,8 @@ func (c Config) do(method, path string, body any, out any) error {
 // grants is only sent when non-empty: an omitted grants map INHERITS what the function
 // already has, so a plain redeploy of source never silently drops a function's access to
 // its datastore.
-func (c Config) Deploy(fnName, code string, grants map[string]string, activate bool) (*Result, error) {
-	body := deployBody{Name: fnName, Code: code}
+func (c Config) Deploy(fnName, code string, grants map[string]string, schedules *[]string, activate bool) (*Result, error) {
+	body := deployBody{Name: fnName, Code: code, Schedules: schedules}
 	if len(grants) > 0 {
 		body.Grants = grants
 	}
@@ -170,6 +174,7 @@ type Listing struct {
 		Name          string            `json:"name"`
 		ActiveVersion int               `json:"active_version"`
 		Grants        map[string]string `json:"grants"`
+		Schedules     []string          `json:"schedules"`
 		CPUMs         int               `json:"cpu_ms"`
 		URL           string            `json:"url"`
 	} `json:"functions"`

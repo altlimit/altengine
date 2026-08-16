@@ -47,6 +47,39 @@ source never silently strips it. Deploying itself needs `full` on the functions 
 it replaces the code that runs with that instance's capabilities, so it is more powerful
 than writing data through them.
 
+### Schedules
+
+A function can run on a timer as well as on request. Expressions are five-field cron, **in
+UTC**, and you can give more than one:
+
+```bash
+altengine deploy --schedule "0 3 * * *" --name nightly ./nightly.js
+altengine deploy --schedule "0 9 * * 1-5" --schedule "0 12 * * 6" --name digest ./digest.js
+altengine deploy --unschedule --name nightly ./nightly.js     # back to HTTP-only
+```
+
+Several expressions are not a convenience — within one expression the hour and day-of-week
+fields are **ANDed**, and cron's only OR is the fixed day-of-month/day-of-week rule, so
+"09:00 on weekdays and 12:00 on Saturday" genuinely cannot be written as one.
+
+Like `--grants`, omitting `--schedule` **keeps the existing schedules**, so deploying code
+never silently unschedules a job. `--unschedule` is how you remove them.
+
+A scheduled run arrives as a `POST` with `x-ae-trigger: cron` and a body of
+`{"crons": [...], "scheduled_for": <epoch ms>}` — `crons` is always a list, so a function
+that later gains a second schedule does not see its own payload change shape.
+
+`altengine dev` runs the same scheduler locally, ticking on the minute. Three behaviours
+match the hosted service exactly, because getting them wrong locally would be worse than
+having no local scheduler:
+
+- **One at a time.** A run still in flight when the next is due is skipped, not queued — a
+  job never overlaps itself, and one that is permanently slower than its interval does not
+  build a backlog it can never drain.
+- **Not on startup.** A function runs because its expression came due while the scheduler
+  was watching, not because the process restarted.
+- **No retries.** A failed run is logged and not retried.
+
 ## Why
 
 This emulator re-implements the **data-plane HTTP/WebSocket contracts** the hosted

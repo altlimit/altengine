@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -30,6 +31,7 @@ type Options struct {
 // Server is the assembled emulator.
 type Server struct {
 	opts Options
+	fn   *functions.Handler
 	mux  *http.ServeMux
 }
 
@@ -62,7 +64,8 @@ func New(opts Options) (*Server, error) {
 	// handlers the REST API uses rather than a second implementation of them. Registered
 	// after the data planes it dispatches into — the mux is shared, so the routes those
 	// calls target must already be mounted.
-	functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux).Register(mux)
+	fnHandler := functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux)
+	fnHandler.Register(mux)
 
 	// Admin last: its console handler is a catch-all on "/".
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)
@@ -71,7 +74,7 @@ func New(opts Options) (*Server, error) {
 		common.WriteJSON(w, 200, map[string]any{"ok": true})
 	})
 
-	return &Server{opts: opts, mux: mux}, nil
+	return &Server{opts: opts, mux: mux, fn: fnHandler}, nil
 }
 
 // Handler returns the root http.Handler (with CORS and a simple request log).
@@ -80,13 +83,18 @@ func (s *Server) Handler() http.Handler {
 }
 
 // ListenAndServe starts the HTTP server.
+//
+// The function scheduler starts HERE rather than in New, so building a server in a test
+// does not spawn a ticker goroutine that outlives the test.
 func (s *Server) ListenAndServe() error {
+	s.fn.StartScheduler(context.Background())
 	log.Printf("altengine listening on http://%s", s.opts.Addr)
 	log.Printf("  admin console:  http://%s/", s.opts.Addr)
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
 	log.Printf("  api keys:       dev-open (any 'Authorization: Bearer <token>' works)")
 	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
 	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
+	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	return http.ListenAndServe(s.opts.Addr, s.Handler())
 }
 

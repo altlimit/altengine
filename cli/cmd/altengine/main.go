@@ -139,6 +139,9 @@ func deployCmd(args []string) {
 	minify := fs.Bool("minify", false, "minify the bundle before uploading")
 	noActivate := fs.Bool("no-activate", false, "upload the version but keep serving the current one")
 	grantList := fs.String("grants", "", "comma-separated access grants, e.g. datastore:appdb=full,search=read")
+	var schedules stringList
+	fs.Var(&schedules, "schedule", "UTC cron expression to run this function on; repeat for several (e.g. -schedule '0 9 * * 1-5' -schedule '0 12 * * 6')")
+	unschedule := fs.Bool("unschedule", false, "remove this function's schedules")
 	dryRun := fs.Bool("dry-run", false, "bundle and report the size, but do not upload")
 	_ = fs.Parse(args)
 
@@ -171,7 +174,20 @@ func deployCmd(args []string) {
 		fail(err)
 	}
 
-	res, err := cfg.Deploy(fnName, code, grants, !*noActivate)
+	// Three states, and the difference matters: no flag at all leaves the deployed
+	// schedules alone (so a routine redeploy never silently unschedules a job), -schedule
+	// sets them, and -unschedule clears them.
+	var sched *[]string
+	switch {
+	case *unschedule:
+		empty := []string{}
+		sched = &empty
+	case len(schedules) > 0:
+		list := []string(schedules)
+		sched = &list
+	}
+
+	res, err := cfg.Deploy(fnName, code, grants, sched, !*noActivate)
 	if err != nil {
 		fail(err)
 	}
@@ -188,6 +204,15 @@ func deployCmd(args []string) {
 			}
 		}
 	}
+}
+
+// stringList collects a repeatable flag.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
 }
 
 // parseGrants turns "datastore:appdb=full,search=read" into a grants map. An empty
@@ -247,6 +272,9 @@ func functionsCmd(args []string) {
 		}
 		for _, f := range list.Functions {
 			fmt.Printf("%-24s v%-4d %s\n", f.Name, f.ActiveVersion, f.URL)
+			for _, expr := range f.Schedules {
+				fmt.Printf("%-24s   %s UTC\n", "", expr)
+			}
 		}
 
 	case "versions":
