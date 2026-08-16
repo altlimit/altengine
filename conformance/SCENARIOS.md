@@ -106,6 +106,43 @@ auth instance scope what that user can reach.
 - [ ] live bridge: a committed datastore write publishes `{op, keys}` on
       `<collection>.<keyBy-value>` to the bound channel instance
 
+## MCP
+
+`POST /mcp` (JSON-RPC 2.0, stateless) is the surface an AI agent uses, and the
+whole reason it is worth emulating is that a sequence of calls worked out
+locally must run unchanged against the hosted service. So the contract here is
+about **names**, not just behavior — a tool or argument spelled differently
+turns "works locally" into a confusing production failure.
+
+These apply to the emulator and the hosted server alike; run them against both.
+
+- [ ] `initialize` → `tools/list` → `tools/call` round-trip; `ping` answers `{}`
+- [ ] a notification (no `id`) gets **no** response body (202); every client
+      sends `notifications/initialized` right after `initialize`
+- [ ] a batch answers with an array; a batch over 20 messages is refused
+- [ ] a missing `Authorization` header is refused (hosted: a key without MCP
+      access is refused too, with a message saying how to fix it)
+- [ ] **tool names match hosted exactly**: whoami, list_instances,
+      create_instance, get_instance_config, patch_instance_config,
+      delete_instance, datastore_query, datastore_put,
+      datastore_list_collections, search_query, search_put_documents,
+      search_list_indexes, functions_list, functions_deploy, functions_errors,
+      usage_summary. No tool exists in one place and not the other.
+- [ ] **argument names match hosted exactly** — notably `datastore_query.where`
+      (NOT `filters`) and `order[].dir` (NOT `desc`)
+- [ ] an unrecognised argument is **refused and names the valid ones**, never
+      silently ignored: a dropped filter returns every document and looks right
+- [ ] `patch_instance_config` merges — sending one field preserves its siblings
+      and the response reports what actually changed
+- [ ] destructive tools refuse without `confirm: true`; `delete_instance`
+      refuses even WITH it (teardown belongs to the console) — local must never
+      be more permissive than hosted
+- [ ] `functions_deploy` omitting `schedules` KEEPS the existing ones; `[]`
+      clears them; `functions_list` reports them back
+- [ ] `resources/list` offers the four `docs://` grounding resources and every
+      argument they document is one the matching tool actually accepts
+- [ ] results are bounded: list/query tools cap below the REST default and say so
+
 ## Path grammar
 
 Both data planes share one shape, labels kept short:

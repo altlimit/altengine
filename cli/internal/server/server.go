@@ -18,6 +18,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/datastore"
 	"github.com/altlimit/altengine/cli/internal/functions"
 	"github.com/altlimit/altengine/cli/internal/identity"
+	"github.com/altlimit/altengine/cli/internal/mcp"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
 
@@ -67,8 +68,15 @@ func New(opts Options) (*Server, error) {
 	fnHandler := functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux)
 	fnHandler.Register(mux)
 
-	// Admin last: its console handler is a catch-all on "/".
+	// Admin before MCP: MCP's tools dispatch into this same mux, and some of them (the
+	// datastore collection listing) reach an /admin route, so those must already be mounted.
+	// Its console handler is a catch-all on "/", which is also why MCP mounts an explicit
+	// "POST /mcp" — an unmatched path here returns the console's HTML, not a 404.
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)
+
+	// MCP: the same agent surface the hosted service exposes, so an AI agent can build
+	// against a local server instead of doing its experimenting in production.
+	mcp.NewHandler(reg, mux, opts.DevOpen).Register(mux)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		common.WriteJSON(w, 200, map[string]any{"ok": true})
@@ -95,6 +103,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
 	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
+	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
 	return http.ListenAndServe(s.opts.Addr, s.Handler())
 }
 

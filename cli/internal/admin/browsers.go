@@ -143,7 +143,12 @@ func (h *Handler) dsStore(r *http.Request) (*datastore.Store, *bool, error) {
 	if v, ok := in.Config["autoIndex"].(bool); ok {
 		autoIndex = v
 	}
-	store, err := h.DS.Open(in.ID, r.PathValue("ns"), autoID)
+	// DecodeNs, not the raw segment: "_default" is the wire spelling of the default
+	// namespace (""), because a URL path cannot carry an empty segment. Passing it through
+	// undecoded opened a namespace literally named "_default" — a different, always-empty
+	// store — so the data browser reported no collections for the namespace holding all the
+	// data, and a phantom "_default" appeared in the namespace list beside the real one.
+	store, err := h.DS.Open(in.ID, datastore.DecodeNs(r.PathValue("ns")), autoID)
 	return store, &autoIndex, err
 }
 

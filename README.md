@@ -49,6 +49,34 @@ Drop `dev: true` and the SDK targets production (`https://api.altengine.net`) �
 get an API key at [www.altengine.net](https://www.altengine.net). Everything
 behaves the same.
 
+## Building with an AI agent
+
+The emulator speaks [MCP](https://modelcontextprotocol.io) at `POST /mcp`, with
+the same tools the hosted service exposes — create instances, configure them,
+read and write data, deploy functions. Point your agent at the local server and
+it can build against `altengine dev` rather than doing its experimenting in
+production:
+
+```json
+{
+  "mcpServers": {
+    "altengine": {
+      "url": "http://127.0.0.1:9191/mcp",
+      "headers": { "Authorization": "Bearer dev" }
+    }
+  }
+}
+```
+
+Any bearer token works locally; hosted needs a real key with MCP access. Tool
+and argument names are identical in both places, so a sequence of calls that
+works here works there — parity is checked by the MCP scenarios in
+[`conformance/SCENARIOS.md`](conformance/SCENARIOS.md).
+
+The server also publishes `docs://` resources for the search and datastore query
+languages, worth reading before the first query: both are App Engine's syntax,
+and a model that has not read them will confidently invent Lucene or SQL instead.
+
 ## Development
 
 - Go workspace: `go.work` covers `cli/` — `cd cli && go test ./...`

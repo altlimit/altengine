@@ -93,10 +93,20 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) error {
 	cfg := h.store.Config(in.ID)
 	out := []map[string]any{}
 	for _, f := range cfg.Functions {
+		// `schedules` was missing from this listing, though the hosted one carries it. So
+		// anything reading it — the CLI, the console, an agent over MCP — could deploy a
+		// schedule and then have no way to confirm it had stuck. Always a list and never
+		// omitted, so "no schedule" reads as none rather than as a server that does not
+		// report them.
+		schedules := f.Schedules
+		if schedules == nil {
+			schedules = []string{}
+		}
 		out = append(out, map[string]any{
 			"name":           f.Name,
 			"active_version": f.ActiveVersion,
 			"grants":         f.Grants,
+			"schedules":      schedules,
 			"cpu_ms":         f.CPUMs,
 			"sub_requests":   f.SubRequests,
 			"url":            fmt.Sprintf("/fn/%s/%s", in.Name, f.Name),

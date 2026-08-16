@@ -57,7 +57,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 const nsDefaultSegment = "_default"
 
 // decodeNs maps a {ns} path segment to its canonical namespace ("" for default).
-func decodeNs(seg string) string {
+func decodeNs(seg string) string { return DecodeNs(seg) }
+
+// DecodeNs is decodeNs, exported for other packages that route on a {ns} segment.
+//
+// It is exported because the ADMIN routes need it too and did not have it: they passed the
+// raw segment to Open(), so browsing the default namespace opened a namespace literally
+// named "_default" — a different, always-empty store. The data browser showed no
+// collections, and a stray "_default" appeared in the namespace list beside the real one.
+func DecodeNs(seg string) string {
 	if seg == nsDefaultSegment {
 		return ""
 	}
