@@ -53,6 +53,12 @@ type call struct {
 	body    func(args []goja.Value) (any, error)
 	unwrap  string // field to lift out of the response, "" to return the whole object
 	minArgs int
+	// custom replaces the single-request path entirely, for the two blob methods that have no
+	// REST equivalent because they are binding-only hosted (`put` writes bytes straight to
+	// storage; `bytes` reads them back). Expressing them as the PUBLIC calls they are
+	// equivalent to keeps the emulator's HTTP surface identical to the hosted one — inventing
+	// an endpoint here would be a route that works locally and 404s in production.
+	custom func(b *bindings, t target, args []goja.Value) (any, error)
 }
 
 type target struct {
@@ -101,6 +107,14 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 		return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
 	}
 
+	if m.custom != nil {
+		v, err := m.custom(b, t, args)
+		if err != nil {
+			return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
+		}
+		return vm.ToValue(v), nil
+	}
+
 	path, err := m.path(t, args)
 	if err != nil {
 		return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
@@ -139,6 +153,35 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 		}
 	}
 	return vm.ToValue(decoded), nil
+}
+
+// do makes one in-process request and decodes it, so the custom methods below report errors
+// exactly as invoke does. A non-JSON response comes back as raw bytes, which is how `bytes`
+// gets a file rather than a parse failure.
+func (b *bindings) do(method, path, contentType string, payload []byte) (any, error) {
+	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.ContentLength = int64(len(payload))
+	rec := httptest.NewRecorder()
+	b.mux.ServeHTTP(rec, req)
+
+	var decoded any
+	isJSON := strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json")
+	if rec.Body.Len() > 0 && isJSON {
+		if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+			return nil, fmt.Errorf("unreadable response")
+		}
+	}
+	if rec.Code >= 400 {
+		return nil, fmt.Errorf("%s", errMessage(decoded, rec.Code))
+	}
+	if !isJSON {
+		return rec.Body.Bytes(), nil
+	}
+	return decoded, nil
 }
 
 // errMessage lifts the API's error message out, so a function sees the same text the
@@ -216,6 +259,24 @@ func nsSegment(ns string) string {
 		return "_default"
 	}
 	return url.PathEscape(ns)
+}
+
+// readBytes turns whatever user code passed into bytes. Strings, ArrayBuffers and typed arrays
+// all cross the hosted RPC boundary, so all three have to work here or a function that stores an
+// image locally would need different code than the one that stores it in production.
+func readBytes(v goja.Value) ([]byte, error) {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil, fmt.Errorf("content is required")
+	}
+	switch x := v.Export().(type) {
+	case string:
+		return []byte(x), nil
+	case []byte:
+		return x, nil
+	case goja.ArrayBuffer:
+		return x.Bytes(), nil
+	}
+	return nil, fmt.Errorf("content must be a string, an ArrayBuffer, or a typed array")
 }
 
 func esc(s string) string { return url.PathEscape(s) }
@@ -334,6 +395,179 @@ var serviceMethods = map[string]map[string]call{
 			},
 			body: func(a []goja.Value) (any, error) {
 				return map[string]any{"channel": argStr(a, 1), "data": argAny(a, 2)}, nil
+			},
+		},
+	},
+	// Blob. `put` and `bytes` are the only methods here that are not one REST call: hosted they
+	// reach storage directly, and there is no public endpoint for either. Rather than invent one
+	// — a route that would work locally and 404 in production — they are composed from the calls
+	// a REST client would actually make.
+	"blob": {
+		"put": {
+			level: auth.Write, minArgs: 3,
+			custom: func(b *bindings, t target, a []goja.Value) (any, error) {
+				content, err := readBytes(arg(a, 2))
+				if err != nil {
+					return nil, err
+				}
+				opts, _ := argAny(a, 3).(map[string]any)
+				mint := map[string]any{"name": argStr(a, 1), "size": len(content)}
+				if v, ok := opts["contentType"]; ok {
+					mint["content_type"] = v
+				}
+				for from, to := range map[string]string{"public": "public", "meta": "meta"} {
+					if v, ok := opts[from]; ok {
+						mint[to] = v
+					}
+				}
+				payload, _ := json.Marshal(mint)
+				res, err := b.do("POST", fmt.Sprintf("/v1/blob/%s/uploads", esc(t.instance)), "application/json", payload)
+				if err != nil {
+					return nil, err
+				}
+				minted, _ := res.(map[string]any)
+				uploadURL, _ := minted["upload_url"].(string)
+				headers, _ := minted["required_headers"].(map[string]any)
+				ct, _ := headers["content-type"].(string)
+				u, err := url.Parse(uploadURL)
+				if err != nil || uploadURL == "" {
+					return nil, fmt.Errorf("the upload URL was unreadable")
+				}
+				if _, err := b.do("PUT", u.RequestURI(), ct, content); err != nil {
+					return nil, err
+				}
+				// Read it back, so the caller gets the finished record with its public URL —
+				// the same return value the hosted stub gives.
+				got, err := b.do("GET", fmt.Sprintf("/v1/blob/%s/%s", esc(t.instance), esc(fmt.Sprint(minted["id"]))), "", nil)
+				if err != nil {
+					return nil, err
+				}
+				if obj, ok := got.(map[string]any); ok {
+					return obj["blob"], nil
+				}
+				return got, nil
+			},
+		},
+		"bytes": {
+			level: auth.Read, minArgs: 2,
+			custom: func(b *bindings, t target, a []goja.Value) (any, error) {
+				got, err := b.do("GET", fmt.Sprintf("/v1/blob/%s/%s", esc(t.instance), esc(argStr(a, 1))), "", nil)
+				if err != nil {
+					return nil, err
+				}
+				obj, _ := got.(map[string]any)
+				dl, _ := obj["download_url"].(string)
+				u, err := url.Parse(dl)
+				if err != nil || dl == "" {
+					return nil, fmt.Errorf("this blob has no download URL")
+				}
+				raw, err := b.do("GET", u.RequestURI(), "", nil)
+				if err != nil {
+					return nil, err
+				}
+				body, _ := raw.([]byte)
+				return body, nil
+			},
+		},
+		"uploadUrl": {
+			method: "POST", level: auth.Write, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/blob/%s/uploads", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				out := map[string]any{}
+				for from, to := range map[string]string{"name": "name", "size": "size", "contentType": "content_type", "public": "public", "meta": "meta"} {
+					if v, ok := o[from]; ok {
+						out[to] = v
+					}
+				}
+				return out, nil
+			},
+		},
+		"get": {
+			method: "GET", level: auth.Read, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/blob/%s/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"list": {
+			method: "GET", level: auth.Read, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				q := url.Values{}
+				for from, to := range map[string]string{"prefix": "prefix", "limit": "limit", "cursor": "cursor"} {
+					if v, ok := o[from]; ok && v != nil {
+						q.Set(to, fmt.Sprint(v))
+					}
+				}
+				return fmt.Sprintf("/v1/blob/%s?%s", esc(t.instance), q.Encode()), nil
+			},
+		},
+		"setPublic": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "blob",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/blob/%s/%s/public", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				pub := true
+				if v := arg(a, 2); !goja.IsUndefined(v) && !goja.IsNull(v) {
+					pub = v.ToBoolean()
+				}
+				return map[string]any{"public": pub}, nil
+			},
+		},
+		"delete": {
+			method: "POST", level: auth.Full, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/blob/%s/delete", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) { return map[string]any{"ids": argAny(a, 1)}, nil },
+		},
+	},
+	// Containers. `run` returns as soon as the container starts — there is nothing to await,
+	// which is the same shape hosted and the reason a completion function exists at all.
+	"container": {
+		"run": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "job",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/container/%s", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) { return argAny(a, 1), nil },
+		},
+		"get": {
+			method: "GET", level: auth.Read, minArgs: 2, unwrap: "job",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/container/%s/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"list": {
+			method: "GET", level: auth.Read, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				q := url.Values{}
+				for from, to := range map[string]string{"status": "status", "limit": "limit", "before": "before"} {
+					if v, ok := o[from]; ok && v != nil {
+						q.Set(to, fmt.Sprint(v))
+					}
+				}
+				return fmt.Sprintf("/v1/container/%s?%s", esc(t.instance), q.Encode()), nil
+			},
+		},
+		"cancel": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "job",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/container/%s/%s/cancel", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"logs": {
+			method: "GET", level: auth.Read, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				q := url.Values{}
+				if c := argStr(a, 2); c != "" {
+					q.Set("cursor", c)
+				}
+				return fmt.Sprintf("/v1/container/%s/%s/logs?%s", esc(t.instance), esc(argStr(a, 1)), q.Encode()), nil
 			},
 		},
 	},

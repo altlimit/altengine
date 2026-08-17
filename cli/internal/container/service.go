@@ -28,6 +28,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"io"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -228,11 +229,14 @@ type Job struct {
 
 	holdUSD float64
 	cancel  context.CancelFunc
+	logs    *logBuffer
 }
 
 func (j *Job) clone() *Job {
 	c := *j
 	c.cancel = nil
+	// The buffer has its own lock and is shared by reference deliberately: copying it would
+	// copy a mutex, and a clone handed to a caller is read-only anyway.
 	return &c
 }
 
@@ -253,6 +257,10 @@ type RunSpec struct {
 	Env      map[string]string
 	MemoryMB int
 	CPUs     int
+	// Where the container's output goes. Nil discards it — which is what os/exec does by
+	// default, and what this did for every job until logs existed.
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // DockerRunner runs jobs on the local Docker daemon.
@@ -291,6 +299,8 @@ func (d *DockerRunner) Run(ctx context.Context, spec RunSpec) (int, error) {
 	args = append(args, spec.Cmd...)
 
 	cmd := exec.Command("docker", args...)
+	cmd.Stdout = spec.Stdout
+	cmd.Stderr = spec.Stderr
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
@@ -478,6 +488,7 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest) (*Job, 
 		StartedAt: time.Now().UnixMilli(),
 		holdUSD:   hold,
 		cancel:    cancel,
+		logs:      newLogBuffer(),
 	}
 	s.jobs[instanceID] = append(s.jobs[instanceID], job)
 	s.mu.Unlock()
@@ -485,6 +496,7 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest) (*Job, 
 	sz := Sizes[size]
 	go s.run(ctx, cancel, instanceID, cfg, job, RunSpec{
 		JobID: id, Image: image, Cmd: req.Cmd, Env: env, MemoryMB: sz.MemoryMB, CPUs: sz.CPUs,
+		Stdout: job.logs.writer("stdout"), Stderr: job.logs.writer("stderr"),
 	})
 	return job.clone(), nil
 }
@@ -625,6 +637,30 @@ func (s *Store) List(instanceID, status string, limit int, before int64) ([]*Job
 }
 
 // RunningCount is what the console shows and what the concurrency cap is measured against.
+// Logs returns one page of a job's captured output, oldest first.
+//
+// Best effort, exactly as hosted: a job we no longer hold (the emulator was restarted, or the
+// job predates log capture) gets an empty page with a note rather than an error. The job's own
+// record never depends on this.
+func (s *Store) Logs(instanceID, jobID string, from int) (LogPage, bool) {
+	s.mu.Lock()
+	var job *Job
+	for _, j := range s.jobs[instanceID] {
+		if j.ID == jobID {
+			job = j
+			break
+		}
+	}
+	s.mu.Unlock()
+	if job == nil {
+		return LogPage{}, false
+	}
+	if job.logs == nil {
+		return LogPage{Note: "no output was captured for this job"}, true
+	}
+	return job.logs.page(from), true
+}
+
 func (s *Store) RunningCount(instanceID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

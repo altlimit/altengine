@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/dop251/goja"
@@ -120,9 +121,38 @@ func installGlobals(vm *goja.Runtime, in *invocation) error {
 	}
 	// atob/btoa: present in Workers, trivially useful, and their absence is a confusing
 	// failure in code that only touches them on one branch.
+	//
+	// TextEncoder/TextDecoder are here for the same reason and one sharper one: `env.blob`
+	// deals in bytes, so a function that stores or reads a file needs them to do anything with
+	// what it gets. The conversion itself is done in Go — Go strings are already UTF-8, so this
+	// is the encoder rather than an approximation of it.
+	_ = vm.Set("__utf8encode", func(str string) goja.ArrayBuffer { return vm.NewArrayBuffer([]byte(str)) })
+	_ = vm.Set("__utf8decode", func(v goja.Value) (string, error) {
+		b, err := readBytes(v)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	})
 	if _, err := vm.RunString(`
     globalThis.btoa = (s) => __b64encode(String(s));
     globalThis.atob = (s) => __b64decode(String(s));
+    globalThis.TextEncoder = class TextEncoder {
+      get encoding() { return "utf-8"; }
+      encode(s) { return new Uint8Array(__utf8encode(s === undefined ? "" : String(s))); }
+    };
+    globalThis.TextDecoder = class TextDecoder {
+      constructor(label) {
+        const enc = String(label || "utf-8").toLowerCase();
+        // Refuse rather than silently mis-decode: a function asking for shift_jis and getting
+        // UTF-8 back is a bug that would only appear as mojibake, much later.
+        if (enc !== "utf-8" && enc !== "utf8" && enc !== "unicode-1-1-utf-8") {
+          throw new RangeError("the local runtime only decodes utf-8, not '" + label + "'");
+        }
+      }
+      get encoding() { return "utf-8"; }
+      decode(b) { return b === undefined ? "" : __utf8decode(b); }
+    };
   `); err != nil {
 		return err
 	}
@@ -341,7 +371,11 @@ func buildEnv(vm *goja.Runtime, in *invocation) (goja.Value, error) {
 	for k, v := range in.cfg.EnvSecrets() {
 		_ = env.Set(k, v)
 	}
-	for _, svc := range []string{"datastore", "search", "auth", "channel"} {
+	// Derived from the binding table, not written out again: a service has a stub if and only if
+	// it has methods. The hand-written list this replaces is exactly the shape of bug that left
+	// containers unreachable in dev-open mode — a new service wired up everywhere except the one
+	// list nobody remembers.
+	for _, svc := range stubServices() {
 		if !hasGrant(in.fn.Grants, svc) {
 			continue
 		}
@@ -352,6 +386,16 @@ func buildEnv(vm *goja.Runtime, in *invocation) (goja.Value, error) {
 		_ = env.Set(svc, stub)
 	}
 	return env, nil
+}
+
+// stubServices is every service the bindings can serve, in a stable order.
+func stubServices() []string {
+	out := make([]string, 0, len(serviceMethods))
+	for svc := range serviceMethods {
+		out = append(out, svc)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func hasGrant(grants map[string]string, service string) bool {

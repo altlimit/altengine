@@ -41,6 +41,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Before {id}, or "sizes" is read as a job id.
 	mux.HandleFunc("GET "+p+"/sizes", common.Wrap(h.sizes))
 	mux.HandleFunc("GET "+p+"/{id}", common.Wrap(h.get))
+	mux.HandleFunc("GET "+p+"/{id}/logs", common.Wrap(h.logs))
 	mux.HandleFunc("POST "+p+"/{id}/cancel", common.Wrap(h.cancel))
 }
 
@@ -121,6 +122,22 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 		return common.NotFound("job not found")
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]any{"job": job})
+	return nil
+}
+
+// logs serves what the job printed. The container's stdout and stderr are captured into a
+// bounded per-job buffer; before this they went to /dev/null, so a local `echo` vanished.
+func (h *Handler) logs(w http.ResponseWriter, r *http.Request) error {
+	inst, _, err := h.resolve(r, auth.Read)
+	if err != nil {
+		return err
+	}
+	from, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+	page, ok := h.store.Logs(inst.ID, r.PathValue("id"), from)
+	if !ok {
+		return common.NotFound("job not found")
+	}
+	common.WriteJSON(w, http.StatusOK, page)
 	return nil
 }
 
