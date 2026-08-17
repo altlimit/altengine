@@ -12,6 +12,7 @@ import (
 
 	"github.com/altlimit/altengine/cli/internal/admin"
 	"github.com/altlimit/altengine/cli/internal/auth"
+	"github.com/altlimit/altengine/cli/internal/blob"
 	"github.com/altlimit/altengine/cli/internal/channel"
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/container"
@@ -61,6 +62,11 @@ func New(opts Options) (*Server, error) {
 	channel.NewHandler(reg, a, hub).WithIdentity(idSvc).Register(mux)
 	identity.NewHandler(reg, idSvc).Register(mux)
 
+	// Blob. With a data directory the objects are files on disk beside the other services'
+	// databases — a blobkey stored in a local datastore document has to still resolve after a
+	// restart, or the local app breaks in a way the hosted one does not.
+	blob.NewHandler(reg, a, blob.NewStore(opts.DataDir)).Register(mux)
+
 	// Functions. The stubs a function gets (env.datastore, env.search, ...) dispatch
 	// IN-PROCESS into this same mux, so a call from a function goes through the very
 	// handlers the REST API uses rather than a second implementation of them. Registered
@@ -109,6 +115,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  api keys:       dev-open (any 'Authorization: Bearer <token>' works)")
 	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
 	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
+	log.Printf("  blob:           /v1/blob/{instance} — public objects at /blob/{instance}/{name}/{id}")
 	log.Printf("  containers:     /v1/container/{instance} — jobs run on your local Docker daemon")
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
@@ -130,12 +137,17 @@ func dataLabel(d string) string {
 // a Bearer token that JS must attach explicitly, so a foreign page has no ambient credential
 // to ride.
 //
-// Scoped to /v1/* on purpose. The admin plane is same-origin (the console is served from this
-// same server) and, hosted, is cookie-authed with a CSRF Origin check — giving it CORS here
-// would teach a habit the hosted service does not allow.
+// Scoped to /v1/* and /_blob/* on purpose. The admin plane is same-origin (the console is served
+// from this same server) and, hosted, is cookie-authed with a CSRF Origin check — giving it CORS
+// here would teach a habit the hosted service does not allow.
+//
+// /_blob is where a browser PUTs an upload's bytes. Hosted that PUT goes to object storage on
+// another origin entirely, where CORS is configured on the bucket; without the same allowance
+// here, an upload that works in production would fail from a Vite dev server and look like an
+// emulator bug. PUT is in the method list for that reason and no other.
 func corsMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") && !strings.HasPrefix(r.URL.Path, "/_blob/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -145,8 +157,9 @@ func corsMW(next http.Handler) http.Handler {
 		}
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)
-		h.Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+		h.Set("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
 		h.Set("Access-Control-Allow-Headers", "Authorization,Content-Type")
+		h.Set("Access-Control-Expose-Headers", "ETag")
 		h.Set("Access-Control-Max-Age", "86400")
 		h.Add("Vary", "Origin")
 		// Preflight never reaches a route.

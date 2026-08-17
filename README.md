@@ -1,7 +1,8 @@
 # altengine
 
 Developer tooling and SDKs for [altengine](https://console.altengine.net) — managed
-**datastore**, **search**, and realtime **channels** behind one API key.
+**datastore**, **search**, realtime **channels**, end-user **auth**, **functions**,
+**blob** storage and **containers**, behind one API key.
 
 | Folder | What it is | Install |
 |---|---|---|
@@ -44,6 +45,36 @@ const ch = ae.channel("myapp");
 const { token } = await ch.createToken({ channels: ["room:1"] });
 await ch.publish("room:1", { hello: "world" });
 ```
+
+Blob stores files, and the bytes never travel through the API. You ask for an upload URL
+and PUT to it — locally that URL points back at the emulator, hosted it points at object
+storage. Either way the size and content type you declared are enforced by whoever
+receives the bytes, so an upload that is refused in production is refused here too. There
+is no SDK client yet, so call the REST API directly:
+
+```ts
+const API = "http://127.0.0.1:9191";
+const h = { authorization: "Bearer dev", "content-type": "application/json" };
+const bytes = new TextEncoder().encode("hello world");
+
+const up = await fetch(`${API}/v1/blob/myapp/uploads`, {
+  method: "POST", headers: h,
+  body: JSON.stringify({ name: "hello.txt", size: bytes.length, content_type: "text/plain", public: true }),
+}).then((r) => r.json());
+
+// Straight to storage. The size is signed in, so this is the one chance to send exactly it.
+await fetch(up.upload_url, { method: "PUT", headers: { "content-type": "text/plain" }, body: bytes });
+
+const { blob } = await fetch(`${API}/v1/blob/myapp/${up.id}`, { headers: h }).then((r) => r.json());
+console.log(blob.url); // http://127.0.0.1:9191/blob/myapp/hello.txt/<id>
+```
+
+There is no commit step, here or hosted: the row is promoted by the side that received the
+bytes, never by the client reporting on itself. Public objects are served from a stable URL
+(a `{slug}-blob` hostname in production, a path locally, since there is no wildcard DNS on
+your laptop); private ones get a short-lived signed URL from `GET /{id}`. Run
+`altengine dev` with a data directory and uploads survive a restart, so a blobkey stored in
+a local datastore document still resolves tomorrow.
 
 Containers run a Docker image as a background job, for the work that will not fit in a
 function. There is no SDK client for them yet, so call the REST API directly. Locally
