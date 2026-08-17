@@ -96,6 +96,14 @@ func (r *Registry) save() {
 	}
 }
 
+// Services is every service the emulator knows how to hold instances for.
+//
+// It exists so that adding one is a single edit. The dev-open grant map used to carry its own
+// copy of this list, and when the container service landed nobody added it there — so every
+// container call in the emulator's DEFAULT mode answered 403, which reads as a broken emulator
+// rather than a missing line in an auth file. A test asserts dev-open covers all of these.
+var Services = []string{"search", "datastore", "channel", "auth", "functions", "container"}
+
 // needsSecret reports whether a service signs tokens with a per-instance secret: channel
 // subscriber tokens and auth end-user identity tokens.
 func needsSecret(service string) bool { return service == "channel" || service == "auth" }

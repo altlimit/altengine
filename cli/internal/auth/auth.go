@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/altlimit/altengine/cli/internal/common"
+	"github.com/altlimit/altengine/cli/internal/control"
 )
 
 const DevOrgID = "dev"
@@ -119,11 +120,16 @@ func (s *Store) Resolve(r *http.Request) (*Identity, error) {
 		return id, nil
 	}
 	if s.devOpen {
-		// Every service, or a new one silently 403s in dev-open mode — which reads as a
-		// broken emulator rather than a missing line here.
-		return &Identity{OrgID: DevOrgID, Grants: Grants{
-			"search": "full", "channel": "full", "datastore": "full", "auth": "full", "functions": "full",
-		}}, nil
+		// Every service, or a new one silently 403s in dev-open mode — which reads as a broken
+		// emulator rather than a missing line here. That was not hypothetical: this used to be a
+		// hand-written list, the container service was left out of it, and containers were
+		// therefore unusable in the mode nearly everyone runs. Built from control.Services now,
+		// so registering a service is what grants it.
+		g := Grants{}
+		for _, svc := range control.Services {
+			g[svc] = "full"
+		}
+		return &Identity{OrgID: DevOrgID, Grants: g}, nil
 	}
 	return nil, common.Unauthenticated("invalid API key")
 }
