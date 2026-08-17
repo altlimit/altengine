@@ -14,6 +14,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/channel"
 	"github.com/altlimit/altengine/cli/internal/common"
+	"github.com/altlimit/altengine/cli/internal/container"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
 	"github.com/altlimit/altengine/cli/internal/functions"
@@ -68,6 +69,12 @@ func New(opts Options) (*Server, error) {
 	fnHandler := functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux)
 	fnHandler.Register(mux)
 
+	// Containers, after functions: a job's completion callback is a function invocation
+	// dispatched into this same mux, so the route it targets has to be mounted already.
+	// Jobs live in memory only — a container that outlives the emulator process is not
+	// something a restart should adopt.
+	container.NewHandler(reg, a, container.NewStore(nil), mux).Register(mux)
+
 	// Admin before MCP: MCP's tools dispatch into this same mux, and some of them (the
 	// datastore collection listing) reach an /admin route, so those must already be mounted.
 	// Its console handler is a catch-all on "/", which is also why MCP mounts an explicit
@@ -102,6 +109,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  api keys:       dev-open (any 'Authorization: Bearer <token>' works)")
 	log.Printf("  auth service:   /v1/auth/{instance} — one-time codes are printed here")
 	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
+	log.Printf("  containers:     /v1/container/{instance} — jobs run on your local Docker daemon")
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
 	return http.ListenAndServe(s.opts.Addr, s.Handler())

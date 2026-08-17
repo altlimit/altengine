@@ -108,6 +108,15 @@ func defaultConfig(service string) map[string]any {
 		return map[string]any{"rateLimit": 0, "autoId": "uuid", "autoIndex": true}
 	case "channel":
 		return map[string]any{"presence": false, "publishRateLimit": 0, "connectRateLimit": 0}
+	case "container":
+		// allowedImages is EMPTY on purpose — a new instance runs nothing until someone says
+		// what it may run. See internal/container.
+		return map[string]any{
+			"allowedImages": []any{},
+			"maxTimeoutMs":  300000,
+			"maxConcurrent": 2,
+			"maxJobCostUsd": 1,
+		}
 	case "auth":
 		// The seed blob an auth instance starts with. Every key is optional — the auth
 		// service defaults anything missing — so this is what the console pre-populates,

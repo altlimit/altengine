@@ -19,7 +19,7 @@ Run the whole platform locally — one static binary, no dependencies, no signup
 ```bash
 alt install altlimit/altengine     # via https://github.com/altlimit/alt
 altengine dev
-# → http://127.0.0.1:9191  (admin console + all three data planes)
+# → http://127.0.0.1:9191  (admin console + every data plane)
 ```
 
 Talk to it with the SDK (any non-empty API key works against the emulator):
@@ -43,6 +43,25 @@ const hits = await idx.search({ query: "shoes price<100" });
 const ch = ae.channel("myapp");
 const { token } = await ch.createToken({ channels: ["room:1"] });
 await ch.publish("room:1", { hello: "world" });
+```
+
+Containers run a Docker image as a background job, for the work that will not fit in a
+function. There is no SDK client for them yet, so call the REST API directly. Locally
+they run on **your** Docker daemon — unlike everything else here, this one needs Docker
+running, and refuses with a clear 503 when it is not. It will not pretend a job ran:
+
+```ts
+const API = "http://127.0.0.1:9191";
+const h = { authorization: "Bearer dev", "content-type": "application/json" };
+
+// Allow the image first (console → Containers → Settings); an empty allowlist runs nothing.
+const { job } = await fetch(`${API}/v1/container/myapp`, {
+  method: "POST", headers: h,
+  body: JSON.stringify({ image: "alpine:3", cmd: ["sh", "-c", "echo hi"] }),
+}).then((r) => r.json());
+
+// Returns as soon as the container starts — poll, or have the instance call a function.
+const status = await fetch(`${API}/v1/container/myapp/${job.id}`, { headers: h }).then((r) => r.json());
 ```
 
 Drop `dev: true` and the SDK targets production (`https://api.altengine.net`) —
