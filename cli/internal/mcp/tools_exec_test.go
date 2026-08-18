@@ -13,6 +13,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -303,4 +304,129 @@ func TestAuthTools(t *testing.T) {
 func mustCreate(t *testing.T, h *Handler, service, name string) {
 	t.Helper()
 	runTool(t, h, "create_instance", map[string]any{"service": service, "name": name})
+}
+
+// The six tools that closed the see-but-cannot-reach gaps. Registered is not the same as
+// working: the parity test only checks NAMES, and a tool whose path or body is wrong passes it
+// while failing every real call. So each one is actually executed against a live data plane.
+func TestSurfaceToolsExecute(t *testing.T) {
+	h := newLiveHandler(t)
+
+	t.Run("datastore indexes: list, create, list again", func(t *testing.T) {
+		mustCreate(t, h, "datastore", "idxdb")
+		runTool(t, h, "datastore_put", map[string]any{
+			"instance": "idxdb", "collection": "tasks",
+			"documents": []any{map[string]any{"key": "t1", "data": map[string]any{"owner": "amy", "due": 3}}},
+		})
+
+		before := runTool(t, h, "datastore_list_indexes", map[string]any{
+			"instance": "idxdb", "collection": "tasks",
+		})
+		start := len(indexList(before))
+
+		// Equality field first, range/sort field second — the order the description insists on.
+		runTool(t, h, "datastore_create_index", map[string]any{
+			"instance": "idxdb", "collection": "tasks", "fields": []any{"owner", "due"},
+		})
+
+		after := runTool(t, h, "datastore_list_indexes", map[string]any{
+			"instance": "idxdb", "collection": "tasks",
+		})
+		if len(indexList(after)) != start+1 {
+			t.Fatalf("index count went %d -> %d, want +1 (%v)", start, len(indexList(after)), after)
+		}
+	})
+
+	t.Run("search schema and get-by-id", func(t *testing.T) {
+		mustCreate(t, h, "search", "cat")
+		runTool(t, h, "search_put_documents", map[string]any{
+			"instance": "cat", "index": "items",
+			"documents": []any{map[string]any{"id": "i1", "fields": []any{
+				map[string]any{"name": "title", "type": "text", "value": "red hat"},
+				map[string]any{"name": "price", "type": "number", "value": 12},
+			}}},
+		})
+
+		// The schema is the thing an agent needs before it can write a query at all: `price`
+		// takes range operators only because it was indexed as a number.
+		schema := runTool(t, h, "search_get_schema", map[string]any{"instance": "cat", "index": "items"})
+		// `fields` is name -> list of types, matching hosted's SchemaResult: one field name can
+		// legitimately carry more than one type across documents, which is why it is a list.
+		fields, _ := schema["fields"].(map[string]any)
+		if !hasFieldType(fields, "title", "text") || !hasFieldType(fields, "price", "number") {
+			t.Fatalf("schema did not report both field types: %v", schema)
+		}
+
+		got := runTool(t, h, "search_get_documents", map[string]any{
+			"instance": "cat", "index": "items", "ids": []any{"i1"},
+		})
+		if len(got["documents"].([]any)) != 1 {
+			t.Fatalf("search_get_documents returned %v", got)
+		}
+		// A miss is an absence, not an error — the description promises exactly this.
+		miss := runTool(t, h, "search_get_documents", map[string]any{
+			"instance": "cat", "index": "items", "ids": []any{"nope"},
+		})
+		if len(miss["documents"].([]any)) != 0 {
+			t.Fatalf("an unknown id should return no documents, got %v", miss)
+		}
+	})
+
+	t.Run("channel presence reports whether it is enabled", func(t *testing.T) {
+		mustCreate(t, h, "channel", "pres")
+		// Presence is off by default, and the tool must SAY so rather than return an empty
+		// roster — "nobody here" and "we never tracked" are different answers.
+		txt, isErr := toolText(t, h, "channel_presence", map[string]any{
+			"instance": "pres", "channel": "room:1",
+		})
+		if !isErr {
+			t.Fatalf("presence disabled should be reported as an error, got %s", txt)
+		}
+		if !strings.Contains(txt, "presence") {
+			t.Fatalf("the refusal should name presence, got %s", txt)
+		}
+	})
+
+	t.Run("container sizes lists what run will accept", func(t *testing.T) {
+		mustCreate(t, h, "container", "jobs")
+		got := runTool(t, h, "container_sizes", map[string]any{"instance": "jobs"})
+		sizes, _ := got["sizes"].([]any)
+		if len(sizes) == 0 {
+			t.Fatalf("container_sizes returned no sizes: %v", got)
+		}
+		// The point of the tool: container_run's `size` argument must be one of these.
+		names := map[string]bool{}
+		for _, s := range sizes {
+			if m, ok := s.(map[string]any); ok {
+				names[fmt.Sprint(m["name"])] = true
+			}
+		}
+		if !names["small"] {
+			t.Fatalf("expected a 'small' size among %v", names)
+		}
+	})
+}
+
+// indexList lifts the index array out however the route spells it, so the test asserts on the
+// COUNT changing rather than on a shape it would then be pinning by accident.
+func indexList(res map[string]any) []any {
+	for _, k := range []string{"indexes", "index", "items"} {
+		if v, ok := res[k].([]any); ok {
+			return v
+		}
+	}
+	return nil
+}
+
+func hasFieldType(fields map[string]any, name, typ string) bool {
+	types, ok := fields[name].([]any)
+	if !ok {
+		return false
+	}
+	for _, v := range types {
+		if fmt.Sprint(v) == typ {
+			return true
+		}
+	}
+	return false
 }

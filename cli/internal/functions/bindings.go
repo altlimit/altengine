@@ -49,6 +49,13 @@ type bindings struct {
 type call struct {
 	method  string
 	level   auth.Level
+	// levelFor overrides `level` when the grant a call needs depends on its ARGUMENTS.
+	// Only channel.token does: minting a publish-capable token is a write, minting a
+	// subscriber is a read, exactly as POST /tokens decides it. A static level here would
+	// make the emulator the MORE PERMISSIVE of the two, which is the one direction of
+	// divergence that actually costs something — a function that mints publish tokens
+	// locally on a read grant, then 403s in production.
+	levelFor func(args []goja.Value) auth.Level
 	path    func(t target, args []goja.Value) (string, error)
 	body    func(args []goja.Value) (any, error)
 	unwrap  string // field to lift out of the response, "" to return the whole object
@@ -103,7 +110,11 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 		return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
 	}
 	// THE blast-radius bound. Same ladder as an API key's grants.
-	if err := auth.Require(&auth.Identity{Grants: auth.Grants(grants)}, service, t.instance, m.level); err != nil {
+	level := m.level
+	if m.levelFor != nil {
+		level = m.levelFor(args)
+	}
+	if err := auth.Require(&auth.Identity{Grants: auth.Grants(grants)}, service, t.instance, level); err != nil {
 		return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
 	}
 
@@ -279,6 +290,21 @@ func readBytes(v goja.Value) ([]byte, error) {
 	return nil, fmt.Errorf("content must be a string, an ArrayBuffer, or a typed array")
 }
 
+// optField reads one field out of an options OBJECT argument, or nil when the argument or the
+// field is absent. The stubs take named options rather than positional parameters (hosted does
+// the same) so a later addition cannot shift an existing caller's arguments.
+func optField(args []goja.Value, i int, field string) any {
+	m, ok := argAny(args, i).(map[string]any)
+	if !ok {
+		return nil
+	}
+	v, ok := m[field]
+	if !ok {
+		return nil
+	}
+	return v
+}
+
 func esc(s string) string { return url.PathEscape(s) }
 
 // serviceMethods maps every stub method onto its REST equivalent. The signatures match
@@ -300,8 +326,11 @@ var serviceMethods = map[string]map[string]call{
 			},
 			body: func(a []goja.Value) (any, error) { return map[string]any{"keys": argAny(a, 2)}, nil },
 		},
+		// `full`, matching the hosted stub. This was `write` and let a function delete
+		// locally that would 403 in production — the works-here-fails-there divergence the
+		// emulator exists to prevent.
 		"delete": {
-			method: "POST", level: auth.Write, minArgs: 3,
+			method: "POST", level: auth.Full, minArgs: 3,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/v1/datastore/%s/ns/%s/col/%s/documents/delete", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
 			},
@@ -337,8 +366,10 @@ var serviceMethods = map[string]map[string]call{
 				return fmt.Sprintf("/v1/datastore/%s/ns/%s/col/%s/indexes", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
 			},
 		},
+		// `write`, matching the hosted stub — this was `full`, so a function correctly
+		// granted write could not create an index locally though production allows it.
 		"createIndex": {
-			method: "POST", level: auth.Full, minArgs: 3,
+			method: "POST", level: auth.Write, minArgs: 3,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/v1/datastore/%s/ns/%s/col/%s/indexes", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
 			},
@@ -348,6 +379,14 @@ var serviceMethods = map[string]map[string]call{
 					unique = v.ToBoolean()
 				}
 				return map[string]any{"fields": argAny(a, 2), "unique": unique}, nil
+			},
+		},
+		// `full`, not the `write` that creates one: dropping an index un-serves every query
+		// that relied on it, which the structural guard then rejects.
+		"deleteIndex": {
+			method: "DELETE", level: auth.Full, minArgs: 3,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/datastore/%s/ns/%s/col/%s/indexes/%v", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1)), esc(argStr(a, 2))), nil
 			},
 		},
 	},
@@ -366,8 +405,9 @@ var serviceMethods = map[string]map[string]call{
 			},
 			body: func(a []goja.Value) (any, error) { return map[string]any{"ids": argAny(a, 2)}, nil },
 		},
+		// `full`, matching the hosted stub — same fix as datastore.delete above.
 		"delete": {
-			method: "POST", level: auth.Write, minArgs: 3,
+			method: "POST", level: auth.Full, minArgs: 3,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/v1/search/%s/ns/%s/idx/%s/documents/delete", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
 			},
@@ -386,6 +426,30 @@ var serviceMethods = map[string]map[string]call{
 				return fmt.Sprintf("/v1/search/%s/ns/%s/idx/%s/schema", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
 			},
 		},
+		"listIndexes": {
+			method: "GET", level: auth.Read, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				q := url.Values{}
+				if v := optField(a, 1, "q"); v != nil {
+					q.Set("q", fmt.Sprint(v))
+				}
+				if v := optField(a, 1, "limit"); v != nil {
+					q.Set("limit", fmt.Sprintf("%v", v))
+				}
+				p := fmt.Sprintf("/v1/search/%s/ns/%s/idx", esc(t.instance), nsSegment(t.namespace))
+				if len(q) > 0 {
+					p += "?" + q.Encode()
+				}
+				return p, nil
+			},
+		},
+		// `full`, not write: this destroys the whole index, not documents in it.
+		"deleteIndex": {
+			method: "DELETE", level: auth.Full, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/search/%s/ns/%s/idx/%s", esc(t.instance), nsSegment(t.namespace), esc(argStr(a, 1))), nil
+			},
+		},
 	},
 	"channel": {
 		"publish": {
@@ -395,6 +459,41 @@ var serviceMethods = map[string]map[string]call{
 			},
 			body: func(a []goja.Value) (any, error) {
 				return map[string]any{"channel": argStr(a, 1), "data": argAny(a, 2)}, nil
+			},
+		},
+		// Mint a subscriber token. The options object is camelCase because that is what the
+		// hosted stub takes; the REST body is snake_case. Translating here rather than
+		// accepting both is deliberate — a function that works locally with `ttl_seconds`
+		// would silently fall back to the default TTL in production, where the field is
+		// simply not read.
+		"token": {
+			method: "POST", level: auth.Read, minArgs: 1,
+			levelFor: func(a []goja.Value) auth.Level {
+				if pub := optField(a, 1, "publish"); pub != nil && pub != false {
+					return auth.Write
+				}
+				return auth.Read
+			},
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/channel/%s/tokens", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				out := map[string]any{}
+				for stub, rest := range map[string]string{
+					"channels": "channels", "ttlSeconds": "ttl_seconds",
+					"publish": "publish", "presenceId": "presence_id",
+				} {
+					if v := optField(a, 1, stub); v != nil {
+						out[rest] = v
+					}
+				}
+				return out, nil
+			},
+		},
+		"presence": {
+			method: "GET", level: auth.Read, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/channel/%s/presence?channel=%s", esc(t.instance), url.QueryEscape(argStr(a, 1))), nil
 			},
 		},
 	},

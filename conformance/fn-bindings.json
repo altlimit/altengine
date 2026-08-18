@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "THE env.* CAPABILITY CONTRACT, shared by the hosted stubs and the CLI emulator.",
+    "",
+    "Each entry is the MINIMUM grant level a function needs to call that method. Two",
+    "implementations enforce this \u2014 src/functions/api/*.ts in the private worker, and",
+    "cli/internal/functions/bindings.go here \u2014 and neither can import the other, so before",
+    "this file they were two hand-written ladders that had already drifted three times.",
+    "A divergence is not cosmetic: a method that needs 'full' hosted but 'write' locally",
+    "runs fine on a developer's machine and 403s in production.",
+    "",
+    "An ARRAY means the level depends on the arguments; the values are the possible levels,",
+    "lowest first. Only channel.token does this: minting a subscriber token is a read, minting",
+    "a publish-capable one is a write.",
+    "",
+    "Both sides assert against this file. Edit it only when the capability itself changes."
+  ],
+  "services": {
+    "auth": {
+      "verifyToken": "read",
+      "getUser": "read",
+      "listUsers": "read",
+      "setClaims": "write",
+      "setProfile": "write",
+      "setDisabled": "write",
+      "deleteUser": "full",
+      "revokeSessions": "write"
+    },
+    "blob": {
+      "put": "write",
+      "uploadUrl": "write",
+      "get": "read",
+      "bytes": "read",
+      "list": "read",
+      "setPublic": "write",
+      "delete": "full"
+    },
+    "channel": {
+      "publish": "write",
+      "token": [
+        "read",
+        "write"
+      ],
+      "presence": "read"
+    },
+    "container": {
+      "run": "write",
+      "get": "read",
+      "list": "read",
+      "cancel": "write",
+      "logs": "read"
+    },
+    "datastore": {
+      "put": "write",
+      "get": "read",
+      "delete": "full",
+      "query": "read",
+      "aggregate": "read",
+      "transaction": "write",
+      "listIndexes": "read",
+      "createIndex": "write",
+      "deleteIndex": "full"
+    },
+    "search": {
+      "index": "write",
+      "get": "read",
+      "delete": "full",
+      "search": "read",
+      "schema": "read",
+      "listIndexes": "read",
+      "deleteIndex": "full"
+    }
+  }
+}
