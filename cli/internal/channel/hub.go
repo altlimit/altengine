@@ -3,6 +3,7 @@ package channel
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,6 +102,33 @@ func (h *Hub) memberCountLocked(r *room, pid string) int {
 }
 
 // Publish fans a message out to a channel's subscribers, returning the delivered count.
+// RoomInfo is one live channel and how many sockets are on it.
+type RoomInfo struct {
+	Channel     string `json:"channel"`
+	Subscribers int    `json:"subscribers"`
+}
+
+// Rooms lists an instance's LIVE channels, newest-irrelevant, sorted by name.
+//
+// "Live" is the whole definition: a channel exists while someone is subscribed to it and stops
+// existing when the last socket leaves. There is no registry of channel names because there is
+// nothing to register — publishing to a name nobody is listening on is legal and creates
+// nothing. That is the same answer hosted gives from its directory.
+func (h *Hub) Rooms(instanceID string) []RoomInfo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prefix := instanceID + ":"
+	out := []RoomInfo{}
+	for key, r := range h.rooms {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		out = append(out, RoomInfo{Channel: strings.TrimPrefix(key, prefix), Subscribers: len(r.conns)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Channel < out[j].Channel })
+	return out
+}
+
 func (h *Hub) Publish(instanceID, channel string, data json.RawMessage) (int, error) {
 	frame, _ := json.Marshal(map[string]any{
 		"channel": channel,

@@ -42,7 +42,25 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+p+"/tokens", common.Wrap(h.tokens))
 	mux.HandleFunc("POST "+p+"/publish", common.Wrap(h.publish))
 	mux.HandleFunc("GET "+p+"/presence", common.Wrap(h.presence))
+	mux.HandleFunc("GET "+p+"/rooms", common.Wrap(h.rooms))
 	mux.HandleFunc("GET "+p+"/subscribe", common.Wrap(h.subscribe))
+}
+
+// rooms lists the instance's live channels. Live is the whole definition: a channel exists
+// while someone is subscribed and stops existing when the last socket leaves, so this is a
+// snapshot of the topology rather than a stored list of names.
+func (h *Handler) rooms(w http.ResponseWriter, r *http.Request) error {
+	name := r.PathValue("instance")
+	id, err := h.Auth.Resolve(r)
+	if err != nil {
+		return err
+	}
+	if err := auth.Require(id, "channel", name, auth.Read); err != nil {
+		return err
+	}
+	inst := h.Reg.GetOrCreate("channel", name)
+	common.WriteJSON(w, http.StatusOK, map[string]any{"rooms": h.Hub.Rooms(inst.ID)})
+	return nil
 }
 
 func presenceEnabled(inst *control.Instance) bool {

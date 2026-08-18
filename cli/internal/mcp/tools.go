@@ -13,8 +13,10 @@ import (
 	"github.com/altlimit/altengine/cli/internal/control"
 )
 
-// services in the order an agent usually wants to see them.
-var services = []string{"search", "datastore", "channel", "auth", "functions"}
+// services an agent can create and address. Derived from the registry rather than written out
+// again — a hand-written copy of this list is how containers ended up uncreatable through MCP
+// while being perfectly creatable everywhere else.
+var services = control.Services
 
 // Bounds on what a tool returns.
 //

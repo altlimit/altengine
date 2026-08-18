@@ -65,6 +65,31 @@ func (h *Handler) authSetClaims(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// authSetDisabled locks or unlocks an account — suspension without deletion, which is the
+// moderation action an app reaches for first and the one the emulator could not perform.
+func (h *Handler) authSetDisabled(w http.ResponseWriter, r *http.Request) error {
+	s, err := h.authStore(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	disabled := body.Disabled == nil || *body.Disabled
+	ok, err := s.SetDisabled(r.PathValue("uid"), disabled, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return common.NotFound("user not found")
+	}
+	common.WriteJSON(w, 200, map[string]any{"uid": r.PathValue("uid"), "disabled": disabled})
+	return nil
+}
+
 // authBulkClaims merges a claims patch into EVERY user of an auth instance (backfill) — the
 // recovery path when a rule starts requiring a claim that accounts created earlier don't have.
 // only_missing (default true) fills gaps without overwriting per-user values; false forces the

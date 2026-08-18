@@ -408,6 +408,22 @@ func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, e
 	return n > 0, err
 }
 
+// SetDisabled locks or unlocks an account. The column has been in the schema since the start;
+// nothing could write it, so a user could be created and deleted locally but never suspended —
+// the one moderation action an app actually reaches for first.
+func (s *Store) SetDisabled(uid string, disabled bool, now int64) (bool, error) {
+	v := 0
+	if disabled {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE users SET disabled = ?, updated = ? WHERE uid = ?`, v, now, uid)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // MergeClaimsAllUsers merges a claims patch into EVERY user in one statement (backfill). It
 // mirrors the hosted service: onlyMissing=true fills gaps without clobbering a user's existing
 // value (existing wins), onlyMissing=false forces the patch's values everywhere (patch wins),
