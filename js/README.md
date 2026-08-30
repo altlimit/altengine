@@ -136,6 +136,39 @@ await sock.subscribe(["room:2"]);
 The `@altengine/sdk/channel` subpath contains no API-key code — safe to bundle
 into client apps.
 
+## Automation
+
+Run scripts on your own Windows machines — driving desktop applications and
+internal endpoints nothing on the internet can reach. Scripts are deployed with
+the CLI (`altengine automation deploy`); this starts them and reads what they
+produced.
+
+```ts
+const auto = ae.automation("fleet");
+
+// Start and wait. The run is finished when its OUTPUT has landed, not when the
+// script returned — so a `done` here always has its files, with live links.
+const { run, artifacts } = await auto.run(
+  { script: "nightly-export", params: { date: "2026-08-30" }, labels: ["site-dallas"] },
+  { onPoll: (r) => console.log(r.status, r.phase ?? "") },
+);
+for (const a of artifacts) console.log(a.name, a.size_bytes, a.url);
+
+// Or start and come back later.
+const started = await auto.start({ script: "nightly-export" });
+const page = await auto.logs(started.id);
+await auto.cancel(started.id);
+```
+
+A `queued` run is not a failure: no matching machine is online yet, and an office
+PC being asleep is the ordinary case. `wait`'s `timeoutMs` bounds the WAIT, not
+the run — giving up leaves the job running on the machine, so call `cancel` if
+that is what you meant.
+
+Organization API key only. End-user identity tokens are refused here as they are
+for containers: a run spends time on hardware you own, and access rules bound
+what a user may read, not what they may spend.
+
 ## Auth
 
 Auth gives your **end users** accounts and identity tokens, so a browser app can

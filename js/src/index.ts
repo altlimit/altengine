@@ -34,6 +34,7 @@ import { DatastoreClient, type DatastoreOptions } from "./datastore/client.js";
 import { SearchClient, type SearchOptions } from "./search/client.js";
 import { ChannelClient } from "./channel/client.js";
 import { AuthClient } from "./auth/client.js";
+import { AutomationClient } from "./automation/client.js";
 
 export class AltEngine {
   private readonly http: Http;
@@ -55,6 +56,13 @@ export class AltEngine {
   /** Server-side client for a channel instance (tokens, publish, presence). */
   channel(instance: string): ChannelClient {
     return new ChannelClient(this.http, instance);
+  }
+
+  /** Server-side client for an automation instance — start runs on your own machines, read
+   * what they produced, and declare schedules. Organization API key only: a run spends time on
+   * hardware you own, so end-user identity tokens are refused as they are for containers. */
+  automation(instance: string): AutomationClient {
+    return new AutomationClient(this.http, instance);
   }
 
   /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
@@ -86,6 +94,9 @@ export * from "./datastore/types.js";
 export { SearchClient, SearchIndex, type SearchOptions } from "./search/client.js";
 export * from "./search/types.js";
 export { f, facet } from "./search/fields.js";
+
+export { AutomationClient } from "./automation/client.js";
+export * from "./automation/types.js";
 
 export { ChannelClient } from "./channel/client.js";
 export * from "./channel/types.js";
