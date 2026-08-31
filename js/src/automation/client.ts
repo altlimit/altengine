@@ -140,9 +140,35 @@ export class AutomationClient {
   // --- machines, scripts, schedules ---------------------------------------
 
   /** Enrolled machines, with whether each is connected right now. */
-  async agents(): Promise<Agent[]> {
-    const { agents } = await this.http.request<{ agents: Agent[] }>("GET", `${this.base}/agents`);
-    return agents;
+  /**
+   * One page of enrolled machines, with whether each is connected right now.
+   *
+   * PAGED, and the cursor matters: a fleet of hundreds is the ordinary shape of this service —
+   * an office, a chain of dealerships — and a caller that ignores it is looking at part of one.
+   * `q` matches name, hostname or label, which are the three things a machine is known by.
+   */
+  async agents(
+    query: { cursor?: string; q?: string; limit?: number } = {}
+  ): Promise<{ agents: Agent[]; cursor: string | null }> {
+    return this.http.request("GET", `${this.base}/agents`, { query });
+  }
+
+  /**
+   * Every enrolled machine, walking the pages for you.
+   *
+   * Here because the alternative — a `agents()` that quietly returned the first page — is how a
+   * fleet with more machines than a page silently became a smaller fleet. If you are counting
+   * machines, or acting on all of them, use this one.
+   */
+  async allAgents(query: { q?: string } = {}): Promise<Agent[]> {
+    const out: Agent[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.agents({ ...query, cursor });
+      out.push(...page.agents);
+      if (!page.cursor) return out;
+      cursor = page.cursor;
+    }
   }
 
   async agent(agentId: string): Promise<Agent> {

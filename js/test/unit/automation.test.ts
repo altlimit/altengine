@@ -235,3 +235,58 @@ describe("credentials", () => {
     expect(body.env).toEqual({ PORTAL_PASSWORD: "new", PORTAL_USER: null });
   });
 });
+
+// A fleet of hundreds is the ordinary shape of this service — an office, a chain of dealerships.
+// A caller that reads the first page as the whole list is looking at part of one, and nothing in
+// the response says so unless it checks the cursor.
+describe("listing a fleet", () => {
+  it("hands back the cursor rather than pretending the page is the fleet", async () => {
+    const fetchMock = vi.fn(async () => json(200, { agents: [{ id: "ai1.a" }], cursor: "1000:ai1.a" }));
+    const page = await client(fetchMock as never).automation("fleet").agents();
+    expect(page.cursor).toBe("1000:ai1.a");
+    expect(page.agents).toHaveLength(1);
+  });
+
+  it("walks every page for a caller that asked for all of them", async () => {
+    const pages = [
+      { agents: [{ id: "a" }, { id: "b" }], cursor: "2:b" },
+      { agents: [{ id: "c" }, { id: "d" }], cursor: "4:d" },
+      { agents: [{ id: "e" }], cursor: null },
+    ];
+    let n = 0;
+    const seen: string[] = [];
+    const fetchMock = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      return json(200, pages[n++]);
+    });
+    const all = await client(fetchMock as never).automation("fleet").allAgents();
+    expect(all.map((a: any) => a.id)).toEqual(["a", "b", "c", "d", "e"]);
+    // The cursor has to be CARRIED, not merely received. Re-requesting page one forever is the
+    // failure this shape invites, and it looks like a hang rather than a bug.
+    expect(seen[1]).toContain("cursor=2%3Ab");
+    expect(seen[2]).toContain("cursor=4%3Ad");
+  });
+
+  it("stops on the first page when there is nothing more", async () => {
+    const fetchMock = vi.fn(async () => json(200, { agents: [{ id: "only" }], cursor: null }));
+    expect(await client(fetchMock as never).automation("fleet").allAgents()).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a search through on every page", async () => {
+    // Otherwise page two silently widens to the whole fleet, and "all the Kia machines" quietly
+    // becomes "the Kia machines, then everything else".
+    const pages = [
+      { agents: [{ id: "a" }], cursor: "1:a" },
+      { agents: [{ id: "b" }], cursor: null },
+    ];
+    let n = 0;
+    const seen: string[] = [];
+    const fetchMock = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      return json(200, pages[n++]);
+    });
+    await client(fetchMock as never).automation("fleet").allAgents({ q: "kia" });
+    expect(seen.every((u) => u.includes("q=kia"))).toBe(true);
+  });
+});

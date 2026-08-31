@@ -251,16 +251,21 @@ func automationActivate(fs *flag.FlagSet, rest []string, url, key, instance *str
 }
 
 func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *string) {
+	q := fs.String("q", "", "match name, hostname or label")
 	_ = fs.Parse(rest)
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)
 	}
-	agents, err := cfg.Agents()
+	agents, err := cfg.Agents(*q)
 	if err != nil {
 		fail(err)
 	}
 	if len(agents) == 0 {
+		if *q != "" {
+			fmt.Printf("no machine matches %q\n", *q)
+			return
+		}
 		fmt.Println("no machines enrolled — mint an enrollment token in the console")
 		return
 	}

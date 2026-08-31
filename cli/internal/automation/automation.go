@@ -159,12 +159,40 @@ type Agent struct {
 	LastSeen     int64    `json:"last_seen"`
 }
 
-func (c Config) Agents() ([]Agent, error) {
-	var out struct {
-		Agents []Agent `json:"agents"`
+// Agents lists EVERY enrolled machine, walking the pages.
+//
+// The endpoint is paged, and a fleet of hundreds is the ordinary shape of this service — an
+// office, a chain of dealerships. A caller that read the first page as the whole fleet would
+// print a shorter list with nothing to say it was short, which is the failure the cursor exists
+// to prevent. `q` matches name, hostname or label.
+func (c Config) Agents(q string) ([]Agent, error) {
+	var all []Agent
+	cursor := ""
+	for {
+		var out struct {
+			Agents []Agent `json:"agents"`
+			Cursor string  `json:"cursor"`
+		}
+		path := "/agents"
+		v := url.Values{}
+		if q != "" {
+			v.Set("q", q)
+		}
+		if cursor != "" {
+			v.Set("cursor", cursor)
+		}
+		if len(v) > 0 {
+			path += "?" + v.Encode()
+		}
+		if err := c.do(http.MethodGet, path, nil, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Agents...)
+		if out.Cursor == "" {
+			return all, nil
+		}
+		cursor = out.Cursor
 	}
-	err := c.do(http.MethodGet, "/agents", nil, &out)
-	return out.Agents, err
 }
 
 // --- runs -----------------------------------------------------------------
