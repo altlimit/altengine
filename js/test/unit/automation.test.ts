@@ -158,3 +158,80 @@ describe("waiting for a run", () => {
     expect(seen).toEqual([null, "uploading", null]);
   });
 });
+
+// Inbound data is the one path that goes toward the agent. What is worth asserting is the two
+// things a caller gets wrong: that it is addressed by KEY rather than by run id, and that
+// "nothing was running" is an error rather than a quiet success.
+describe("sending a value to a waiting job", () => {
+  it("addresses it by key, and passes the narrowing filters as query", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const u = new URL(String(url));
+      expect(u.pathname).toBe("/v1/automation/fleet/data/otp.dealer-42");
+      expect(u.searchParams.get("script")).toBe("portal-login");
+      expect(u.searchParams.get("agent_id")).toBe("ai1.a");
+      return json(200, { key: "otp.dealer-42", delivered: 1, runs: ["r1"], unreachable: [] });
+    }) as unknown as typeof fetch;
+
+    const out = await client(fetchImpl)
+      .automation("fleet")
+      .send("otp.dealer-42", "123456", { script: "portal-login", agentId: "ai1.a" });
+    expect(out.delivered).toBe(1);
+  });
+
+  it("sends the value as the whole body, not wrapped in an envelope", async () => {
+    // A poster is usually a webhook handler forwarding what it parsed. Wrapping it would mean
+    // every script unwrapping it again at the far end, where the code is hardest to change.
+    let body: string | undefined;
+    const fetchImpl = vi.fn(async (_u: string | URL, init?: RequestInit) => {
+      body = init?.body as string;
+      return json(200, { delivered: 1, runs: ["r1"], unreachable: [] });
+    }) as unknown as typeof fetch;
+
+    await client(fetchImpl).automation("fleet").send("otp", { code: "123456" });
+    expect(JSON.parse(body!)).toEqual({ code: "123456" });
+  });
+
+  it("throws when no run is executing, rather than reporting a quiet success", async () => {
+    // The overwhelmingly common failure is a race the poster cannot see: the code arrived four
+    // seconds after the script gave up. An integration has to be able to log or retry that.
+    const fetchImpl = vi.fn(async () =>
+      json(409, { error: { code: "FAILED_PRECONDITION", message: "no run is executing on this instance right now" } })
+    ) as unknown as typeof fetch;
+
+    await expect(client(fetchImpl).automation("fleet").send("otp", "1")).rejects.toThrow(/no run is executing/);
+  });
+
+  it("does not retry a delivery", async () => {
+    // A one-time code delivered twice is at best noise and at worst a second login attempt
+    // against a portal that counts them.
+    const fetchImpl = vi.fn(async () => json(500, { error: { message: "boom" } })) as unknown as typeof fetch;
+    await expect(client(fetchImpl).automation("fleet").send("otp", "1")).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("can name one run when it has the id", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      expect(new URL(String(url)).pathname).toBe("/v1/automation/fleet/runs/r1/data/otp");
+      return json(200, { delivered: true });
+    }) as unknown as typeof fetch;
+    await client(fetchImpl).automation("fleet").sendToRun("r1", "otp", "1");
+  });
+});
+
+describe("credentials", () => {
+  it("reads names, never values", async () => {
+    const fetchImpl = vi.fn(async () => json(200, { env: ["PORTAL_PASSWORD", "PORTAL_USER"] })) as unknown as typeof fetch;
+    expect(await client(fetchImpl).automation("fleet").env()).toEqual(["PORTAL_PASSWORD", "PORTAL_USER"]);
+  });
+
+  it("sends null to keep a stored value, which is the only way to rotate one of several", async () => {
+    let body: any;
+    const fetchImpl = vi.fn(async (_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string);
+      return json(200, { env: ["PORTAL_PASSWORD", "PORTAL_USER"] });
+    }) as unknown as typeof fetch;
+
+    await client(fetchImpl).automation("fleet").setEnv({ PORTAL_PASSWORD: "new", PORTAL_USER: null });
+    expect(body.env).toEqual({ PORTAL_PASSWORD: "new", PORTAL_USER: null });
+  });
+});

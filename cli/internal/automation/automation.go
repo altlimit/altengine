@@ -280,3 +280,61 @@ func (c Config) Logs(runID, cursor string) (*LogPage, error) {
 	err := c.do(http.MethodGet, "/runs/"+url.PathEscape(runID)+"/logs?"+q.Encode(), nil, &page)
 	return &page, err
 }
+
+// --- inbound data ---------------------------------------------------------
+
+// Delivery reports where a value went.
+type Delivery struct {
+	Key         string   `json:"key"`
+	Delivered   int      `json:"delivered"`
+	Runs        []string `json:"runs"`
+	Unreachable []string `json:"unreachable"`
+}
+
+// Send hands a value to whichever job is waiting for it — job.waitForData(key) on the other end.
+//
+// ADDRESSED BY KEY, not by run id: the thing that will actually deliver a one-time code — an SMS
+// webhook, an inbound-mail parser — was configured long before tonight's run existed. That puts a
+// duty on the key, since the value reaches every job executing on the instance and only one that
+// asks for that key ever sees it. `script` and `agent` narrow it.
+//
+// The body is the value itself rather than an envelope, because the poster is usually forwarding
+// what it just parsed and wrapping it would mean unwrapping it again in the script.
+func (c Config) Send(key string, value any, script, agent string) (*Delivery, error) {
+	q := url.Values{}
+	if script != "" {
+		q.Set("script", script)
+	}
+	if agent != "" {
+		q.Set("agent_id", agent)
+	}
+	path := "/data/" + url.PathEscape(key)
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out Delivery
+	err := c.do(http.MethodPost, path, value, &out)
+	return &out, err
+}
+
+// --- credentials ----------------------------------------------------------
+
+// Env lists the NAMES of the credentials this fleet's scripts read as env.NAME. Values are
+// write-only and are never returned, so a leaked key can replace one but not harvest it.
+func (c Config) Env() ([]string, error) {
+	var out struct {
+		Env []string `json:"env"`
+	}
+	err := c.do(http.MethodGet, "/env", nil, &out)
+	return out.Env, err
+}
+
+// SetEnv replaces the credential map. Omitting a name deletes it; a nil value KEEPS what is
+// stored, which is the only way to rotate one without re-typing the others nobody can read.
+func (c Config) SetEnv(env map[string]*string) ([]string, error) {
+	var out struct {
+		Env []string `json:"env"`
+	}
+	err := c.do(http.MethodPut, "/env", map[string]any{"env": env}, &out)
+	return out.Env, err
+}

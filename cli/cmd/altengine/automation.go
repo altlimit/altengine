@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,13 @@ func automationUsage() error {
         Print a run and its artifacts, with short-lived download links.
   cancel <run-id>
         Stop a run that is queued or running.
+  send [--script n] [--agent id] <key> [value]
+        Hand a value to whichever job is waiting for it — job.waitForData(key) on the
+        other end. Reads the value from stdin when it is not given, so a one-time code
+        can be piped in rather than typed into shell history.
+  env [--set NAME [value]] [--unset NAME]
+        List credential NAMES, or set one. Values are never readable back; a value not
+        given as an argument is read from stdin.
 
 Needs an org API key with access to the automation instance:
 
@@ -107,6 +115,10 @@ func automationCmd(args []string) {
 		automationGet(fs, rest, url, key, instance)
 	case "cancel":
 		automationCancel(fs, rest, url, key, instance)
+	case "send":
+		automationSend(fs, rest, url, key, instance)
+	case "env":
+		automationEnv(fs, rest, url, key, instance)
 	default:
 		fail(automationUsage())
 	}
@@ -456,4 +468,120 @@ func kvMap(list stringList) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// automationSend hands a value to whichever job is waiting for it.
+//
+// The value is read from an argument or from stdin, because the realistic caller is a shell
+// pipeline forwarding what something else just produced — a mail filter, a webhook relay — and
+// making it retype the code into an argument is how it ends up in shell history.
+func automationSend(fs *flag.FlagSet, rest []string, url, key, instance *string) {
+	script := fs.String("script", "", "only deliver to runs of this script")
+	agent := fs.String("agent", "", "only deliver to runs on this machine")
+	raw := fs.Bool("raw", false, "send the value as a string even if it looks like JSON")
+	_ = fs.Parse(rest)
+	if fs.NArg() < 1 {
+		fail(fmt.Errorf("usage: altengine automation send [flags] <key> [value]   (value may come from stdin)"))
+	}
+	cfg, err := resolveAutomation(url, key, instance)
+	if err != nil {
+		fail(err)
+	}
+
+	text := strings.Join(fs.Args()[1:], " ")
+	if text == "" {
+		b, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			fail(fmt.Errorf("reading the value from stdin: %w", rerr))
+		}
+		text = strings.TrimSpace(string(b))
+	}
+	if text == "" {
+		fail(fmt.Errorf("no value given, and stdin was empty"))
+	}
+
+	// JSON when it parses as JSON, a string otherwise — both are what a poster naturally sends,
+	// and the script sees the same shapes either way.
+	var value any = text
+	if !*raw {
+		var parsed any
+		if json.Unmarshal([]byte(text), &parsed) == nil {
+			value = parsed
+		}
+	}
+
+	out, err := cfg.Send(fs.Arg(0), value, *script, *agent)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("delivered to %d run(s): %s\n", out.Delivered, strings.Join(out.Runs, ", "))
+	if len(out.Unreachable) > 0 {
+		// Said out loud: "delivered to 1 of 2" is what explains a failure twenty minutes later.
+		fmt.Printf("not reachable: %s\n", strings.Join(out.Unreachable, ", "))
+	}
+}
+
+// automationEnv reads and writes the credentials a script signs in with.
+//
+// Values are write-only, so listing shows names. Setting one takes it from stdin when it is not
+// given as an argument, for the reason above: a password in an argument is a password in shell
+// history and in the process list.
+func automationEnv(fs *flag.FlagSet, rest []string, url, key, instance *string) {
+	set := fs.String("set", "", "name of a credential to set (value from the argument, or stdin)")
+	unset := fs.String("unset", "", "name of a credential to remove")
+	_ = fs.Parse(rest)
+	cfg, err := resolveAutomation(url, key, instance)
+	if err != nil {
+		fail(err)
+	}
+
+	if *set == "" && *unset == "" {
+		names, lerr := cfg.Env()
+		if lerr != nil {
+			fail(lerr)
+		}
+		if len(names) == 0 {
+			fmt.Println("no credentials set")
+			return
+		}
+		for _, n := range names {
+			fmt.Println(n)
+		}
+		return
+	}
+
+	// A full replacement, so every OTHER name is echoed back as nil — which the server reads as
+	// KEEP. Sending only the changed one would delete the rest, and this command cannot read them
+	// to send them back.
+	existing, err := cfg.Env()
+	if err != nil {
+		fail(err)
+	}
+	next := map[string]*string{}
+	for _, n := range existing {
+		if n != *unset {
+			next[n] = nil
+		}
+	}
+
+	if *set != "" {
+		value := strings.Join(fs.Args(), " ")
+		if value == "" {
+			b, rerr := io.ReadAll(os.Stdin)
+			if rerr != nil {
+				fail(fmt.Errorf("reading the value from stdin: %w", rerr))
+			}
+			value = strings.TrimRight(string(b), "\r\n")
+		}
+		if value == "" {
+			fail(fmt.Errorf("no value given for %s, and stdin was empty", *set))
+		}
+		next[*set] = &value
+	}
+
+	names, err := cfg.SetEnv(next)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("%d credential(s): %s\n", len(names), strings.Join(names, ", "))
 }

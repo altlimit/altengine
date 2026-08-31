@@ -176,6 +176,67 @@ export class AutomationClient {
   async deleteSchedule(scheduleId: string): Promise<void> {
     await this.http.request("DELETE", `${this.base}/schedules/${seg(scheduleId)}`, { retry: false });
   }
+
+  // --- inbound data --------------------------------------------------------
+
+  /**
+   * Hand a value to whichever job is waiting for it — `job.waitForData(key)` on the other end.
+   *
+   * THE CASE THIS IS FOR: a script signs into a portal, the portal sends a one-time code to a
+   * mailbox or a phone, and whatever receives that message calls this. Everything else the agent
+   * does is outbound; this is the one way to tell a run something.
+   *
+   * ADDRESSED BY KEY, not by run id, because the thing that will deliver the code — an SMS
+   * webhook, an inbound-mail parser — was configured months before tonight's run existed. That
+   * puts a duty on the key: the value reaches every job executing on the instance, and only one
+   * that asks for that key ever sees it, so `otp.dealer-42` is the shape to write when more than
+   * one job can be in flight. `script` and `agentId` narrow it further.
+   *
+   * Throws when nothing is running. The usual failure is a race you cannot see — the code arrived
+   * four seconds after the script gave up — and an integration needs to log that rather than read
+   * a silent success.
+   */
+  async send(
+    key: string,
+    value: unknown,
+    opts: { script?: string; agentId?: string } = {}
+  ): Promise<{ delivered: number; runs: string[]; unreachable: string[] }> {
+    return this.http.request("POST", `${this.base}/data/${seg(key)}`, {
+      query: { script: opts.script, agent_id: opts.agentId },
+      body: value,
+      retry: false,
+    });
+  }
+
+  /** The same, to ONE run by id — for when you were given the run id, typically because the
+   *  script handed out `job.dataUrl(key)` when it triggered whatever produces the value. */
+  async sendToRun(runId: string, key: string, value: unknown): Promise<{ delivered: boolean }> {
+    return this.http.request("POST", `${this.base}/runs/${seg(runId)}/data/${seg(key)}`, {
+      body: value,
+      retry: false,
+    });
+  }
+
+  // --- credentials ---------------------------------------------------------
+
+  /** The NAMES of the credentials this fleet's scripts read as `env.NAME`. Values are write-only
+   *  and never returned — a leaked key can replace one but not harvest it. */
+  async env(): Promise<string[]> {
+    const { env } = await this.http.request<{ env: string[] }>("GET", `${this.base}/env`);
+    return env;
+  }
+
+  /**
+   * Replace the credential map. Omitting a name deletes it; `null` for a name KEEPS what is
+   * stored, which is the only way to rotate one without re-typing the others you cannot read.
+   */
+  async setEnv(env: Record<string, string | null>): Promise<string[]> {
+    const res = await this.http.request<{ env: string[] }>("PUT", `${this.base}/env`, {
+      body: { env },
+      retry: false,
+    });
+    return res.env;
+  }
 }
 
 /** Sleep, abortable — so `wait` inside a request handler dies with the request rather than

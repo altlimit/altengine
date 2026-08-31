@@ -52,7 +52,7 @@ Usage:
   altengine dev [flags]              Start the emulator (data plane + admin console)
   altengine deploy [flags] <file>    Bundle a function and deploy it
   altengine functions <subcommand>   list | versions | rollback | pull
-  altengine automation <subcommand>  deploy | scripts | agents | run | runs | logs | get | cancel
+  altengine automation <subcommand>  deploy | scripts | agents | run | runs | logs | get | cancel | send | env
   altengine version                  Print version
 
 Deploying talks to the hosted service and needs an org API key with 'full' access to the
