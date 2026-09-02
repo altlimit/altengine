@@ -11,6 +11,10 @@
 package functions
 
 import (
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,6 +157,46 @@ func installGlobals(vm *goja.Runtime, in *invocation) error {
       get encoding() { return "utf-8"; }
       decode(b) { return b === undefined ? "" : __utf8decode(b); }
     };
+
+    // getRandomValues fills the caller's view IN PLACE and returns it — code does
+    // "crypto.getRandomValues(new Uint8Array(32))" and also "const a = new Uint8Array(32);
+    // crypto.getRandomValues(a);", and both have to work.
+    crypto.getRandomValues = function (view) {
+      if (!ArrayBuffer.isView(view)) {
+        throw new TypeError("getRandomValues expects an integer typed array");
+      }
+      // The spec refuses float views: asking for "random floats" this way does not mean
+      // what the caller thinks, so it is a TypeError rather than a surprise.
+      if (view instanceof Float32Array || view instanceof Float64Array) {
+        throw new TypeError("getRandomValues does not accept a float typed array");
+      }
+      const bytes = new Uint8Array(__randomBytes(view.byteLength));
+      new Uint8Array(view.buffer, view.byteOffset, view.byteLength).set(bytes);
+      return view;
+    };
+
+    // Only digest is emulated. The rest of SubtleCrypto is key material and signing, which
+    // is a much bigger surface — so those names throw and SAY they are not emulated,
+    // rather than being absent and failing as "undefined is not a function" three frames
+    // deep in whatever library reached for them.
+    const notEmulated = (name) => function () {
+      throw new Error(
+        "crypto.subtle." + name + " is not emulated locally (only digest is). " +
+        "The hosted runtime has the full WebCrypto API — test this against a deploy."
+      );
+    };
+    crypto.subtle = {
+      async digest(algorithm, data) {
+        const name = typeof algorithm === "string" ? algorithm : algorithm && algorithm.name;
+        return __digest(String(name || ""), data);
+      },
+    };
+    for (const name of [
+      "encrypt", "decrypt", "sign", "verify", "generateKey", "deriveKey",
+      "deriveBits", "importKey", "exportKey", "wrapKey", "unwrapKey",
+    ]) {
+      crypto.subtle[name] = notEmulated(name);
+    }
   `); err != nil {
 		return err
 	}
@@ -244,13 +288,67 @@ func installConsole(vm *goja.Runtime, in *invocation) {
 	_ = vm.Set("console", console)
 }
 
+// installCrypto provides the WebCrypto surface a function can count on.
+//
+// `randomUUID` alone was not enough, and the way it failed was the bad kind. Hosted
+// functions run on workerd, which has all of WebCrypto — so code written against
+// `crypto.getRandomValues` or `crypto.subtle.digest` works in production and dies HERE,
+// on the developer's machine, with "Object has no member 'getRandomValues'". That is
+// exactly backwards: the emulator exists to catch things before a deploy, not to be the
+// only place they break. Both are table stakes — you cannot mint a token or hash one
+// without them.
 func installCrypto(vm *goja.Runtime) {
 	c := vm.NewObject()
 	_ = c.Set("randomUUID", func() string { return uuid.NewString() })
 	_ = vm.Set("crypto", c)
 	_ = vm.Set("__b64encode", b64encode)
 	_ = vm.Set("__b64decode", b64decode)
+
+	// crypto/rand, never math/rand: these bytes end up as session tokens and API keys in
+	// code being developed against this, and "it was only the emulator" is not a thing
+	// anyone checks before shipping the algorithm around it.
+	_ = vm.Set("__randomBytes", func(n int) (goja.ArrayBuffer, error) {
+		if n < 0 {
+			return goja.ArrayBuffer{}, fmt.Errorf("byte length must not be negative")
+		}
+		if n > maxRandomBytes {
+			// The same quota the Web Crypto spec puts on getRandomValues.
+			return goja.ArrayBuffer{}, fmt.Errorf("getRandomValues supports at most %d bytes per call", maxRandomBytes)
+		}
+		b := make([]byte, n)
+		if _, err := rand.Read(b); err != nil {
+			return goja.ArrayBuffer{}, err
+		}
+		return vm.NewArrayBuffer(b), nil
+	})
+
+	_ = vm.Set("__digest", func(algorithm string, data goja.Value) (goja.ArrayBuffer, error) {
+		b, err := readBytes(data)
+		if err != nil {
+			return goja.ArrayBuffer{}, err
+		}
+		// Normalized the way the spec does — "sha-256", "SHA256" and "SHA-256" are one
+		// algorithm, and a function should not fail here over a hyphen.
+		switch strings.ToUpper(strings.ReplaceAll(algorithm, "-", "")) {
+		case "SHA1":
+			sum := sha1.Sum(b)
+			return vm.NewArrayBuffer(sum[:]), nil
+		case "SHA256":
+			sum := sha256.Sum256(b)
+			return vm.NewArrayBuffer(sum[:]), nil
+		case "SHA384":
+			sum := sha512.Sum384(b)
+			return vm.NewArrayBuffer(sum[:]), nil
+		case "SHA512":
+			sum := sha512.Sum512(b)
+			return vm.NewArrayBuffer(sum[:]), nil
+		}
+		return goja.ArrayBuffer{}, fmt.Errorf("unsupported digest algorithm %q (expected SHA-1, SHA-256, SHA-384 or SHA-512)", algorithm)
+	})
 }
+
+// The Web Crypto quota on a single getRandomValues call.
+const maxRandomBytes = 65536
 
 // installFetch provides outbound HTTP under the SAME rules as the hosted proxy.
 //

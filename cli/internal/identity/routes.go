@@ -47,6 +47,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+p+"/token/refresh", common.Wrap(h.refresh))
 	mux.HandleFunc("POST "+p+"/signout", common.Wrap(h.signout))
 	mux.HandleFunc("GET "+p+"/me", common.Wrap(h.me))
+	// Not a public endpoint — this is what `env.auth.verifyToken` dispatches into. The
+	// binding has always pointed here; the route did not exist, so every call landed on the
+	// console's catch-all and came back as HTML, which the binding reported as "unreadable
+	// response". A function that authenticates its caller — the documented reason
+	// verifyToken exists — could not run locally at all.
+	mux.HandleFunc("POST "+p+"/token/verify", common.Wrap(h.verifyToken))
 	mux.HandleFunc("POST "+p+"/passwordless/start", common.Wrap(h.passwordlessStart))
 	mux.HandleFunc("POST "+p+"/passwordless/verify", common.Wrap(h.passwordlessVerify))
 	mux.HandleFunc("POST "+p+"/password/reset/start", common.Wrap(h.resetStart))
@@ -311,6 +317,45 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 		return common.NotFound("user not found")
 	}
 	common.WriteJSON(w, 200, map[string]any{"user": user.public()})
+	return nil
+}
+
+// verifyToken backs `env.auth.verifyToken` for functions.
+//
+// Answers the claims for a good token and a JSON `null` for a bad one, with 200 either
+// way. That asymmetry is deliberate and matches hosted: the stub RETURNS null rather than
+// throwing, so user code written as `const id = await env.auth.verifyToken(...); if (!id)
+// return 401` behaves the same in both places. Answering 401 here would surface as a
+// thrown binding error and send that code down its failure path instead.
+func (h *Handler) verifyToken(w http.ResponseWriter, r *http.Request) error {
+	inst, _, _, err := h.instance(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	claims := VerifyIdentity(strings.TrimSpace(body.Token), inst.Secret)
+	if claims == nil || claims.Iss != inst.ID {
+		common.WriteJSON(w, 200, nil)
+		return nil
+	}
+	// `uid` alongside `sub`: the token is signed with `sub` (it is the JWT subject), but
+	// every other auth binding takes a `uid`, so the one call that produces the value
+	// spelling it differently is a trap worth closing on both sides.
+	common.WriteJSON(w, 200, map[string]any{
+		"iss":        claims.Iss,
+		"sub":        claims.Sub,
+		"uid":        claims.Sub,
+		"identifier": claims.Identifier,
+		"email":      claims.Email,
+		"profile":    claims.Profile,
+		"claims":     claims.Claims,
+		"exp":        claims.Exp,
+	})
 	return nil
 }
 

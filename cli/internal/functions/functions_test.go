@@ -444,3 +444,63 @@ func raw(in map[string]string) map[string]json.RawMessage {
 }
 
 var _ = fmt.Sprintf
+
+// WebCrypto. Hosted functions run on workerd, which has all of it; the emulator had only
+// crypto.randomUUID. So `crypto.getRandomValues` and `crypto.subtle.digest` — the two you
+// cannot mint or hash a token without — worked in production and threw "Object has no
+// member 'getRandomValues'" locally. That is the emulator failing at its one job, and the
+// reason these are asserted rather than assumed.
+func TestCryptoGetRandomValuesAndDigest(t *testing.T) {
+	mux := newTestServer(t)
+	deployFn(t, mux, "c", `export default { async fetch() {
+		const a = new Uint8Array(32);
+		const ret = crypto.getRandomValues(a);
+		const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+		let floatRefused = false;
+		try { crypto.getRandomValues(new Float64Array(2)); } catch { floatRefused = true; }
+		let signSays = "";
+		try { await crypto.subtle.sign(); } catch (e) { signSays = e.message; }
+		return Response.json({
+			// Filled IN PLACE and the same view handed back: both call shapes are used in the wild.
+			filled: a.some((b) => b !== 0),
+			sameView: ret === a,
+			// A wider view must be filled across its whole byte length, not its element count.
+			wide: crypto.getRandomValues(new Uint32Array(4)).some((v) => v !== 0),
+			distinct: hex(crypto.getRandomValues(new Uint8Array(16)).buffer) !==
+			          hex(crypto.getRandomValues(new Uint8Array(16)).buffer),
+			abc: hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("abc"))),
+			// "sha256" and {name:"SHA-256"} are the same algorithm; a hyphen must not decide.
+			looseName: hex(await crypto.subtle.digest({ name: "sha256" }, new TextEncoder().encode("abc"))),
+			floatRefused,
+			signSays,
+		});
+	} };`, nil)
+
+	rec := invoke(t, mux, "/fn/main/c")
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"filled", "sameView", "wide", "distinct", "floatRefused"} {
+		if out[k] != true {
+			t.Errorf("%s = %v, want true", k, out[k])
+		}
+	}
+	// The published SHA-256 test vector for "abc" — a digest that merely returns 32 bytes
+	// would pass a length check and still be wrong.
+	const abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if out["abc"] != abc {
+		t.Errorf("SHA-256(abc) = %v, want %s", out["abc"], abc)
+	}
+	if out["looseName"] != abc {
+		t.Errorf("digest({name:'sha256'}) = %v, want the same digest", out["looseName"])
+	}
+	// An unemulated method must name itself, not fail as "undefined is not a function"
+	// somewhere inside whichever library reached for it.
+	if msg, _ := out["signSays"].(string); !strings.Contains(msg, "not emulated") {
+		t.Errorf("crypto.subtle.sign said %q, want it to say it is not emulated", msg)
+	}
+}
