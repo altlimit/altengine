@@ -52,6 +52,14 @@ func NewHandler(reg *control.Registry, a *auth.Store, store *Store, mux http.Han
 	}
 }
 
+// WithHost tells the bindings where this emulator answers, so a URL minted inside a
+// function call (a blob upload or download, a channel subscribe) points somewhere the
+// caller can actually reach. See bindings.stampHost.
+func (h *Handler) WithHost(addr string) *Handler {
+	h.binder.host = addr
+	return h
+}
+
 // Register mounts both the deploy API and the invocation prefix.
 func (h *Handler) Register(mux *http.ServeMux) {
 	p := "/v1/functions/{instance}"

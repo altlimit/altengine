@@ -43,6 +43,14 @@ type bindings struct {
 	// token is any bearer string: the emulator's auth store is dev-open, so this only
 	// has to be present. Grants are enforced before we ever get here.
 	token string
+	// host is the address this emulator actually answers on, stamped onto every internal
+	// request. It matters because several services MINT URLS FROM THE REQUEST'S HOST — a
+	// blob upload URL, a blob download URL, a channel subscribe URL — and httptest's
+	// default host is `example.com`. A function asking for an upload URL would get one
+	// pointing at example.com, which fails at whatever the client is, with no clue as to
+	// why. Hosted these are absolute URLs to storage, so this is a difference that only
+	// ever shows up locally, and only for the paths that hand a URL to someone else.
+	host string
 }
 
 // call is one stub method: the HTTP shape it maps to, and how it reads its arguments.
@@ -157,6 +165,7 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 	}
 
 	req := httptest.NewRequest(m.method, path, bytes.NewReader(payload))
+	b.stampHost(req)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -181,11 +190,24 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 	return vm.ToValue(decoded), nil
 }
 
+// stampHost points an internal request at the address the emulator is reachable on, so a
+// URL minted from it works for whoever is handed it. Left alone when the address is not
+// known, which keeps httptest's own default for the unit tests that construct bindings
+// directly.
+func (b *bindings) stampHost(req *http.Request) {
+	if b.host == "" {
+		return
+	}
+	req.Host = b.host
+	req.URL.Host = b.host
+}
+
 // do makes one in-process request and decodes it, so the custom methods below report errors
 // exactly as invoke does. A non-JSON response comes back as raw bytes, which is how `bytes`
 // gets a file rather than a parse failure.
 func (b *bindings) do(method, path, contentType string, payload []byte) (any, error) {
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	b.stampHost(req)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

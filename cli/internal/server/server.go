@@ -87,7 +87,7 @@ func New(opts Options) (*Server, error) {
 	// handlers the REST API uses rather than a second implementation of them. Registered
 	// after the data planes it dispatches into — the mux is shared, so the routes those
 	// calls target must already be mounted.
-	fnHandler := functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux)
+	fnHandler := functions.NewHandler(reg, a, functions.NewStore(opts.DataDir), mux).WithHost(opts.Addr)
 	fnHandler.Register(mux)
 
 	// Containers, after functions: a job's completion callback is a function invocation

@@ -196,3 +196,37 @@ func TestUngrantedServicesAreAbsentFromEnv(t *testing.T) {
 		t.Fatalf("an ungranted service was handed to the function: %v", keys)
 	}
 }
+
+// A URL minted inside a function call has to point at the emulator, not at httptest's
+// default host. Blob's upload and download URLs are both built from the request's Host, so
+// without WithHost a function hands its caller `http://example.com/_blob/...` — which fails
+// wherever that caller is, with nothing in the message about why.
+func TestBlobUrlsPointAtTheEmulator(t *testing.T) {
+	reg, err := control.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := auth.NewStore(true)
+	mux := http.NewServeMux()
+	blob.NewHandler(reg, a, blob.NewStore("")).Register(mux)
+	NewHandler(reg, a, NewStore(""), mux).WithHost("127.0.0.1:9191").Register(mux)
+
+	deployFn(t, mux, "urls", `export default { async fetch(request, env) {
+		const up = await env.blob.uploadUrl({ instance: "files" }, { name: "a.png", size: 3, contentType: "image/png" });
+		const rec = await env.blob.put({ instance: "files" }, "b.txt", "hey");
+		const got = await env.blob.get({ instance: "files" }, rec.id);
+		return Response.json({ upload: up.upload_url, download: got.download_url });
+	} };`, map[string]string{"blob": "full"})
+
+	res := invoke(t, mux, "/fn/main/urls")
+	if res.Code != 200 {
+		t.Fatalf("status %d: %s", res.Code, res.Body.String())
+	}
+	got := jsonBody(t, res.Body.String())
+	for _, key := range []string{"upload", "download"} {
+		url, _ := got[key].(string)
+		if url == "" || !strings.Contains(url, "127.0.0.1:9191") {
+			t.Fatalf("%s url = %q, want the emulator's own host", key, url)
+		}
+	}
+}
