@@ -19,10 +19,13 @@ package blob
 
 import (
 	"bytes"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
@@ -45,6 +48,8 @@ func NewHandler(reg *control.Registry, a *auth.Store, store *Store) *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	p := "/v1/blob/{instance}"
 	mux.HandleFunc("POST "+p+"/uploads", common.Wrap(h.mint))
+	mux.HandleFunc("POST "+p+"/uploads/multipart", common.Wrap(h.beginMultipart))
+	mux.HandleFunc("POST "+p+"/uploads/multipart/urls", common.Wrap(h.multipartURLs))
 	mux.HandleFunc("GET "+p, common.Wrap(h.list))
 	// Before {id}, or "delete" is read as a blob id.
 	mux.HandleFunc("POST "+p+"/delete", common.Wrap(h.remove))
@@ -53,6 +58,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("PUT /_blob/{instance}/{id}", common.Wrap(h.upload))
 	mux.HandleFunc("GET /_blob/{instance}/{id}", common.Wrap(h.download))
+	// Multipart puts its whole vocabulary in the query string rather than the path, so create and
+	// complete are one route told apart by what it was asked for, and abort is the DELETE.
+	mux.HandleFunc("POST /_blob/{instance}/{id}", common.Wrap(h.objectPost))
+	mux.HandleFunc("DELETE /_blob/{instance}/{id}", common.Wrap(h.abortUpload))
 	// A GET pattern also matches HEAD, and ServeContent answers one correctly — so a HEAD
 	// registration here would be redundant, not missing.
 	mux.HandleFunc("GET /blob/{instance}/{name}/{id}", common.Wrap(h.servePublic))
@@ -128,7 +137,7 @@ func (h *Handler) mint(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	q, exp := h.sig.query(http.MethodPut, inst.ID, rec.ID, UploadTTL)
+	q, exp := h.sig.query(http.MethodPut, inst.ID, rec.ID, UploadTTL, nil)
 	common.WriteJSON(w, http.StatusCreated, map[string]any{
 		"blobkey":    "blob:" + inst.ID + ":" + rec.ID,
 		"id":         rec.ID,
@@ -144,6 +153,127 @@ func (h *Handler) mint(w http.ResponseWriter, r *http.Request) error {
 	})
 	return nil
 }
+
+// --- multipart : an object bigger than one request can carry ---------------
+//
+// TWO ROUTES RATHER THAN FOUR, because the upload id does not exist until storage has been asked
+// for one: `multipart` signs the create call, and everything after it — the parts, the completion
+// and the abort — comes from `multipart/urls` once the client knows the id.
+//
+// There is no commit endpoint here either. Completing the upload is what stores the object, and
+// the row is promoted by the side that received the bytes, exactly as a single PUT is.
+
+func (h *Handler) beginMultipart(w http.ResponseWriter, r *http.Request) error {
+	inst, cfg, err := h.resolve(r, auth.Write)
+	if err != nil {
+		return err
+	}
+	var req MintRequest
+	if err := common.ReadJSON(r, &req); err != nil {
+		return err
+	}
+	rec, partSize, parts, err := h.store.BeginMultipart(inst.ID, cfg, req)
+	if err != nil {
+		return err
+	}
+	q, exp := h.sig.query(http.MethodPost, inst.ID, rec.ID, MultipartTTL, url.Values{"uploads": {""}})
+	common.WriteJSON(w, http.StatusCreated, map[string]any{
+		"key":       inst.ID + "/" + rec.ID,
+		"id":        rec.ID,
+		"blobkey":   "blob:" + inst.ID + ":" + rec.ID,
+		"part_size": partSize,
+		"parts":     parts,
+		// POST here with an empty body; the answer is XML naming the UploadId.
+		"create_url": origin(r) + "/_blob/" + inst.ID + "/" + rec.ID + "?" + q,
+		"expires_at": exp,
+	})
+	return nil
+}
+
+// multipartURLs signs a window of part URLs, plus the two that end the upload either way.
+//
+// Complete and abort come back with EVERY window rather than on request, because the moment a
+// client most needs the abort URL is the moment it has just failed.
+func (h *Handler) multipartURLs(w http.ResponseWriter, r *http.Request) error {
+	inst, _, err := h.resolve(r, auth.Write)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		ID       string `json:"id"`
+		UploadID string `json:"upload_id"`
+		From     *int   `json:"from"`
+		Count    *int   `json:"count"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	uploadID, err := checkUploadID(body.UploadID)
+	if err != nil {
+		return err
+	}
+	// Bounded to a reservation in THIS instance, so a signature is never minted for an object
+	// nobody reserved.
+	if _, ok := h.store.Get(inst.ID, body.ID); !ok {
+		return common.NotFound("blob not found")
+	}
+
+	first := clampInt(body.From, 1, MaxParts, 1)
+	n := clampInt(body.Count, 1, MaxPartURLsPerRequest, MaxPartURLsPerRequest)
+	if n > MaxParts-first+1 {
+		n = MaxParts - first + 1
+	}
+	base := origin(r) + "/_blob/" + inst.ID + "/" + body.ID + "?"
+	urls := make([]map[string]any, 0, n)
+	for i := 0; i < n; i++ {
+		part := first + i
+		q, _ := h.sig.query(http.MethodPut, inst.ID, body.ID, MultipartTTL, url.Values{
+			"partNumber": {strconv.Itoa(part)},
+			"uploadId":   {uploadID},
+		})
+		urls = append(urls, map[string]any{"part_number": part, "url": base + q})
+	}
+	done, exp := h.sig.query(http.MethodPost, inst.ID, body.ID, MultipartTTL, url.Values{"uploadId": {uploadID}})
+	abort, _ := h.sig.query(http.MethodDelete, inst.ID, body.ID, MultipartTTL, url.Values{"uploadId": {uploadID}})
+	common.WriteJSON(w, http.StatusOK, map[string]any{
+		"part_urls": urls,
+		// POST the CompleteMultipartUpload XML here once every part has an ETag.
+		"complete_url": base + done,
+		// DELETE here on any failure. Parts of an upload nobody completed still take up room.
+		"abort_url":  base + abort,
+		"expires_at": exp,
+	})
+	return nil
+}
+
+// clampInt reads a caller-supplied bound. A missing value is a different answer from an
+// out-of-range one: defaulting a missing `count` to the minimum would hand back one part URL
+// instead of a hundred — an upload that still works and takes a hundred times as many round
+// trips to do it.
+func clampInt(v *int, lo, hi, fallback int) int {
+	if v == nil {
+		return fallback
+	}
+	if *v < lo {
+		return lo
+	}
+	if *v > hi {
+		return hi
+	}
+	return *v
+}
+
+// checkUploadID refuses an id that could change which object the signed URLs point at. It is
+// echoed into a signed query parameter, so it is input like any other.
+func checkUploadID(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" || len(s) > 512 || !uploadIDOK.MatchString(s) {
+		return "", common.BadRequest("upload_id is missing or malformed")
+	}
+	return s, nil
+}
+
+var uploadIDOK = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 
 // --- GET / : list ---------------------------------------------------------
 
@@ -180,7 +310,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 	if !ok || rec.Status != "ready" {
 		return common.NotFound("blob not found")
 	}
-	q, exp := h.sig.query(http.MethodGet, inst.ID, rec.ID, DownloadTTL)
+	q, exp := h.sig.query(http.MethodGet, inst.ID, rec.ID, DownloadTTL, nil)
 	common.WriteJSON(w, http.StatusOK, map[string]any{
 		"blob":         h.recordJSON(r, inst, rec),
 		"download_url": origin(r) + "/_blob/" + inst.ID + "/" + rec.ID + "?" + q,
@@ -248,6 +378,11 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) error {
 	if err := h.sig.verify(http.MethodPut, instanceID, id, r.URL.Query()); err != nil {
 		return err
 	}
+	// A part is selected by the query string, so an ordinary PUT is what is left once no
+	// multipart parameter matched.
+	if q := r.URL.Query(); q.Get("uploadId") != "" && q.Get("partNumber") != "" {
+		return h.uploadPart(w, r, instanceID, id, q)
+	}
 	rec, ok := h.store.Pending(instanceID, id)
 	if !ok {
 		// Either the reservation never existed, or these bytes already arrived. Neither may
@@ -277,6 +412,107 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("ETag", `"`+stored.ETag+`"`)
 	w.WriteHeader(http.StatusOK)
 	return nil
+}
+
+// --- the multipart verbs on the object itself -----------------------------
+//
+// These stand in for what object storage answers on a presigned URL, in the same S3 shapes: the
+// create and complete calls speak XML, and their vocabulary is in the query string rather than
+// the path. A client written against hosted talks to these unchanged.
+
+// uploadPart takes one part. No length is bound into a part URL — hosted does not sign one
+// either, because only the finished object's size was ever declared.
+func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request, instanceID, id string, q url.Values) error {
+	n, err := strconv.Atoi(q.Get("partNumber"))
+	if err != nil {
+		return common.BadRequest("partNumber must be a number")
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return common.BadRequest("could not read the request body")
+	}
+	etag, err := h.store.PutPart(instanceID, id, q.Get("uploadId"), n, body)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("ETag", `"`+etag+`"`)
+	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+// objectPost is both ends of a multipart upload: `?uploads` creates one, `?uploadId` completes it.
+func (h *Handler) objectPost(w http.ResponseWriter, r *http.Request) error {
+	instanceID, id := r.PathValue("instance"), r.PathValue("id")
+	if err := h.sig.verify(http.MethodPost, instanceID, id, r.URL.Query()); err != nil {
+		return err
+	}
+	q := r.URL.Query()
+	if q.Has("uploads") {
+		uploadID, err := h.store.CreateUpload(instanceID, id)
+		if err != nil {
+			return err
+		}
+		return writeXML(w, "<InitiateMultipartUploadResult><Key>"+xmlEscape(id)+
+			"</Key><UploadId>"+xmlEscape(uploadID)+"</UploadId></InitiateMultipartUploadResult>")
+	}
+	uploadID := q.Get("uploadId")
+	if uploadID == "" {
+		return common.BadRequest("this URL names no multipart upload")
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if err != nil {
+		return common.BadRequest("could not read the request body")
+	}
+	parts := xmlPartNumbers(string(raw))
+	if len(parts) == 0 {
+		return common.BadRequest("no parts named")
+	}
+	rec, err := h.store.CompleteUpload(instanceID, id, uploadID, parts)
+	if err != nil {
+		return err
+	}
+	return writeXML(w, "<CompleteMultipartUploadResult><Key>"+xmlEscape(id)+
+		"</Key><ETag>&quot;"+xmlEscape(rec.ETag)+"&quot;</ETag></CompleteMultipartUploadResult>")
+}
+
+func (h *Handler) abortUpload(w http.ResponseWriter, r *http.Request) error {
+	instanceID, id := r.PathValue("instance"), r.PathValue("id")
+	if err := h.sig.verify(http.MethodDelete, instanceID, id, r.URL.Query()); err != nil {
+		return err
+	}
+	h.store.AbortUpload(instanceID, id, r.URL.Query().Get("uploadId"))
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func writeXML(w http.ResponseWriter, body string) error {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>`+body)
+	return nil
+}
+
+func xmlEscape(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+var partNumberRe = regexp.MustCompile(`(?s)<Part>.*?<PartNumber>\s*(\d+)\s*</PartNumber>.*?</Part>`)
+
+// xmlPartNumbers reads the part order out of a CompleteMultipartUpload body.
+//
+// Deliberately not a parser: the document is a flat list of two fields per part, and the ETags in
+// it are not checked because this emulator computed them itself and holds the bytes they name.
+// The ORDER is the part that matters — it is the client saying how the object goes together.
+func xmlPartNumbers(body string) []int {
+	var out []int
+	for _, m := range partNumberRe.FindAllStringSubmatch(body, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // --- GET /_blob/{instance}/{id} : a private download ----------------------

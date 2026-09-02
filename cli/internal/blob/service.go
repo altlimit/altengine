@@ -39,9 +39,29 @@ const (
 	// DefaultMaxObjectBytes is what a new instance allows for one object. Generous for images
 	// and documents, small enough that a leaked upload URL is not an open invitation.
 	DefaultMaxObjectBytes int64 = 100 << 20
-	// MaxObjectBytesCeiling is object storage's single-PUT limit. Anything larger needs a
-	// multipart upload, which one presigned URL cannot express.
-	MaxObjectBytesCeiling int64 = 5 << 30
+	// MaxObjectBytesCeiling is the largest object storage will hold, and therefore the highest an
+	// instance's own limit may be set. That limit is a COST control and a different question from
+	// what one request can carry.
+	MaxObjectBytesCeiling int64 = 5492060580741 // 4.995 TiB
+	// MaxSinglePutBytes is what ONE presigned PUT can carry. Not a policy number: object storage
+	// caps a single upload here, and a presigned URL is exactly one request. Past it an upload
+	// goes multipart.
+	MaxSinglePutBytes int64 = 5 << 30
+
+	// MinPartBytes is the smallest part storage accepts, except for the last one. It is a floor
+	// under the PLAN and not a check on the way in: a part that arrives undersized is refused by
+	// storage hosted and accepted here, deliberately, because the alternative is that the flow a
+	// customer's 20 GB export will take cannot be exercised with a test file on a laptop.
+	MinPartBytes int64 = 5 << 20
+	// DefaultPartBytes is chosen for the UPLINK rather than for the ceiling: a part that fails is
+	// re-sent in full, so a smaller part is a cheaper retry. 64 MB still reaches 640 GB before
+	// the part count matters.
+	DefaultPartBytes int64 = 64 << 20
+	// MaxParts is storage's hard limit on parts in one upload.
+	MaxParts = 10000
+	// MaxPartURLsPerRequest bounds one signing request. An upload may legitimately have ten
+	// thousand parts, and URLs for all of them would expire long before a client reached the last.
+	MaxPartURLsPerRequest = 100
 
 	MaxNameLen       = 512
 	MaxListLimit     = 200
@@ -52,7 +72,26 @@ const (
 	// A download URL is shorter still — these end up in browser history and referrers.
 	UploadTTL   = 15 * time.Minute
 	DownloadTTL = 5 * time.Minute
+	// A multipart window outlives a single PUT's: these are handed out across an upload that may
+	// run for hours, and re-signed as it goes.
+	MultipartTTL = 30 * time.Minute
 )
+
+// PlanParts is the part size for an object of a given size, and the number of parts it implies.
+//
+// Grows the part rather than the count once the default would overflow MaxParts: a bigger part is
+// a worse retry, but a ten-thousand-and-first part is not an option and the alternative is
+// refusing an upload we could have taken.
+func PlanParts(size int64) (int64, int) {
+	if size < 1 {
+		size = 1
+	}
+	partSize := max(MinPartBytes, DefaultPartBytes)
+	if (size+partSize-1)/partSize > MaxParts {
+		partSize = (size + MaxParts - 1) / MaxParts
+	}
+	return partSize, int((size + partSize - 1) / partSize)
+}
 
 // Config is the per-instance settings blob, matching the hosted service's `settings` key.
 //
@@ -133,10 +172,87 @@ type Store struct {
 	dir  string // "" => in-memory
 	recs map[string]map[string]*Record
 	data map[string][]byte // "instance/id" => bytes, memory mode only
+	// Multipart uploads in flight, keyed "instance/id/uploadID". Never persisted: hosted these
+	// live in object storage until they are completed or aborted, and an upload that outlives the
+	// process it was started in is one nothing can finish anyway.
+	mpu map[string]map[int][]byte
 }
 
 func NewStore(dir string) *Store {
-	return &Store{dir: dir, recs: map[string]map[string]*Record{}, data: map[string][]byte{}}
+	return &Store{
+		dir:  dir,
+		recs: map[string]map[string]*Record{},
+		data: map[string][]byte{},
+		mpu:  map[string]map[int][]byte{},
+	}
+}
+
+func mpuKey(instanceID, id, uploadID string) string {
+	return instanceID + "/" + id + "/" + uploadID
+}
+
+// CreateUpload opens a multipart upload against a reserved row and returns its id.
+func (s *Store) CreateUpload(instanceID, id string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.index(instanceID)[id]
+	if !ok || rec.Status != "pending" {
+		return "", common.NotFound("this upload URL has already been used, or its reservation is gone")
+	}
+	uploadID := strings.ReplaceAll(common.UUID(), "-", "")
+	s.mpu[mpuKey(instanceID, id, uploadID)] = map[int][]byte{}
+	return uploadID, nil
+}
+
+// PutPart stores one part and returns the digest storage computed for it.
+//
+// Parts are held until Complete because nothing is readable before then — an object exists once
+// storage has glued its parts together, and not a moment earlier.
+func (s *Store) PutPart(instanceID, id, uploadID string, n int, body []byte) (string, error) {
+	if n < 1 || n > MaxParts {
+		return "", common.BadRequest(fmt.Sprintf("partNumber must be between 1 and %d", MaxParts))
+	}
+	sum := md5.Sum(body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	parts, ok := s.mpu[mpuKey(instanceID, id, uploadID)]
+	if !ok {
+		return "", common.NotFound("no such upload — it was completed, aborted, or never created")
+	}
+	parts[n] = body
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// CompleteUpload assembles the parts the client named, in the order it named them, and promotes
+// the row exactly as a single PUT does.
+func (s *Store) CompleteUpload(instanceID, id, uploadID string, want []int) (*Record, error) {
+	s.mu.Lock()
+	held, ok := s.mpu[mpuKey(instanceID, id, uploadID)]
+	if !ok {
+		s.mu.Unlock()
+		return nil, common.NotFound("no such upload — it was completed, aborted, or never created")
+	}
+	var body []byte
+	for _, n := range want {
+		part, ok := held[n]
+		if !ok {
+			s.mu.Unlock()
+			return nil, common.BadRequest(fmt.Sprintf("part %d was never uploaded", n))
+		}
+		body = append(body, part...)
+	}
+	delete(s.mpu, mpuKey(instanceID, id, uploadID))
+	s.mu.Unlock()
+	return s.Commit(instanceID, id, body)
+}
+
+// AbortUpload drops an upload's parts. Aborting one that is already gone is success: this is the
+// call a client makes when it has just failed, and a refusal here would leave parts behind for
+// the sake of tidiness.
+func (s *Store) AbortUpload(instanceID, id, uploadID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.mpu, mpuKey(instanceID, id, uploadID))
 }
 
 func (s *Store) memory() bool { return s.dir == "" }
@@ -239,17 +355,41 @@ type MintRequest struct {
 	Meta        map[string]any `json:"meta"`
 }
 
-// Reserve validates a mint request and records a pending row.
+// Reserve validates a mint request for a SINGLE PUT and records a pending row.
 //
 // The size is REQUIRED and checked here, before anything is stored, because hosted it is signed
 // into the upload URL — the ceiling has to bite at mint time or it does not bite at all.
 func (s *Store) Reserve(instanceID string, cfg Config, req MintRequest) (*Record, error) {
+	return s.reserve(instanceID, cfg, req, true)
+}
+
+// BeginMultipart reserves a row for an upload that arrives in parts, and says how to cut it up.
+// Bounded by the INSTANCE's limit only: getting past what one request can carry is the whole
+// reason this path exists.
+func (s *Store) BeginMultipart(instanceID string, cfg Config, req MintRequest) (*Record, int64, int, error) {
+	rec, err := s.reserve(instanceID, cfg, req, false)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	partSize, parts := PlanParts(rec.Size)
+	return rec, partSize, parts, nil
+}
+
+func (s *Store) reserve(instanceID string, cfg Config, req MintRequest, singlePut bool) (*Record, error) {
 	if req.Size == nil || *req.Size < 1 {
 		return nil, common.BadRequest("size (the exact byte length you will upload) is required")
 	}
 	if *req.Size > cfg.MaxObjectBytes {
 		return nil, common.BadRequest(fmt.Sprintf(
 			"size %d exceeds this instance's limit of %d bytes", *req.Size, cfg.MaxObjectBytes))
+	}
+	// The instance's limit is a COST control and may be far above what one request can carry.
+	// This is the other limit, and it is not ours. Checked second, so a caller over both is told
+	// about the one they can change.
+	if singlePut && *req.Size > MaxSinglePutBytes {
+		return nil, common.BadRequest(fmt.Sprintf(
+			"size %d is over the %d-byte limit of a single upload — use the multipart flow (POST /uploads/multipart)",
+			*req.Size, MaxSinglePutBytes))
 	}
 	name, err := CleanName(req.Name)
 	if err != nil {
@@ -461,6 +601,11 @@ func (s *Store) Drop(instanceID string) {
 	for k := range s.data {
 		if strings.HasPrefix(k, instanceID+"/") {
 			delete(s.data, k)
+		}
+	}
+	for k := range s.mpu {
+		if strings.HasPrefix(k, instanceID+"/") {
+			delete(s.mpu, k)
 		}
 	}
 	if !s.memory() {

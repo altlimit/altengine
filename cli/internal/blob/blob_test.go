@@ -194,7 +194,7 @@ func TestSignedURLsAreCapabilities(t *testing.T) {
 
 	// An expired URL must say it expired. "Bad signature" sends someone looking for the wrong bug.
 	s := newSigner()
-	q, _ := s.query(http.MethodPut, "inst", "id", -time.Minute)
+	q, _ := s.query(http.MethodPut, "inst", "id", -time.Minute, nil)
 	err := s.verify(http.MethodPut, "inst", "id", mustQuery(t, q))
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired URL error = %v, want it to say expired", err)
@@ -202,7 +202,7 @@ func TestSignedURLsAreCapabilities(t *testing.T) {
 
 	// A capability is scoped to one method on one object — a download URL cannot upload, and a
 	// signature for one blob is worthless for another.
-	q2, _ := s.query(http.MethodGet, "inst", "id", time.Minute)
+	q2, _ := s.query(http.MethodGet, "inst", "id", time.Minute, nil)
 	if err := s.verify(http.MethodPut, "inst", "id", mustQuery(t, q2)); err == nil {
 		t.Fatal("a GET capability must not authorize a PUT")
 	}
@@ -485,5 +485,165 @@ func TestGrantsAreScoped(t *testing.T) {
 	}
 	if got := call("GET", "/v1/blob/other", nil); got != 403 {
 		t.Fatalf("a grant on one instance reached another = %d, want 403", got)
+	}
+}
+
+// --- multipart ------------------------------------------------------------
+
+// send runs one request against a signed object URL and returns its status and body.
+func send(t *testing.T, method, url string, body []byte) (int, string) {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, url, r)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer res.Body.Close()
+	out, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(out)
+}
+
+func tagOf(xmlBody, tag string) string {
+	_, rest, ok := strings.Cut(xmlBody, "<"+tag+">")
+	if !ok {
+		return ""
+	}
+	v, _, _ := strings.Cut(rest, "</"+tag+">")
+	return v
+}
+
+// The whole multipart flow, in the order a client performs it: begin, create, sign a window,
+// upload the parts, complete. The object it produces must be indistinguishable from one that
+// arrived in a single PUT — same row, same digest, same download.
+func TestMultipartRoundTrip(t *testing.T) {
+	srv, _ := newTestBlob(t, "")
+	content := []byte("the parts of one object, glued back together by storage")
+
+	status, begun := do(t, "POST", srv.URL+"/v1/blob/files/uploads/multipart", map[string]any{
+		"name": "export.bin", "size": len(content), "content_type": "application/octet-stream",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("begin status = %d, want 201 (%v)", status, begun)
+	}
+	id := begun["id"].(string)
+	if begun["parts"].(float64) != 1 || int64(begun["part_size"].(float64)) != DefaultPartBytes {
+		t.Fatalf("plan = %v parts of %v bytes, want 1 of %d", begun["parts"], begun["part_size"], DefaultPartBytes)
+	}
+
+	code, body := send(t, http.MethodPost, begun["create_url"].(string), nil)
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, want 200 (%s)", code, body)
+	}
+	uploadID := tagOf(body, "UploadId")
+	if uploadID == "" {
+		t.Fatalf("create returned no upload id: %s", body)
+	}
+
+	// Two parts against a plan of one: the plan is advice about part SIZE, and a client that cuts
+	// its own bytes differently is still uploading the object it declared.
+	status, signed := do(t, "POST", srv.URL+"/v1/blob/files/uploads/multipart/urls", map[string]any{
+		"id": id, "upload_id": uploadID, "from": 1, "count": 2,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("urls status = %d, want 200 (%v)", status, signed)
+	}
+	urls := signed["part_urls"].([]any)
+	if len(urls) != 2 {
+		t.Fatalf("part_urls = %d, want 2", len(urls))
+	}
+
+	half := len(content) / 2
+	for i, chunk := range [][]byte{content[:half], content[half:]} {
+		u := urls[i].(map[string]any)["url"].(string)
+		if code, body := send(t, http.MethodPut, u, chunk); code != http.StatusOK {
+			t.Fatalf("part %d status = %d, want 200 (%s)", i+1, code, body)
+		}
+	}
+
+	xmlBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"a"</ETag></Part>` +
+		`<Part><PartNumber>2</PartNumber><ETag>"b"</ETag></Part></CompleteMultipartUpload>`
+	if code, body := send(t, http.MethodPost, signed["complete_url"].(string), []byte(xmlBody)); code != http.StatusOK {
+		t.Fatalf("complete status = %d, want 200 (%s)", code, body)
+	}
+
+	status, got := do(t, "GET", srv.URL+"/v1/blob/files/"+id, nil)
+	if status != http.StatusOK {
+		t.Fatalf("get status = %d, want 200 (%v)", status, got)
+	}
+	rec := got["blob"].(map[string]any)
+	if rec["status"] != "ready" || int(rec["size"].(float64)) != len(content) {
+		t.Fatalf("row = %v, want a ready object of %d bytes", rec, len(content))
+	}
+	code, downloaded := send(t, http.MethodGet, got["download_url"].(string), nil)
+	if code != http.StatusOK || downloaded != string(content) {
+		t.Fatalf("download = %d %q, want the assembled object", code, downloaded)
+	}
+}
+
+// A part URL is a capability for ONE part of ONE upload. The multipart vocabulary lives in the
+// query string, so a signature that did not cover it would let whoever holds part 1's URL write
+// part 7 — or write into somebody else's upload of the same object.
+func TestPartURLIsScopedToItsPart(t *testing.T) {
+	srv, _ := newTestBlob(t, "")
+	_, begun := do(t, "POST", srv.URL+"/v1/blob/files/uploads/multipart", map[string]any{"size": 10})
+	_, body := send(t, http.MethodPost, begun["create_url"].(string), nil)
+	uploadID := tagOf(body, "UploadId")
+
+	_, signed := do(t, "POST", srv.URL+"/v1/blob/files/uploads/multipart/urls", map[string]any{
+		"id": begun["id"].(string), "upload_id": uploadID, "from": 1, "count": 1,
+	})
+	u := signed["part_urls"].([]any)[0].(map[string]any)["url"].(string)
+
+	if code, _ := send(t, http.MethodPut, strings.Replace(u, "partNumber=1", "partNumber=7", 1), []byte("x")); code != 401 {
+		t.Fatalf("re-aimed part number = %d, want 401", code)
+	}
+	if code, _ := send(t, http.MethodPut, strings.Replace(u, "uploadId="+uploadID, "uploadId=other", 1), []byte("x")); code != 401 {
+		t.Fatalf("re-aimed upload id = %d, want 401", code)
+	}
+	// The abort URL ends the upload, and doing it twice is success — a client aborts when it has
+	// already failed, and a refusal there would leave the parts behind.
+	if code, _ := send(t, http.MethodDelete, signed["abort_url"].(string), nil); code != 204 {
+		t.Fatalf("abort = %d, want 204", code)
+	}
+	if code, _ := send(t, http.MethodDelete, signed["abort_url"].(string), nil); code != 204 {
+		t.Fatalf("second abort = %d, want 204", code)
+	}
+	if code, _ := send(t, http.MethodPut, u, []byte("x")); code != 404 {
+		t.Fatalf("part after abort = %d, want 404", code)
+	}
+}
+
+// What an instance will STORE and what one request can CARRY are different questions, and they
+// were one constant until multipart existed. An instance raised to the object ceiling still
+// refuses an oversize single PUT — and names the flow that can take it — while accepting the very
+// same size through multipart.
+func TestSinglePutCeilingIsNotTheObjectCeiling(t *testing.T) {
+	if MaxObjectBytesCeiling <= MaxSinglePutBytes {
+		t.Fatal("the object ceiling must be above what one request can carry, or multipart buys nothing")
+	}
+	s := NewStore("")
+	cfg := Config{MaxObjectBytes: MaxObjectBytesCeiling}
+	size := MaxSinglePutBytes + 1
+
+	_, err := s.Reserve("inst", cfg, MintRequest{Size: &size})
+	if err == nil || !strings.Contains(err.Error(), "multipart") {
+		t.Fatalf("oversize single PUT = %v, want a refusal naming the multipart flow", err)
+	}
+	if _, _, parts, err := s.BeginMultipart("inst", cfg, MintRequest{Size: &size}); err != nil {
+		t.Fatalf("multipart at %d bytes = %v, want it accepted", size, err)
+	} else if parts < 2 {
+		t.Fatalf("plan for %d bytes = %d parts, want more than one", size, parts)
+	}
+
+	// The instance's own limit still binds, and it is the one a caller can change — so a size
+	// over both is told about that one rather than about storage's.
+	small := Config{MaxObjectBytes: 10}
+	if _, err := s.Reserve("inst", small, MintRequest{Size: &size}); err == nil ||
+		!strings.Contains(err.Error(), "this instance's limit") {
+		t.Fatalf("over both limits = %v, want the instance's limit named", err)
 	}
 }

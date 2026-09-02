@@ -17,7 +17,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -31,16 +33,45 @@ func newSigner() *signer {
 	return &signer{key: k}
 }
 
-func (s *signer) mac(method, instanceID, id string, exp int64) string {
+func (s *signer) mac(method, instanceID, id string, exp int64, query string) string {
 	h := hmac.New(sha256.New, s.key)
-	fmt.Fprintf(h, "%s\n%s\n%s\n%d", method, instanceID, id, exp)
+	fmt.Fprintf(h, "%s\n%s\n%s\n%d\n%s", method, instanceID, id, exp, query)
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-// query returns the signed query string for a capability that expires after ttl.
-func (s *signer) query(method, instanceID, id string, ttl time.Duration) (string, int64) {
+// canonicalQuery is the part of a query string that is covered by the signature: everything
+// except the two parameters the signature itself is carried in.
+//
+// Multipart's whole vocabulary lives in query parameters — `uploads`, `uploadId`, `partNumber` —
+// so a signature that ignored them would let whoever holds one part URL write any part of any
+// upload for that object. Sorted, so the string does not depend on map iteration order.
+func canonicalQuery(q url.Values) string {
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		if k == "exp" || k == "sig" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+q.Get(k))
+	}
+	return strings.Join(parts, "&")
+}
+
+// query returns the signed query string for a capability that expires after ttl. `extra` carries
+// the multipart vocabulary, which is folded into both the URL and the signature.
+func (s *signer) query(method, instanceID, id string, ttl time.Duration, extra url.Values) (string, int64) {
 	exp := time.Now().Add(ttl).UnixMilli()
-	q := url.Values{"exp": {strconv.FormatInt(exp, 10)}, "sig": {s.mac(method, instanceID, id, exp)}}
+	q := url.Values{}
+	for k, v := range extra {
+		q[k] = v
+	}
+	sig := s.mac(method, instanceID, id, exp, canonicalQuery(q))
+	q.Set("exp", strconv.FormatInt(exp, 10))
+	q.Set("sig", sig)
 	return q.Encode(), exp
 }
 
@@ -55,7 +86,7 @@ func (s *signer) verify(method, instanceID, id string, q url.Values) error {
 	if time.Now().UnixMilli() > exp {
 		return common.Unauthenticated("this URL has expired — ask for a new one")
 	}
-	if !hmac.Equal([]byte(q.Get("sig")), []byte(s.mac(method, instanceID, id, exp))) {
+	if !hmac.Equal([]byte(q.Get("sig")), []byte(s.mac(method, instanceID, id, exp, canonicalQuery(q)))) {
 		return common.Unauthenticated("this URL's signature is not valid")
 	}
 	return nil
