@@ -272,9 +272,15 @@ func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *strin
 	for _, a := range agents {
 		// "offline" is not an error here and the output should not read like one: office PCs
 		// sleep, and a run sent to a sleeping machine waits for it rather than failing.
+		//
+		// "never" is a different answer again, and printing it as offline was reporting a machine
+		// that stopped working when the truth is a credential nobody used.
 		state := "offline"
-		if a.Online {
+		switch {
+		case a.Online:
 			state = "online"
+		case a.NeverConnected:
+			state = "never"
 		}
 		name := a.Name
 		if name == "" {

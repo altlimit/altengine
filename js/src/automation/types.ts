@@ -88,6 +88,10 @@ export interface Agent {
   labels: string[];
   online: boolean;
   last_seen: number | null;
+  /** A THIRD state, not a shade of offline. Offline is a machine that worked and stopped; this is
+   *  a credential nobody redeemed, so `hostname`, `os` and `agent_version` are null until it
+   *  first connects. Do not report one as a machine that has stopped working. */
+  never_connected: boolean;
   enrolled_at: number;
   revoked_at: number | null;
 }

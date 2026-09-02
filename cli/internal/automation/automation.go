@@ -157,6 +157,11 @@ type Agent struct {
 	Labels       []string `json:"labels"`
 	Online       bool     `json:"online"`
 	LastSeen     int64    `json:"last_seen"`
+	// NeverConnected is a THIRD state, not a shade of offline. Offline is a machine that worked
+	// and stopped, which somebody should go and look at; this is a credential nobody redeemed.
+	// Its hostname, OS and agent version stay blank until it first connects, because a machine
+	// reports those about itself.
+	NeverConnected bool `json:"never_connected"`
 }
 
 // Agents lists EVERY enrolled machine, walking the pages.
