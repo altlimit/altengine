@@ -73,7 +73,7 @@ func (h *Handler) launch(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	job, err := h.store.Launch(inst.ID, cfg, req)
+	job, err := h.store.Launch(inst.ID, cfg, req, BlobJobEnv(cfg, r))
 	if err != nil {
 		return err
 	}

@@ -22,6 +22,10 @@
 //   - There is no size difference. `small`, `medium` and `large` are recorded and billed
 //     exactly as hosted, so cost estimates match, but the local container gets whatever your
 //     daemon gives it — a job that fits in 512 MB here may not fit hosted.
+//   - AE_BLOB_TOKEN bounds nothing. Naming a `blobStore` injects the same two variables a job
+//     gets hosted, so an image is written once and runs in both places, but this data plane is
+//     dev-open: hosted the token is scoped to one store and refuses delete and publish, and
+//     here any bearer works. See blobjob.go.
 package container
 
 import (
@@ -87,6 +91,9 @@ type Config struct {
 	MaxConcurrent int      `json:"maxConcurrent"`
 	MaxJobCostUSD float64  `json:"maxJobCostUsd"`
 	OnComplete    string   `json:"onComplete,omitempty"`
+	// BlobStore is the blob instance a job launched here may reach, by name. Empty means a job
+	// gets no blob credential at all — which is what an instance that has not set it does.
+	BlobStore string `json:"blobStore,omitempty"`
 }
 
 // DefaultConfig is what a new instance starts with. AllowedImages is EMPTY, and that is the
@@ -128,6 +135,9 @@ func ParseConfig(raw map[string]any) Config {
 	}
 	if v, ok := raw["onComplete"].(string); ok {
 		c.OnComplete = strings.TrimSpace(v)
+	}
+	if v, ok := raw["blobStore"].(string); ok {
+		c.BlobStore = strings.TrimSpace(v)
 	}
 	return c
 }
@@ -370,8 +380,11 @@ type LaunchRequest struct {
 }
 
 // BuildEnv validates the caller's variables and appends ours last, so a caller cannot shadow
-// them even if the prefix check ever loosens.
-func BuildEnv(in map[string]string, jobID string) (map[string]string, error) {
+// them even if the prefix check ever loosens. `platform` is whatever else the platform injects
+// beyond the job id — today the blob store's URL and token, when the instance names one
+// (blobjob.go). It is added after the caller's budget is checked: a platform credential must not
+// be the thing that pushes a job over a limit the caller was told about.
+func BuildEnv(in map[string]string, jobID string, platform map[string]string) (map[string]string, error) {
 	out := map[string]string{}
 	if len(in) > MaxEnvVars {
 		return nil, common.BadRequest(fmt.Sprintf("at most %d env vars", MaxEnvVars))
@@ -392,6 +405,9 @@ func BuildEnv(in map[string]string, jobID string) (map[string]string, error) {
 	if bytes > MaxEnvBytes {
 		return nil, common.BadRequest(fmt.Sprintf("env must be under %d bytes", MaxEnvBytes))
 	}
+	for k, v := range platform {
+		out[k] = v
+	}
 	out["AE_JOB_ID"] = jobID
 	return out, nil
 }
@@ -403,8 +419,9 @@ func trunc(s string, n int) string {
 	return s[:n]
 }
 
-// Launch validates everything, starts the container, and returns immediately.
-func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest) (*Job, error) {
+// Launch validates everything, starts the container, and returns immediately. `platform` is the
+// environment the platform adds to this job — see BlobJobEnv.
+func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platform map[string]string) (*Job, error) {
 	if !s.runner.Available() {
 		return nil, common.NewError(503,
 			"container jobs need a running Docker daemon — start Docker and try again", "UNAVAILABLE")
@@ -459,7 +476,7 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest) (*Job, 
 	}
 
 	id := "j" + strings.ReplaceAll(common.UUID(), "-", "")
-	env, err := BuildEnv(req.Env, id)
+	env, err := BuildEnv(req.Env, id, platform)
 	if err != nil {
 		return nil, err
 	}

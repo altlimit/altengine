@@ -3,6 +3,8 @@ package container
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -63,7 +65,7 @@ func TestRefusesWithoutDocker(t *testing.T) {
 	// Refusing beats pretending. A simulated success is the one behaviour that would make a
 	// container emulator useless: the whole point of running one is that something happened.
 	s := NewStore(&fakeRunner{avail: false})
-	if _, err := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}); err == nil {
+	if _, err := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}, nil); err == nil {
 		t.Fatal("expected a refusal when no runner is available")
 	}
 }
@@ -71,7 +73,7 @@ func TestRefusesWithoutDocker(t *testing.T) {
 func TestEmptyAllowlistRunsNothing(t *testing.T) {
 	s := NewStore(&fakeRunner{avail: true})
 	c := DefaultConfig() // AllowedImages empty
-	_, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"})
+	_, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil)
 	if err == nil {
 		t.Fatal("an empty allowlist must run nothing")
 	}
@@ -100,16 +102,44 @@ func TestReservedEnvIsRefusedNotDropped(t *testing.T) {
 	// Dropping would be quieter and worse: the job runs believing it was given something it
 	// was not, and does the wrong thing successfully.
 	for _, name := range []string{"AE_JOB_ID", "FLY_API_TOKEN"} {
-		if _, err := BuildEnv(map[string]string{name: "x"}, "j1"); err == nil {
+		if _, err := BuildEnv(map[string]string{name: "x"}, "j1", nil); err == nil {
 			t.Errorf("%s must be refused", name)
 		}
 	}
-	if _, err := BuildEnv(map[string]string{"PATH; rm -rf /": "x"}, "j1"); err == nil {
+	if _, err := BuildEnv(map[string]string{"PATH; rm -rf /": "x"}, "j1", nil); err == nil {
 		t.Error("an invalid env var name must be refused")
 	}
-	env, err := BuildEnv(map[string]string{"FOO": "bar"}, "j7")
+	env, err := BuildEnv(map[string]string{"FOO": "bar"}, "j7", nil)
 	if err != nil || env["FOO"] != "bar" || env["AE_JOB_ID"] != "j7" {
 		t.Fatalf("ours must be injected last: %v %v", env, err)
+	}
+}
+
+// The platform's own variables go in last and are NOT part of the caller's budget: a job must
+// not be refused for a credential it did not ask for.
+func TestPlatformEnvIsAddedLast(t *testing.T) {
+	platform := map[string]string{"AE_BLOB_URL": "http://host.docker.internal:9191/v1/blob/files"}
+	env, err := BuildEnv(map[string]string{"BIG": strings.Repeat("x", MaxEnvBytes-10)}, "j1", platform)
+	if err != nil {
+		t.Fatalf("the platform's variables must not push a job over the caller's cap: %v", err)
+	}
+	if env["AE_BLOB_URL"] != platform["AE_BLOB_URL"] || env["AE_JOB_ID"] != "j1" {
+		t.Fatalf("platform env missing: %v", env)
+	}
+}
+
+func TestBlobJobEnvOnlyWhenAStoreIsNamed(t *testing.T) {
+	r := httptest.NewRequest("POST", "http://127.0.0.1:9191/v1/container/jobs", nil)
+	if got := BlobJobEnv(Config{}, r); got != nil {
+		t.Fatalf("no blobStore means no blob credential at all, got %v", got)
+	}
+	got := BlobJobEnv(Config{BlobStore: "files"}, r)
+	// Loopback is rewritten: inside a container 127.0.0.1 is the container itself.
+	if got["AE_BLOB_URL"] != "http://host.docker.internal:9191/v1/blob/files" {
+		t.Fatalf("AE_BLOB_URL must be reachable from inside the container: %q", got["AE_BLOB_URL"])
+	}
+	if got["AE_BLOB_TOKEN"] == "" {
+		t.Fatal("AE_BLOB_TOKEN must be set alongside the URL")
 	}
 }
 
@@ -122,7 +152,7 @@ func TestCostCeilingRefusesBeforeStarting(t *testing.T) {
 		c.MaxTimeoutMS = MaxTimeoutMS
 		c.MaxJobCostUSD = 0.01
 	})
-	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3", Size: "large", TimeoutMS: MaxTimeoutMS}); err == nil {
+	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3", Size: "large", TimeoutMS: MaxTimeoutMS}, nil); err == nil {
 		t.Fatal("expected a refusal over the per-job ceiling")
 	}
 	if f.started != 0 {
@@ -145,7 +175,7 @@ func TestCostCeilingRefusesBeforeStarting(t *testing.T) {
 func TestTimeoutCannotExceedTheInstanceMaximum(t *testing.T) {
 	s := NewStore(&fakeRunner{avail: true})
 	c := cfgWith(func(c *Config) { c.MaxTimeoutMS = 10_000 })
-	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3", TimeoutMS: 60_000}); err == nil {
+	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3", TimeoutMS: 60_000}, nil); err == nil {
 		t.Fatal("a job may ask for less than the instance maximum, never more")
 	}
 }
@@ -155,13 +185,13 @@ func TestConcurrencyCap(t *testing.T) {
 	s := NewStore(f)
 	c := cfgWith(func(c *Config) { c.MaxConcurrent = 2 })
 	for i := 0; i < 2; i++ {
-		if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}); err != nil {
+		if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil); err != nil {
 			t.Fatalf("launch %d: %v", i, err)
 		}
 	}
 	// Refused, not queued — the hosted service answers the same way, because a queue would
 	// hide an instance that is permanently over its limit.
-	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}); err == nil {
+	if _, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil); err == nil {
 		t.Fatal("expected the third launch to be refused")
 	}
 	close(f.block)
@@ -170,7 +200,7 @@ func TestConcurrencyCap(t *testing.T) {
 func TestRecordsExitCodeAndCost(t *testing.T) {
 	f := &fakeRunner{avail: true, exit: 0}
 	s := NewStore(f)
-	job, err := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"})
+	job, err := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +217,7 @@ func TestRecordsExitCodeAndCost(t *testing.T) {
 func TestNonZeroExitIsAFailure(t *testing.T) {
 	f := &fakeRunner{avail: true, exit: 137}
 	s := NewStore(f)
-	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"})
+	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}, nil)
 	waitFor(t, func() bool { j, _ := s.Get("i1", job.ID); return j.Status != "running" })
 	j, _ := s.Get("i1", job.ID)
 	if j.Status != "failed" || j.ExitCode == nil || *j.ExitCode != 137 {
@@ -199,7 +229,7 @@ func TestCancelStopsAndIsIdempotent(t *testing.T) {
 	f := &fakeRunner{avail: true, block: make(chan struct{})}
 	s := NewStore(f)
 	c := cfgWith(nil)
-	job, _ := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"})
+	job, _ := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil)
 
 	j, canceled := s.Cancel("i1", c, job.ID)
 	if !canceled || j.Status != "canceled" {
@@ -274,7 +304,7 @@ func TestCompletionCallbackFiresAfterTheJobIsRecorded(t *testing.T) {
 		seen = j
 	})
 	c := cfgWith(func(c *Config) { c.OnComplete = "jobs/on-done" })
-	job, _ := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"})
+	job, _ := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil)
 	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return seen != nil })
 	mu.Lock()
 	defer mu.Unlock()
@@ -287,7 +317,7 @@ func TestNoCallbackWhenNoneIsConfigured(t *testing.T) {
 	s := NewStore(&fakeRunner{avail: true})
 	called := false
 	s.OnComplete(func(string, Config, *Job) { called = true })
-	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"})
+	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}, nil)
 	waitFor(t, func() bool { j, _ := s.Get("i1", job.ID); return j.Status != "running" })
 	time.Sleep(20 * time.Millisecond)
 	if called {
@@ -298,7 +328,7 @@ func TestNoCallbackWhenNoneIsConfigured(t *testing.T) {
 func TestRunnerFailureIsAFailedJobNotAStuckOne(t *testing.T) {
 	f := &fakeRunner{avail: true, err: errors.New("no such image")}
 	s := NewStore(f)
-	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"})
+	job, _ := s.Launch("i1", cfgWith(nil), LaunchRequest{Image: "alpine:3"}, nil)
 	waitFor(t, func() bool { j, _ := s.Get("i1", job.ID); return j.Status != "running" })
 	j, _ := s.Get("i1", job.ID)
 	if j.Status != "failed" || j.Error == "" {
@@ -312,7 +342,7 @@ func TestListIsNewestFirstAndFilters(t *testing.T) {
 	c := cfgWith(nil)
 	var ids []string
 	for i := 0; i < 3; i++ {
-		j, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"})
+		j, err := s.Launch("i1", c, LaunchRequest{Image: "alpine:3"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
