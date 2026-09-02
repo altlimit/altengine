@@ -181,6 +181,13 @@ altengine dev [flags]
 Data persists to `--data` by default and survives restarts. Instances **auto-create on first use**,
 so no setup is needed — just start issuing requests.
 
+> **Keep it on localhost.** The emulator has no authentication by design: any bearer token gets
+> full access, `/mcp` is served unauthenticated, functions run whatever JavaScript you deploy to
+> them, and containers start jobs on your local Docker daemon. `--host 0.0.0.0` therefore puts a
+> JavaScript runtime and your Docker daemon on the network for anyone who can reach the port.
+> It is a development tool, not a sandbox — run only code you trust in it. See
+> [SECURITY.md](../SECURITY.md).
+
 ## Credentials
 
 There are two kinds of data-plane credential, and the emulator accepts both.

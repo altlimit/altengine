@@ -23,6 +23,9 @@ altengine dev
 # → http://127.0.0.1:9191  (admin console + every data plane)
 ```
 
+The emulator is unauthenticated by design and binds localhost for that reason — see
+[SECURITY.md](SECURITY.md) before changing `--host`.
+
 Talk to it with the SDK (any non-empty API key works against the emulator):
 
 ```ts
@@ -142,3 +145,12 @@ and a model that has not read them will confidently invent Lucene or SQL instead
   binaries (installable via [`alt`](https://github.com/altlimit/alt)).
 - **JS SDK**: push a `js/vX.Y.Z` tag matching `js/package.json` to publish
   `@altengine/sdk` to npm.
+
+## Security
+
+The emulator has no authentication by design — see [SECURITY.md](SECURITY.md) for what that
+means, how to report a vulnerability, and which divergences from the hosted service count as one.
+
+## License
+
+[MIT](LICENSE).
