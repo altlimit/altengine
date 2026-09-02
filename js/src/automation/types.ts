@@ -98,14 +98,39 @@ export interface Agent {
   os: string | null;
   agent_version: string | null;
   labels: string[];
+  /** The machine ANSWERED, not that a socket is open. An agent reports in on a timer and one that
+   *  goes quiet is dropped from the roster inside `heard_within_seconds` — except where `liveness`
+   *  says otherwise. */
   online: boolean;
+  /** When the machine was last heard from, not when it was noticed missing. */
   last_seen: number | null;
   /** A THIRD state, not a shade of offline. Offline is a machine that worked and stopped; this is
    *  a credential nobody redeemed, so `hostname`, `os` and `agent_version` are null until it
    *  first connects. Do not report one as a machine that has stopped working. */
   never_connected: boolean;
+  /** What `online` rests on. Present only while online.
+   *
+   *  `"reporting"` is a checked fact. `"unverified"` is a machine whose agent is too old to report,
+   *  so a held socket is the whole of the evidence and a PC that was switched off reads as online
+   *  until its credential expires — show it as online, but not as the same answer. */
+  liveness?: "reporting" | "unverified";
+  /** The window `"reporting"` is a guarantee over, in seconds. Read it; do not hard-code it. */
+  heard_within_seconds?: number;
   enrolled_at: number;
   revoked_at: number | null;
+}
+
+/** Where a value went, in the machines' own words — see `AutomationClient.send`. */
+export interface Delivery {
+  /** Runs whose machine CONFIRMED it. Safe to treat as arrived. */
+  delivered: number;
+  runs: string[];
+  /** Nothing was written to these at all, so a retry is safe. */
+  unreachable: string[];
+  /** Written to an open socket and not acknowledged — neither of its neighbours. Do not send a
+   *  replacement value: the job may already have this one, and a second one-time code invalidates
+   *  the first. Let the job's own timeout decide. */
+  undetermined: string[];
 }
 
 export interface Script {

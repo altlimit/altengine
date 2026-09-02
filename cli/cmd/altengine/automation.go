@@ -275,8 +275,15 @@ func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *strin
 		//
 		// "never" is a different answer again, and printing it as offline was reporting a machine
 		// that stopped working when the truth is a credential nobody used.
+		//
+		// "unchecked" is the fourth word and it belongs in this column rather than in a footnote:
+		// it is an online machine whose agent is too old to report in, so the only thing behind
+		// the word is a socket the control plane is holding. Somebody reading this list is asking
+		// which machines are there, and a held socket is not an answer to that.
 		state := "offline"
 		switch {
+		case a.Online && a.Liveness == "unverified":
+			state = "unchecked"
 		case a.Online:
 			state = "online"
 		case a.NeverConnected:
@@ -286,7 +293,7 @@ func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *strin
 		if name == "" {
 			name = a.Hostname
 		}
-		fmt.Printf("%-36s %-20s %-8s %s\n", a.ID, name, state, strings.Join(a.Labels, ","))
+		fmt.Printf("%-36s %-20s %-10s %s\n", a.ID, name, state, strings.Join(a.Labels, ","))
 	}
 }
 
@@ -525,10 +532,19 @@ func automationSend(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	if err != nil {
 		fail(err)
 	}
-	fmt.Printf("delivered to %d run(s): %s\n", out.Delivered, strings.Join(out.Runs, ", "))
+	if out.Delivered > 0 {
+		fmt.Printf("delivered to %d run(s): %s\n", out.Delivered, strings.Join(out.Runs, ", "))
+	}
 	if len(out.Unreachable) > 0 {
 		// Said out loud: "delivered to 1 of 2" is what explains a failure twenty minutes later.
 		fmt.Printf("not reachable: %s\n", strings.Join(out.Unreachable, ", "))
+	}
+	if len(out.Undetermined) > 0 {
+		// Not an error, and deliberately not exiting non-zero: a wrapper that saw a failure here
+		// would send the value again, which for the one-time code this command usually carries
+		// means the job holds a code the portal has just invalidated.
+		fmt.Printf("not confirmed by %s — the job may already have this value, so do not send a "+
+			"replacement; let the job's own timeout decide\n", strings.Join(out.Undetermined, ", "))
 	}
 }
 

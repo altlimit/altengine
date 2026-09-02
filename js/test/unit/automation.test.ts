@@ -201,6 +201,20 @@ describe("sending a value to a waiting job", () => {
     await expect(client(fetchImpl).automation("fleet").send("otp", "1")).rejects.toThrow(/no run is executing/);
   });
 
+  it("resolves an unconfirmed delivery rather than throwing it", async () => {
+    // 202: written to an open socket and not acknowledged. Throwing would be read as a failure and
+    // answered with a second one-time code, which invalidates the first while the job may already
+    // be holding it. It comes back as data, with the runs named.
+    const fetchImpl = vi.fn(async () =>
+      json(202, { key: "otp", delivered: 0, runs: [], unreachable: [], undetermined: ["r1"] })
+    ) as unknown as typeof fetch;
+
+    const out = await client(fetchImpl).automation("fleet").send("otp", "1");
+    expect(out.delivered).toBe(0);
+    expect(out.undetermined).toEqual(["r1"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry a delivery", async () => {
     // A one-time code delivered twice is at best noise and at worst a second login attempt
     // against a portal that counts them.

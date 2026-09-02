@@ -156,12 +156,24 @@ type Agent struct {
 	AgentVersion string   `json:"agent_version"`
 	Labels       []string `json:"labels"`
 	Online       bool     `json:"online"`
-	LastSeen     int64    `json:"last_seen"`
+	// LastSeen is when the machine was last HEARD FROM, not when it was noticed missing.
+	LastSeen int64 `json:"last_seen"`
 	// NeverConnected is a THIRD state, not a shade of offline. Offline is a machine that worked
 	// and stopped, which somebody should go and look at; this is a credential nobody redeemed.
 	// Its hostname, OS and agent version stay blank until it first connects, because a machine
 	// reports those about itself.
 	NeverConnected bool `json:"never_connected"`
+	// Liveness says what Online rests on, and is present only while online.
+	//
+	// "reporting" is a machine that answered inside HeardWithinSeconds — one that stops is
+	// dropped from the roster within that window. "unverified" is a socket the control plane is
+	// holding and nothing else, because that machine's agent is too old to report: a PC that was
+	// switched off reads as online until its credential expires. Printing the second as the first
+	// is reporting a guess as a fact about exactly the machines somebody is checking on.
+	Liveness string `json:"liveness"`
+	// HeardWithinSeconds is the window "reporting" is a guarantee over. Server-side and subject
+	// to change, which is why it is published rather than assumed.
+	HeardWithinSeconds int `json:"heard_within_seconds"`
 }
 
 // Agents lists EVERY enrolled machine, walking the pages.
@@ -316,12 +328,19 @@ func (c Config) Logs(runID, cursor string) (*LogPage, error) {
 
 // --- inbound data ---------------------------------------------------------
 
-// Delivery reports where a value went.
+// Delivery reports where a value went, in the machines' own words.
+//
+// Delivered counts runs whose machine CONFIRMED it. Unreachable is nothing written at all, so a
+// retry is safe. Undetermined is the third answer and the one that has to stay separate: written
+// to an open socket and not acknowledged. Reported as delivered it is a lie, and reported as
+// unreachable it invites the retry that spends a second one-time code while the first may already
+// be in the job's mailbox.
 type Delivery struct {
-	Key         string   `json:"key"`
-	Delivered   int      `json:"delivered"`
-	Runs        []string `json:"runs"`
-	Unreachable []string `json:"unreachable"`
+	Key          string   `json:"key"`
+	Delivered    int      `json:"delivered"`
+	Runs         []string `json:"runs"`
+	Unreachable  []string `json:"unreachable"`
+	Undetermined []string `json:"undetermined"`
 }
 
 // Send hands a value to whichever job is waiting for it — job.waitForData(key) on the other end.

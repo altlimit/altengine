@@ -2,6 +2,7 @@ import { Http, seg } from "../http.js";
 import type {
   Agent,
   Artifact,
+  Delivery,
   LogPage,
   Run,
   RunWithArtifacts,
@@ -221,12 +222,16 @@ export class AutomationClient {
    * Throws when nothing is running. The usual failure is a race you cannot see — the code arrived
    * four seconds after the script gave up — and an integration needs to log that rather than read
    * a silent success.
+   *
+   * `delivered` counts what the MACHINES confirmed. A run in `undetermined` was written to and did
+   * not acknowledge, which is not a failure: do not send a replacement value, because the job may
+   * already have this one and a second one-time code invalidates the first.
    */
   async send(
     key: string,
     value: unknown,
     opts: { script?: string; agentId?: string } = {}
-  ): Promise<{ delivered: number; runs: string[]; unreachable: string[] }> {
+  ): Promise<Delivery> {
     return this.http.request("POST", `${this.base}/data/${seg(key)}`, {
       query: { script: opts.script, agent_id: opts.agentId },
       body: value,
@@ -235,8 +240,15 @@ export class AutomationClient {
   }
 
   /** The same, to ONE run by id — for when you were given the run id, typically because the
-   *  script handed out `job.dataUrl(key)` when it triggered whatever produces the value. */
-  async sendToRun(runId: string, key: string, value: unknown): Promise<{ delivered: boolean }> {
+   *  script handed out `job.dataUrl(key)` when it triggered whatever produces the value.
+   *
+   *  `delivered: false` with `undetermined: true` is the written-but-unacknowledged case: leave it
+   *  alone and let the job's own timeout decide. */
+  async sendToRun(
+    runId: string,
+    key: string,
+    value: unknown
+  ): Promise<{ delivered: boolean; undetermined?: true; run: string; key: string; message?: string }> {
     return this.http.request("POST", `${this.base}/runs/${seg(runId)}/data/${seg(key)}`, {
       body: value,
       retry: false,
