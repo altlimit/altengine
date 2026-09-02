@@ -80,6 +80,42 @@ having no local scheduler:
   was watching, not because the process restarted.
 - **No retries.** A failed run is logged and not retried.
 
+## Deploying a site
+
+`static` hosts your built front end. Point it at your build output DIRECTORY, not a file.
+
+```bash
+export ALTENGINE_URL=https://api.altengine.net
+export ALTENGINE_KEY=ak_...
+export ALTENGINE_INSTANCE=marketing
+
+npm run build
+altengine static deploy ./dist
+
+altengine static info                       # where it lives, which build is live
+altengine static list                       # deploy history, * marks the live one
+altengine static rollback <deployment-id>   # switch back to an earlier one
+```
+
+Files are hashed locally and only the ones the site does not already have are uploaded, so
+redeploying a site where one page changed uploads one page.
+
+A deployment is not live until it is activated, which `deploy` does for you. `--no-activate`
+uploads one to publish later — and that publish and a rollback are the same operation. Neither
+uploads anything, so switching between builds is immediate.
+
+```bash
+altengine static deploy --message "release 2.1" ./dist
+altengine static deploy --dry-run ./dist       # hash and report, upload nothing
+altengine static deploy --no-activate ./dist
+```
+
+The label defaults to the current commit, so `altengine static list` is readable without one.
+
+Everything in the directory is deployed, dotfiles included — `.well-known/` has to survive, or
+certificate renewal and app-association files break. A symlink pointing outside the directory is
+refused rather than followed, since publishing whatever it points at is rarely what was meant.
+
 ## Why
 
 This emulator re-implements the **data-plane HTTP/WebSocket contracts** the hosted
