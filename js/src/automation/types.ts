@@ -15,8 +15,17 @@ export interface StartRunRequest {
   /** Override the script's own parallel/exclusive setting for this run. Exclusive (the default
    *  for anything touching the desktop) means the run has the machine to itself. */
   parallel?: boolean;
-  /** POSTed once the run AND its files have landed, HMAC-signed with the instance secret. */
+  /** POSTed once the run AND its files have landed, HMAC-signed with the instance secret.
+   *  Mutually exclusive with `on_complete` — a run has one completion target. */
   webhook_url?: string;
+  /** A function to call once the run AND its files have landed, as
+   *  `<functions-instance>/<function>`. Mutually exclusive with `webhook_url`.
+   *
+   *  The function runs with its OWN configured grants, so naming it here grants the function
+   *  nothing it did not already have. Either field, set on the run, replaces BOTH of the
+   *  instance's defaults — so "call my function for this run" cannot also fire the fleet's
+   *  standing webhook. */
+  on_complete?: string;
   /** A wall clock, if this job genuinely has a deadline. Usually unset: what bounds a run is the
    *  instance's cost ceiling, not a timer. */
   timeout_ms?: number;
@@ -47,7 +56,10 @@ export interface Run {
   queued_at: number;
   started_at: number | null;
   ended_at: number | null;
+  /** Delivery state of this run's completion target. Only one of the two is ever non-null —
+   *  they are the same three columns, so read whichever is there. */
   webhook: { status: string | null; attempts: number; at: number | null } | null;
+  on_complete: { target: string; status: string | null; attempts: number; at: number | null } | null;
 }
 
 export interface Artifact {
