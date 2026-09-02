@@ -47,8 +47,8 @@ type bindings struct {
 
 // call is one stub method: the HTTP shape it maps to, and how it reads its arguments.
 type call struct {
-	method  string
-	level   auth.Level
+	method string
+	level  auth.Level
 	// levelFor overrides `level` when the grant a call needs depends on its ARGUMENTS.
 	// Only channel.token does: minting a publish-capable token is a write, minting a
 	// subscriber is a read, exactly as POST /tokens decides it. A static level here would
@@ -56,16 +56,26 @@ type call struct {
 	// divergence that actually costs something — a function that mints publish tokens
 	// locally on a read grant, then 403s in production.
 	levelFor func(args []goja.Value) auth.Level
-	path    func(t target, args []goja.Value) (string, error)
-	body    func(args []goja.Value) (any, error)
-	unwrap  string // field to lift out of the response, "" to return the whole object
-	minArgs int
+	path     func(t target, args []goja.Value) (string, error)
+	body     func(args []goja.Value) (any, error)
+	unwrap   string // field to lift out of the response, "" to return the whole object
+	minArgs  int
 	// custom replaces the single-request path entirely, for the two blob methods that have no
 	// REST equivalent because they are binding-only hosted (`put` writes bytes straight to
 	// storage; `bytes` reads them back). Expressing them as the PUBLIC calls they are
 	// equivalent to keeps the emulator's HTTP surface identical to the hosted one — inventing
 	// an endpoint here would be a route that works locally and 404s in production.
 	custom func(b *bindings, t target, args []goja.Value) (any, error)
+	// unavailable marks a method that exists hosted and cannot run here, carrying the
+	// sentence the caller gets instead. Only automation uses it: its runs happen on
+	// enrolled desktops, and there is no local stand-in for an office full of PCs.
+	//
+	// The method is still DECLARED, with its real grant level, and the grant is still
+	// checked before this fires — so the ladder stays shared and a call is refused here
+	// for the same reason it would be refused in production. Leaving the service out
+	// instead would make `env.automation` undefined locally and defined hosted, which
+	// reads as a missing grant and sends the reader after the wrong bug.
+	unavailable string
 }
 
 type target struct {
@@ -116,6 +126,11 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 	}
 	if err := auth.Require(&auth.Identity{Grants: auth.Grants(grants)}, service, t.instance, level); err != nil {
 		return nil, fmt.Errorf("env.%s.%s: %w", service, name, err)
+	}
+
+	// After the grant, deliberately: a call the grant would have refused says so here too.
+	if m.unavailable != "" {
+		return nil, fmt.Errorf("env.%s.%s: %s", service, name, m.unavailable)
 	}
 
 	if m.custom != nil {
@@ -739,6 +754,31 @@ var serviceMethods = map[string]map[string]call{
 			},
 		},
 	},
+	// Automation. Declared for its GRANT LEVELS, which are shared like every other service's;
+	// none of it runs here, because a run is a script driving a real desktop and the emulator
+	// has no fleet. See the `unavailable` field for why the stub exists anyway.
+	//
+	// The levels are not arbitrary. Anything that drives or answers a machine is `write` —
+	// starting a run and delivering a value a job is blocked on are both that. Reading what
+	// already happened is `read`, and there is nothing at `full`: this service has no method
+	// that destroys anything.
+	"automation": {
+		"deliver":   {level: auth.Write, minArgs: 3, unavailable: noLocalFleet},
+		"send":      {level: auth.Write, minArgs: 4, unavailable: noLocalFleet},
+		"run":       {level: auth.Write, minArgs: 2, unavailable: noLocalFleet},
+		"get":       {level: auth.Read, minArgs: 2, unavailable: noLocalFleet},
+		"list":      {level: auth.Read, minArgs: 1, unavailable: noLocalFleet},
+		"cancel":    {level: auth.Write, minArgs: 2, unavailable: noLocalFleet},
+		"logs":      {level: auth.Read, minArgs: 2, unavailable: noLocalFleet},
+		"artifacts": {level: auth.Read, minArgs: 2, unavailable: noLocalFleet},
+		"agents":    {level: auth.Read, minArgs: 1, unavailable: noLocalFleet},
+	},
 }
+
+// What a function calling env.automation locally is told. It names the two things that do
+// work, because "not supported" on its own leaves someone with a script to test and nowhere
+// to run it.
+const noLocalFleet = "automation runs on enrolled machines, which the emulator has none of — " +
+	"deploy the function to run this, or drive the fleet with `altengine automation`"
 
 var _ = strings.ToLower

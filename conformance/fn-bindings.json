@@ -13,6 +13,11 @@
     "lowest first. Only channel.token does this: minting a subscriber token is a read, minting",
     "a publish-capable one is a write.",
     "",
+    "A service appears here even when the emulator cannot RUN it. Automation is the case: its",
+    "runs happen on enrolled desktops, which no emulator has, and the local stub says so rather",
+    "than pretending. The ladder is still shared, because the level a call demands is decided",
+    "before anything runs — leaving it out is how the two sides drift.",
+    "",
     "Both sides assert against this file. Edit it only when the capability itself changes."
   ],
   "services": {
@@ -25,6 +30,17 @@
       "setDisabled": "write",
       "deleteUser": "full",
       "revokeSessions": "write"
+    },
+    "automation": {
+      "deliver": "write",
+      "send": "write",
+      "run": "write",
+      "get": "read",
+      "list": "read",
+      "cancel": "write",
+      "logs": "read",
+      "artifacts": "read",
+      "agents": "read"
     },
     "blob": {
       "put": "write",
