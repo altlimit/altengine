@@ -445,7 +445,7 @@ func raw(in map[string]string) map[string]json.RawMessage {
 
 var _ = fmt.Sprintf
 
-// WebCrypto. Hosted functions run on workerd, which has all of it; the emulator had only
+// WebCrypto. The hosted runtime has all of it; the emulator had only
 // crypto.randomUUID. So `crypto.getRandomValues` and `crypto.subtle.digest` — the two you
 // cannot mint or hash a token without — worked in production and threw "Object has no
 // member 'getRandomValues'" locally. That is the emulator failing at its one job, and the

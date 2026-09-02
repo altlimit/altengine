@@ -290,8 +290,8 @@ func installConsole(vm *goja.Runtime, in *invocation) {
 
 // installCrypto provides the WebCrypto surface a function can count on.
 //
-// `randomUUID` alone was not enough, and the way it failed was the bad kind. Hosted
-// functions run on workerd, which has all of WebCrypto — so code written against
+// `randomUUID` alone was not enough, and the way it failed was the bad kind. The hosted
+// runtime has all of WebCrypto — so code written against
 // `crypto.getRandomValues` or `crypto.subtle.digest` works in production and dies HERE,
 // on the developer's machine, with "Object has no member 'getRandomValues'". That is
 // exactly backwards: the emulator exists to catch things before a deploy, not to be the
