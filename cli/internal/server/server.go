@@ -7,7 +7,9 @@ package server
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/admin"
@@ -18,6 +20,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/container"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
+	"github.com/altlimit/altengine/cli/internal/devsite"
 	"github.com/altlimit/altengine/cli/internal/functions"
 	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/mcp"
@@ -29,6 +32,15 @@ type Options struct {
 	Addr    string
 	DataDir string // "" => in-memory
 	DevOpen bool
+
+	// StaticDir, when set, serves that build output directory as a site — the local stand-in for
+	// a deployment on the hosted static service. It gets its OWN LISTENER rather than a path
+	// prefix under the API, because a generator emits root-absolute URLs (/assets/app.js) and a
+	// site mounted under a prefix has none of them resolve. Hosted, a site has its own hostname;
+	// locally the equivalent is its own port.
+	StaticDir  string
+	StaticAddr string // defaults to the API port + 1
+	StaticSPA  *bool  // nil => detected from the directory
 }
 
 // Server is the assembled emulator.
@@ -36,6 +48,9 @@ type Server struct {
 	opts Options
 	fn   *functions.Handler
 	mux  *http.ServeMux
+
+	site   *devsite.Server
+	siteLn net.Listener
 }
 
 // New builds the server and all service handlers.
@@ -95,7 +110,56 @@ func New(opts Options) (*Server, error) {
 		common.WriteJSON(w, 200, map[string]any{"ok": true})
 	})
 
-	return &Server{opts: opts, mux: mux, fn: fnHandler}, nil
+	// The static data plane exists hosted and not here, and the console's catch-all on "/" would
+	// otherwise answer a deploy attempt with a page of HTML — which reads as a broken URL rather
+	// than an unimplemented one. Say what to do instead.
+	staticStub := common.Wrap(func(w http.ResponseWriter, r *http.Request) error {
+		return common.NewError(http.StatusNotImplemented,
+			"the emulator does not store deployments: run `altengine dev --static ./dist` to serve a built site locally, "+
+				"and point `altengine static deploy` at the hosted service (ALTENGINE_URL=https://api.altengine.net)",
+			"UNIMPLEMENTED")
+	})
+	mux.HandleFunc("/v1/static", staticStub)
+	mux.HandleFunc("/v1/static/", staticStub)
+
+	srv := &Server{opts: opts, mux: mux, fn: fnHandler}
+
+	if opts.StaticDir != "" {
+		site, err := devsite.New(devsite.Options{
+			Dir:       opts.StaticDir,
+			SPA:       opts.StaticSPA,
+			CleanURLs: true,
+			NotFound:  "/404.html",
+		})
+		if err != nil {
+			return nil, err
+		}
+		// Bound here rather than in ListenAndServe so a port already in use is a startup error
+		// with the rest of them, not a goroutine that dies after the banner has printed.
+		ln, err := net.Listen("tcp", srv.staticAddr())
+		if err != nil {
+			return nil, err
+		}
+		srv.site, srv.siteLn = site, ln
+	}
+
+	return srv, nil
+}
+
+// staticAddr is the site's listen address: the flag if given, otherwise the API port + 1.
+func (s *Server) staticAddr() string {
+	if s.opts.StaticAddr != "" {
+		return s.opts.StaticAddr
+	}
+	host, port, err := net.SplitHostPort(s.opts.Addr)
+	if err != nil {
+		return s.opts.Addr
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return s.opts.Addr
+	}
+	return net.JoinHostPort(host, strconv.Itoa(n+1))
 }
 
 // Handler returns the root http.Handler (with CORS and a simple request log).
@@ -119,7 +183,31 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  containers:     /v1/container/{instance} — jobs run on your local Docker daemon")
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
+	s.serveSite()
 	return http.ListenAndServe(s.opts.Addr, s.Handler())
+}
+
+// serveSite starts the static site listener, if one was configured.
+//
+// The site is a DIFFERENT ORIGIN from the API here, exactly as it is deployed (a site host and
+// api.altengine.net are different origins too). So the app's fetches go to the API's absolute
+// URL and are subject to CORS — which the emulator allows on /v1/* — rather than working
+// same-origin locally and failing the first time they are deployed.
+func (s *Server) serveSite() {
+	if s.site == nil {
+		return
+	}
+	log.Printf("  static site:    http://%s/ — serving %s", s.siteLn.Addr(), s.site.Dir())
+	for _, line := range s.site.Summary() {
+		log.Printf("                  %s", line)
+	}
+	log.Printf("                  read from disk on every request — rebuild and reload, no deploy step")
+	log.Printf("                  served no-cache locally; deployed, fingerprinted files get a year")
+	go func() {
+		if err := http.Serve(s.siteLn, siteLogMW(s.site)); err != nil {
+			log.Printf("static site server stopped: %v", err)
+		}
+	}()
 }
 
 func dataLabel(d string) string {
@@ -178,4 +266,25 @@ func logMW(next http.Handler) http.Handler {
 			log.Printf("%s %s", r.Method, r.URL.Path)
 		}
 	})
+}
+
+// siteLogMW logs the site's requests WITH their status, and does not skip "/" the way the API's
+// logger does — on a website the homepage is the request you most want to see, and a 404 that
+// looks identical to a 200 in the log is the thing you are usually there to find.
+func siteLogMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("site %d %s %s", rec.status, r.Method, r.URL.Path)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
 }

@@ -52,6 +52,7 @@ func usage() {
 
 Usage:
   altengine dev [flags]              Start the emulator (data plane + admin console)
+  altengine dev --static ./dist      ...and serve a built site on its own port
   altengine deploy [flags] <file>    Bundle a function and deploy it
   altengine functions <subcommand>   list | versions | rollback | pull
   altengine static <subcommand>      deploy | list | rollback | info
@@ -76,7 +77,23 @@ func devCmd(args []string) {
 	data := fs.String("data", "./.altengine", "data directory for persistent storage")
 	memory := fs.Bool("memory", false, "keep all data in memory (no persistence)")
 	reset := fs.Bool("reset", false, "wipe the data directory before starting")
+	static := fs.String("static", "", "serve this build output directory as a site, e.g. ./dist")
+	staticPort := fs.Int("static-port", 0, "port for the site (default: --port + 1)")
+	spa := fs.Bool("spa", false, "serve index.html for unmatched paths (default: detected from the directory)")
 	_ = fs.Parse(args)
+
+	// Three states, and the third is the point: detection is a guess, and a guess that cannot be
+	// overridden is worse than none — both -spa and -spa=false have to beat it.
+	var spaOverride *bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "spa" {
+			spaOverride = spa
+		}
+	})
+	staticAddr := ""
+	if *staticPort != 0 {
+		staticAddr = fmt.Sprintf("%s:%d", *host, *staticPort)
+	}
 
 	dataDir := *data
 	if *memory {
@@ -88,9 +105,12 @@ func devCmd(args []string) {
 	}
 
 	srv, err := server.New(server.Options{
-		Addr:    fmt.Sprintf("%s:%d", *host, *port),
-		DataDir: dataDir,
-		DevOpen: true,
+		Addr:       fmt.Sprintf("%s:%d", *host, *port),
+		DataDir:    dataDir,
+		DevOpen:    true,
+		StaticDir:  *static,
+		StaticAddr: staticAddr,
+		StaticSPA:  spaOverride,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "startup error:", err)

@@ -116,6 +116,46 @@ Everything in the directory is deployed, dotfiles included — `.well-known/` ha
 certificate renewal and app-association files break. A symlink pointing outside the directory is
 refused rather than followed, since publishing whatever it points at is rarely what was meant.
 
+### Serving a site locally
+
+`altengine dev --static` serves a build output directory the way the hosted service serves a
+deployment. There is no local deploy step — the directory is read on every request, so a rebuild
+shows up on the next reload.
+
+```bash
+altengine dev --static ./dist
+# → http://127.0.0.1:9191   API + admin console
+# → http://127.0.0.1:9192   the site
+```
+
+The site gets its **own port** because a generator emits root-absolute URLs (`/assets/app.js`),
+which resolve only when the site owns the whole path space — the local stand-in for the hostname
+it gets when deployed. That also makes the site and the API different origins here, exactly as
+they are in production, so the app calls the API by its full URL.
+
+```bash
+  --static ./dist        build output directory to serve
+  --static-port 9192     port for the site (default: --port + 1)
+  --spa                  serve index.html for unmatched paths
+```
+
+`--spa` is detected from the directory when you do not pass it, and the startup banner says what
+was decided and why: one page and no `404.html` reads as a client-routed build, anything else as
+a generated site. Pass `--spa` or `--spa=false` to settle it yourself.
+
+Resolution matches the hosted service — directory indexes, `/docs` → `/docs/`, clean URLs
+(`/about` → `/about.html`), the SPA shell, then `/404.html` with a 404 status. Content types come
+from the same table, and ETags are content hashes, so a reload is a 304.
+
+Two things differ on purpose, both because a developer's browser is the wrong place to get stuck
+with them: every response is `no-cache` rather than the year a fingerprinted asset gets when
+deployed, and the trailing-slash redirect is a 302 rather than a 301. The banner still counts how
+many assets *will* be cached for a year once deployed — that number is a build setting, and it is
+easier to fix before the deploy than after.
+
+The directory need not exist yet: the site answers 404 saying so, and serves the build as soon as
+it lands.
+
 ## Why
 
 This emulator re-implements the **data-plane HTTP/WebSocket contracts** the hosted
@@ -133,6 +173,9 @@ altengine dev [flags]
   --data ./.altengine     data directory (SQLite files + control.json)
   --memory               keep everything in RAM (nothing persisted)
   --reset                wipe the data directory before starting
+  --static ./dist        serve a built site on its own port (see above)
+  --static-port 9192     port for that site (default: --port + 1)
+  --spa                  serve index.html for unmatched paths (default: detected)
 ```
 
 Data persists to `--data` by default and survives restarts. Instances **auto-create on first use**,
@@ -391,6 +434,10 @@ metering/billing, the hosted console's own admin sessions & OAuth (the emulator'
 on localhost), CSRF, rate limiting, usage archival, datastore PITR/backups, and multi-node channel
 fan-out (single-process hub). The index-served guard matches the hosted service on field coverage
 but is lenient on sort *direction*.
+
+**Static deployments** are not stored locally — `altengine dev --static ./dist` serves a directory
+instead, which is what a dev loop wants. `/v1/static` answers `501 UNIMPLEMENTED` naming that,
+so `altengine static deploy` pointed at the emulator says what to do rather than failing obscurely.
 
 On the auth plane specifically:
 
