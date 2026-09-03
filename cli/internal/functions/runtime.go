@@ -311,12 +311,30 @@ func logLine(vm *goja.Runtime, args []goja.Value) string {
 	return strings.Join(parts, " ")
 }
 
+// ErrBodyTooLarge is returned by readBody when the request exceeds MaxRequestBytes.
+var ErrBodyTooLarge = errors.New("request body too large")
+
+// readBody reads a deployed function's request body, refusing one that is too big.
+//
+// It used to be io.ReadAll(io.LimitReader(r.Body, MaxCodeBytes)): the wrong limit — the
+// DEPLOY code size, which has nothing to do with a request — and, worse, silently applied.
+// A 1.5 MiB upload arrived as exactly 1 MiB of valid JSON with its tail missing, so the
+// function answered "body must be JSON" and no layer anywhere said "too large". One extra
+// byte is read so exceeding the limit is detectable rather than indistinguishable from a
+// body that happens to end there.
 func readBody(r *http.Request) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
 	defer r.Body.Close()
-	return io.ReadAll(io.LimitReader(r.Body, MaxCodeBytes))
+	b, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxRequestBytes {
+		return nil, ErrBodyTooLarge
+	}
+	return b, nil
 }
 
 var _ = log.Printf

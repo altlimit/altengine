@@ -37,6 +37,11 @@ import (
 // Limits mirror the hosted service so a bundle that is refused there is refused here.
 const (
 	MaxCodeBytes  = 1 << 20 // 1 MiB, same as hosted
+	// The biggest REQUEST body a deployed function may receive. Nothing to do with the
+	// code limit above, which it used to share — a function that accepts an uploaded file
+	// inline is not a function with a big bundle, and reading a request through the code
+	// limit truncated it at 1 MiB.
+	MaxRequestBytes = 10 << 20 // 10 MiB
 	KeepVersions  = 10
 	MaxSecrets    = 32
 	MaxSecretSize = 4096

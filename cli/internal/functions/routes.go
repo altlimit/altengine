@@ -16,6 +16,7 @@
 package functions
 
 import (
+	"errors"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -282,6 +283,12 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	body, err := readBody(r)
+	if errors.Is(err, ErrBodyTooLarge) {
+		// Said out loud, because the alternative was a truncated body and a confusing
+		// parse error from inside the function.
+		return common.NewError(http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("request body is larger than %d MiB", MaxRequestBytes>>20), "PAYLOAD_TOO_LARGE")
+	}
 	if err != nil {
 		return common.BadRequest("could not read request body")
 	}

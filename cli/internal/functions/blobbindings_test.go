@@ -12,8 +12,11 @@
 package functions
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -42,6 +45,33 @@ func jsonBody(t *testing.T, raw string) map[string]any {
 		t.Fatalf("response was not JSON: %s", raw)
 	}
 	return out
+}
+
+// A function's request body is bounded, and exceeding it is SAID rather than trimmed.
+//
+// This read through MaxCodeBytes — the deploy limit — and truncated silently. A 1.5 MiB
+// inline upload arrived as exactly 1 MiB of valid JSON with its tail gone, so the function
+// answered "body must be JSON" and nothing anywhere mentioned a size. The bug was found
+// from the outside, in an app, by sending 256 known bytes and finding the wrong ones back.
+func TestRequestBodyIsBoundedAndSaysSo(t *testing.T) {
+	if MaxRequestBytes == MaxCodeBytes {
+		t.Fatal("the request limit must not be the deploy code limit: they are unrelated, and sharing one is the bug")
+	}
+
+	big := bytes.Repeat([]byte("a"), MaxRequestBytes+1)
+	req := httptest.NewRequest("POST", "/", bytes.NewReader(big))
+	if _, err := readBody(req); !errors.Is(err, ErrBodyTooLarge) {
+		t.Fatalf("a body over the limit must be refused, got %v", err)
+	}
+
+	exact := bytes.Repeat([]byte("a"), MaxRequestBytes)
+	got, err := readBody(httptest.NewRequest("POST", "/", bytes.NewReader(exact)))
+	if err != nil {
+		t.Fatalf("a body AT the limit must be accepted: %v", err)
+	}
+	if len(got) != MaxRequestBytes {
+		t.Fatalf("a body at the limit must arrive whole: got %d of %d", len(got), MaxRequestBytes)
+	}
 }
 
 func TestBlobPutAndReadBackThroughStub(t *testing.T) {
