@@ -68,6 +68,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /admin/auth/{id}/users/{uid}/claims", common.Wrap(h.authSetClaims))
 	mux.HandleFunc("DELETE /admin/auth/{id}/users/{uid}", common.Wrap(h.authDeleteUser))
 	mux.HandleFunc("PUT /admin/auth/{id}/users/{uid}/disabled", common.Wrap(h.authSetDisabled))
+	mux.HandleFunc("POST /admin/auth/{id}/signin-code", common.Wrap(h.authSignInCode))
 
 	// Search data browser.
 	mux.HandleFunc("GET /admin/search/{id}/indexes", common.Wrap(h.searchIndexes))

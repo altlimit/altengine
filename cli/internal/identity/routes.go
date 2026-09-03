@@ -382,7 +382,9 @@ func requireIdentity(r *http.Request, inst *control.Instance) (*IdentityClaims, 
 // complete the flow without a mailbox. That echo is a local-development affordance and has
 // no counterpart in the hosted service.
 
-func genCode() string {
+// GenCode is exported so the admin sign-in-code route mints codes exactly as this flow
+// does. Two generators would be two answers to "what is a valid code".
+func GenCode() string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(b[:])%1000000)
@@ -403,7 +405,7 @@ func (h *Handler) issueCode(cfg Config, store *Store, identifier, purpose string
 	if email == "" {
 		return "", nil // username-only instance with no address on file — nothing to send
 	}
-	code := genCode()
+	code := GenCode()
 	exp := nowMS()/1000 + cfg.PasswordlessCodeTTL
 	issued, err := store.StartEmailCode(user.UID, purpose, code, exp, nowMS())
 	if err != nil || !issued {
