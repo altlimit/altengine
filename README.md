@@ -7,11 +7,17 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 | Folder | What it is | Install |
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`) | `alt install altlimit/altengine` |
-| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | `npm i @altengine/sdk` |
-| [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
-| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | `pip install altengine` |
-| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | `composer require altlimit/altengine` |
+| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | from this repo — see below |
+| [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | from this repo — see below |
+| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | from this repo — see below |
+| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | from this repo — see below |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
+
+**The SDKs are not on the package registries yet.** This column used to carry `npm i
+@altengine/sdk`, `pip install altengine`, `go get …` and `composer require …`, and all four of
+them 404 — checked against npm, PyPI, Packagist and the Go module proxy. Until they are published,
+use each SDK from a clone of this repository; the CLI is a different matter and installs from its
+releases as shown.
 
 ## Quick start
 

@@ -5,8 +5,12 @@ managed **datastore**, **search**, realtime **channels**, **blob** storage and
 **containers** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
+**Not published to npm yet** — `npm i @altengine/sdk` 404s today. Use it from a clone of this
+repository until it is:
+
 ```bash
-npm i @altengine/sdk
+git clone https://github.com/altlimit/altengine
+cd altengine/js && npm install && npm run build
 ```
 
 ## Setup
