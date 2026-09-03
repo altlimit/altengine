@@ -117,7 +117,10 @@ func ParseConfig(raw map[string]any) Config {
 		return c
 	}
 	if v, ok := raw["allowedImages"].([]any); ok {
-		c.AllowedImages = nil
+		// An EMPTY SLICE, never nil: this list is served as `allowed_images`, and a nil slice
+		// marshals to `null` where hosted always sends an array. A client that has to read the
+		// two differently is a client that behaves differently locally.
+		c.AllowedImages = []string{}
 		for _, i := range v {
 			if s, ok := i.(string); ok && strings.TrimSpace(s) != "" {
 				c.AllowedImages = append(c.AllowedImages, strings.TrimSpace(s))

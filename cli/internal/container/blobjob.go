@@ -11,11 +11,11 @@
 // unchanged, which is the whole point of the variables existing locally at all.
 //
 // WHAT IS NOT FAITHFUL. Hosted, the token is a platform-minted MAC over the job, the org and the
-// two instances, expiring with the job and refused for anything but put/get/list. Here the
+// two instances, expiring with the job and refused for anything but put and get. Here the
 // emulator's data plane is dev-open — any bearer works — so the token is a readable string and
-// bounds nothing. A job that deletes an object succeeds locally and is refused hosted; that is
-// the same trade the rest of this emulator makes with API keys, and it is stated rather than
-// papered over.
+// bounds nothing. A job that lists, publishes or deletes succeeds locally and is refused hosted;
+// that is the same trade the rest of this emulator makes with API keys, and it is stated rather
+// than papered over.
 //
 // THE HOST HAS TO BE REACHABLE FROM INSIDE THE CONTAINER, which `localhost` is not: it is the
 // container's own loopback. Docker publishes the machine as `host.docker.internal` on Desktop

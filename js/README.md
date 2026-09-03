@@ -1,8 +1,9 @@
 # @altengine/sdk
 
 Official JavaScript/TypeScript SDK for [altengine](https://www.altengine.net) —
-managed **datastore**, **search**, and realtime **channels** behind one API key.
-Zero dependencies, fetch-based, works in Node ≥20, browsers, and edge runtimes.
+managed **datastore**, **search**, realtime **channels**, **blob** storage and
+**containers** behind one API key. Zero dependencies, fetch-based, works in
+Node ≥20, browsers, and edge runtimes.
 
 ```bash
 npm i @altengine/sdk
@@ -168,6 +169,94 @@ that is what you meant.
 Organization API key only. End-user identity tokens are refused here as they are
 for containers: a run spends time on hardware you own, and access rules bound
 what a user may read, not what they may spend.
+
+## Blob
+
+Files, stored and served. **The bytes never travel through the API**: every
+upload and download goes to a presigned URL, straight to storage.
+
+```ts
+const files = ae.blob("assets");
+
+// `put` picks the transfer — one PUT, or a multipart upload for a Blob/File
+// bigger than storage takes in a single request.
+const rec = await files.put("invoice.pdf", pdfBytes, { contentType: "application/pdf" });
+rec.blobkey;   // blob:<instance>:<id> — the handle to store in a document
+rec.url;       // the public URL, or null when the object is private
+
+const { download_url, expires_at } = await files.get(rec.id);   // signed, minutes
+const bytes = await files.bytes(rec.id);
+
+for await (const b of files.listAll({ prefix: "invoices/" })) console.log(b.name, b.size);
+await files.setPublic(rec.id);
+await files.delete([rec.id]);
+```
+
+For a browser upload, your backend decides whether this user may upload and how
+big the file may be, then hands over a URL that does exactly that:
+
+```ts
+const minted = await files.uploadUrl({ name, size, content_type: type });
+// the page PUTs the bytes to minted.upload_url with that content-type
+```
+
+The size is signed into the URL, so it is the real bound on what whoever holds it
+can make you store. There is no commit step — the row is promoted by the side
+that received the bytes, so a `get` straight after an upload reads `ready`.
+
+A container job that was given a store reads it from its own environment:
+
+```ts
+import { blobFromJobEnv } from "@altengine/sdk";
+
+const out = blobFromJobEnv();          // AE_BLOB_URL + AE_BLOB_TOKEN
+await out.put("result.csv", csv, { contentType: "text/csv" });
+```
+
+That token puts and gets. It cannot `list` the store, cannot publish (`setPublic`,
+or `public: true` on an upload) and cannot delete — each a 403 naming what was
+refused, never a quiet downgrade.
+
+## Containers
+
+A Docker image run as a background job, for work that will not fit in a function.
+
+```ts
+const jobs = ae.container("batch");
+
+const job = await jobs.run({
+  image: "ghcr.io/me/worker:1",
+  cmd: ["./run", "--period", "2026-08"],
+  size: "medium",
+});
+const done = await jobs.wait(job.id, { onPoll: (j) => console.log(j.status) });
+console.log(done.exit_code, done.cost_usd);
+
+const { lines, cursor } = await jobs.logs(job.id);
+await jobs.cancel(job.id);
+const { sizes, allowed_images, max_timeout_ms } = await jobs.sizes();
+```
+
+Only images on the instance's allowlist launch; an empty allowlist runs nothing.
+`run` returns as soon as the machine exists — a job's output goes to blob or to a
+completion function, not back through this call. `wait`'s `timeoutMs` bounds the
+wait, not the job: giving up leaves the machine running and billing, so call
+`cancel` if that is what you meant.
+
+`list` is keyset-paged and its `cursor` feeds back as `before`; `listAll` walks
+the pages for you.
+
+Organization API key only, like automation.
+
+### Levels
+
+A grant level is a ceiling, and they are cumulative: `read` < `write` < `full`.
+
+| Level | Blob | Container |
+|---|---|---|
+| `read` | `get`, `bytes`, `list` | `get`, `list`, `logs`, `sizes` |
+| `write` | `put`, `uploadUrl`, `setPublic` | `run`, `cancel` |
+| `full` | `delete` | — |
 
 ## Auth
 

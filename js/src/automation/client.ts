@@ -1,4 +1,5 @@
 import { Http, seg } from "../http.js";
+import { sleep } from "../poll.js";
 import type {
   Agent,
   Artifact,
@@ -176,15 +177,48 @@ export class AutomationClient {
     return this.http.request("GET", `${this.base}/agents/${seg(agentId)}`);
   }
 
-  /** Deployed scripts and their active versions. Deploy with the CLI. */
-  async scripts(): Promise<Script[]> {
-    const { scripts } = await this.http.request<{ scripts: Script[] }>("GET", `${this.base}/scripts`);
-    return scripts;
+  /**
+   * One page of deployed scripts and their active versions. Deploy with the CLI.
+   *
+   * PAGED, like `agents`. Both routes return a cursor and both used to have it dropped here, so a
+   * caller past the first page saw part of an answer and was told nothing — which is the exact
+   * shape the `agents`/`allAgents` pair below already exists to avoid.
+   */
+  async scripts(
+    query: { cursor?: string; limit?: number } = {}
+  ): Promise<{ scripts: Script[]; cursor: string | null }> {
+    return this.http.request("GET", `${this.base}/scripts`, { query });
   }
 
-  async schedules(): Promise<Schedule[]> {
-    const { schedules } = await this.http.request<{ schedules: Schedule[] }>("GET", `${this.base}/schedules`);
-    return schedules;
+  /** Every deployed script, walking the pages for you. */
+  async allScripts(): Promise<Script[]> {
+    const out: Script[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.scripts({ cursor });
+      out.push(...page.scripts);
+      if (!page.cursor) return out;
+      cursor = page.cursor;
+    }
+  }
+
+  /** One page of declared schedules. */
+  async schedules(
+    query: { cursor?: string; limit?: number } = {}
+  ): Promise<{ schedules: Schedule[]; cursor: string | null }> {
+    return this.http.request("GET", `${this.base}/schedules`, { query });
+  }
+
+  /** Every declared schedule, walking the pages for you. */
+  async allSchedules(): Promise<Schedule[]> {
+    const out: Schedule[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.schedules({ cursor });
+      out.push(...page.schedules);
+      if (!page.cursor) return out;
+      cursor = page.cursor;
+    }
   }
 
   /**
@@ -275,21 +309,4 @@ export class AutomationClient {
     });
     return res.env;
   }
-}
-
-/** Sleep, abortable — so `wait` inside a request handler dies with the request rather than
- *  holding it open until a run somebody stopped caring about finishes. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason ?? new Error("aborted"));
-    const t = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(t);
-      reject(signal?.reason ?? new Error("aborted"));
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

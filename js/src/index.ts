@@ -35,6 +35,8 @@ import { SearchClient, type SearchOptions } from "./search/client.js";
 import { ChannelClient } from "./channel/client.js";
 import { AuthClient } from "./auth/client.js";
 import { AutomationClient } from "./automation/client.js";
+import { BlobClient } from "./blob/client.js";
+import { ContainerClient } from "./container/client.js";
 
 export class AltEngine {
   private readonly http: Http;
@@ -63,6 +65,19 @@ export class AltEngine {
    * hardware you own, so end-user identity tokens are refused as they are for containers. */
   automation(instance: string): AutomationClient {
     return new AutomationClient(this.http, instance);
+  }
+
+  /** Client for a blob instance — files, stored and served. Upload bytes go straight to
+   * storage on a presigned URL and never travel through the API. */
+  blob(instance: string): BlobClient {
+    return new BlobClient(this.http, instance);
+  }
+
+  /** Server-side client for a container instance — a Docker image run as a background job.
+   * Organization API key only: end-user identity tokens are refused, as they are for
+   * automation, because access rules bound what a user may read, not what they may spend. */
+  container(instance: string): ContainerClient {
+    return new ContainerClient(this.http, instance);
   }
 
   /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
@@ -97,6 +112,12 @@ export { f, facet } from "./search/fields.js";
 
 export { AutomationClient } from "./automation/client.js";
 export * from "./automation/types.js";
+
+export { BlobClient, blobFromJobEnv, MAX_SINGLE_PUT_BYTES } from "./blob/client.js";
+export * from "./blob/types.js";
+
+export { ContainerClient } from "./container/client.js";
+export * from "./container/types.js";
 
 export { ChannelClient } from "./channel/client.js";
 export * from "./channel/types.js";

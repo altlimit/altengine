@@ -128,6 +128,28 @@ export class Http {
     throw lastErr;
   }
 
+  /**
+   * Fetch a URL that is NOT the altengine API — a presigned upload or download link.
+   *
+   * CARRIES NO CREDENTIAL OF OURS. A presigned URL's signature is the whole credential, and an
+   * org API key sent to object storage is an org API key handed to a third party. The bytes go
+   * straight between the caller and storage; nothing is proxied through the API.
+   *
+   * The client's request timeout does not apply either — a 20 GB upload is not a control-plane
+   * call. Bound it with `init.signal`.
+   */
+  async transfer(url: string, init: RequestInit = {}): Promise<Response> {
+    const method = init.method ?? "GET";
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, init);
+    } catch (err) {
+      throw new AltEngineNetworkError(`transfer failed: ${method} ${scrub(url)}`, err);
+    }
+    if (!res.ok) throw await toTransferError(res, method, url);
+    return res;
+  }
+
   private async once<T>(method: string, path: string, opts: RequestOptions): Promise<T> {
     const headers: Record<string, string> = { ...opts.headers };
     // Precedence: an explicit per-request header wins, then the end-user identity
@@ -178,5 +200,35 @@ async function toApiError(res: Response): Promise<AltEngineError> {
   const ra = res.headers.get("retry-after");
   const retryAfter = ra !== null && !Number.isNaN(Number(ra)) ? Number(ra) : undefined;
   return new AltEngineError({ code, message, status: res.status, details, retryAfter });
+}
+
+/** A presigned URL is a bearer capability. Its query string carries the signature, so the URL
+ *  is stripped before it can reach an error message, a log line or a bug report. */
+const scrub = (url: string): string => url.split("?")[0] ?? url;
+
+/**
+ * The error from a storage endpoint, which does not speak our envelope: S3 answers XML, and the
+ * emulator answers JSON. Both are read, because "SignatureDoesNotMatch" is the difference
+ * between a bug and a clock, and `HTTP 403` alone names neither.
+ */
+async function toTransferError(res: Response, method: string, url: string): Promise<AltEngineError> {
+  const text = (await res.text().catch(() => "")).slice(0, 1000);
+  let code = "INTERNAL";
+  let message = "";
+  try {
+    const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+    if (parsed?.error) {
+      code = parsed.error.code ?? code;
+      message = parsed.error.message ?? "";
+    }
+  } catch {
+    code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? code;
+    message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1] ?? "";
+  }
+  if (!message) {
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
+    message = `${method} ${scrub(url)} failed with HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;
+  }
+  return new AltEngineError({ code, message, status: res.status });
 }
 
