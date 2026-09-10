@@ -468,7 +468,8 @@ func init() {
 		tool{
 			name:  "delete_instance",
 			title: "Delete an instance",
-			description: "PERMANENTLY delete an instance and all of its data. Not recoverable. Requires confirm: true. " +
+			description: "PERMANENTLY delete an instance and everything it holds — documents, files, end users, deployments. " +
+				"Not recoverable, and there is no undo. Requires confirm: true. " +
 				"Prefer leaving an unused instance in place unless the user explicitly asked for deletion.",
 			required: []string{"service", "instance", "confirm"},
 			props: map[string]any{
@@ -478,13 +479,9 @@ func init() {
 			},
 			annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false},
 			confirmable: true,
-			// DELIBERATELY REFUSED, even though deleting locally would be one map write.
-			//
-			// The hosted server refuses this too: tearing an instance down there means
-			// reclaiming per-service storage and stored configuration, which the console
-			// owns. Implementing it here would make the emulator MORE permissive than
-			// production — the one direction of divergence that actually hurts, because an
-			// agent would learn a workflow locally that fails when it matters.
+			// The same teardown the local console runs — control.Registry.DeleteInstance drops
+			// the instance's databases and files before the instance itself, so "deleted" means
+			// here what it means hosted.
 			run: func(h *Handler, _ *http.Request, args map[string]any) (any, error) {
 				service, err := serviceArg(args)
 				if err != nil {
@@ -494,8 +491,8 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				return nil, fmt.Errorf("deleting a %s instance is not available over MCP — its teardown is handled by the console. "+
-					"Delete '%s' in the admin console (hosted, or the local one at / while `altengine dev` is running)", service, in.Name)
+				h.reg.DeleteInstance(service, in.ID)
+				return map[string]any{"service": service, "deleted": true, "id": in.ID, "name": in.Name}, nil
 			},
 		},
 

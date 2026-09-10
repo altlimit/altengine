@@ -80,7 +80,8 @@ func New(opts Options) (*Server, error) {
 	// Blob. With a data directory the objects are files on disk beside the other services'
 	// databases — a blobkey stored in a local datastore document has to still resolve after a
 	// restart, or the local app breaks in a way the hosted one does not.
-	blob.NewHandler(reg, a, blob.NewStore(opts.DataDir)).Register(mux)
+	blobStore := blob.NewStore(opts.DataDir)
+	blob.NewHandler(reg, a, blobStore).Register(mux)
 
 	// Functions. The stubs a function gets (env.datastore, env.search, ...) dispatch
 	// IN-PROCESS into this same mux, so a call from a function goes through the very
@@ -95,6 +96,15 @@ func New(opts Options) (*Server, error) {
 	// Jobs live in memory only — a container that outlives the emulator process is not
 	// something a restart should adopt.
 	container.NewHandler(reg, a, container.NewStore(nil), mux).Register(mux)
+
+	// Deleting an instance drops its data, and each service says how. One teardown path for
+	// the console and for MCP's delete_instance — a delete that leaves a database behind is a
+	// local disk leak, and worse, an emulator that means something different by "deleted" than
+	// the hosted service does.
+	reg.OnDelete("datastore", dsMgr.DropInstance)
+	reg.OnDelete("search", srMgr.DropInstance)
+	reg.OnDelete("auth", idMgr.Drop)
+	reg.OnDelete("blob", blobStore.Drop)
 
 	// Admin before MCP: MCP's tools dispatch into this same mux, and some of them (the
 	// datastore collection listing) reach an /admin route, so those must already be mounted.

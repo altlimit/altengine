@@ -81,7 +81,8 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 }
 
 func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request, service string) error {
-	ok := h.Reg.Delete(service, r.PathValue("id"))
+	// Data and identity together — see control.Registry.DeleteInstance.
+	ok := h.Reg.DeleteInstance(service, r.PathValue("id"))
 	common.WriteJSON(w, 200, map[string]any{"deleted": ok})
 	return nil
 }

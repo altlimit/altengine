@@ -49,6 +49,7 @@ type Registry struct {
 	insts map[string]*Instance // key: service + "/" + name
 	keys  map[string]*APIKey   // key: id
 	path  string               // persistence file ("" = memory only)
+	drops map[string][]func(instanceID string)
 }
 
 func nowMS() int64 { return time.Now().UnixMilli() }
@@ -58,7 +59,7 @@ func NowMS() int64 { return nowMS() }
 
 // New loads (or initializes) a registry. dir "" means in-memory only.
 func New(dir string) (*Registry, error) {
-	r := &Registry{insts: map[string]*Instance{}, keys: map[string]*APIKey{}}
+	r := &Registry{insts: map[string]*Instance{}, keys: map[string]*APIKey{}, drops: map[string][]func(string){}}
 	if dir == "" {
 		return r, nil
 	}
@@ -235,7 +236,45 @@ func (r *Registry) SetConfig(in *Instance, cfg map[string]any) {
 	r.save()
 }
 
-// Delete removes an instance by service+id. Returns whether it existed.
+// OnDelete registers what drops one instance's DATA for a service — its databases, its files —
+// called by DeleteInstance before the instance row goes.
+//
+// Services register their own because only they know where their data lives, and it is a hook
+// rather than a switch in DeleteInstance so that a service is torn down by the package that
+// created it. A service with nothing on disk registers nothing.
+func (r *Registry) OnDelete(service string, drop func(instanceID string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.drops[service] = append(r.drops[service], drop)
+}
+
+// DeleteInstance removes an instance AND the data it holds. The console and the MCP tool both
+// call this, so "deleted" means the same thing whichever surface asked.
+//
+// Data first, identity last: the instance row is the only handle on where that data lives, so a
+// failure part-way leaves files an operator can still find rather than orphans nothing names.
+func (r *Registry) DeleteInstance(service, id string) bool {
+	r.mu.RLock()
+	var found *Instance
+	for _, in := range r.insts {
+		if in.Service == service && in.ID == id {
+			found = in
+			break
+		}
+	}
+	drops := append([]func(string){}, r.drops[service]...)
+	r.mu.RUnlock()
+	if found == nil {
+		return false
+	}
+	for _, drop := range drops {
+		drop(found.ID)
+	}
+	return r.Delete(service, id)
+}
+
+// Delete removes an instance by service+id, leaving its data alone. Returns whether it existed.
+// Prefer DeleteInstance — this is the identity half of it.
 func (r *Registry) Delete(service, id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

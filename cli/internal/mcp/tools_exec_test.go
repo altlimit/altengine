@@ -55,6 +55,11 @@ func newLiveHandler(t *testing.T) *Handler {
 	// console handler is a catch-all on "/" that would otherwise swallow them.
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)
 
+	// The same teardown wiring the real server does, so a delete here drops data here too.
+	reg.OnDelete("datastore", dsMgr.DropInstance)
+	reg.OnDelete("search", srMgr.DropInstance)
+	reg.OnDelete("auth", idMgr.Drop)
+
 	h := NewHandler(reg, mux, true)
 	h.Register(mux)
 	return h
@@ -429,4 +434,32 @@ func hasFieldType(fields map[string]any, name, typ string) bool {
 		}
 	}
 	return false
+}
+
+// An agent that can create an instance but cannot remove one leaves every experiment it ever ran
+// standing — locally that is disk, hosted it is a bill. Deleting works in both places, so a
+// clean-up sequence worked out here runs unchanged against the hosted service.
+func TestDeleteInstanceRemovesItAndItsData(t *testing.T) {
+	h := newLiveHandler(t)
+	mustCreate(t, h, "datastore", "scratch")
+	runTool(t, h, "datastore_put", map[string]any{
+		"instance": "scratch", "collection": "notes",
+		"documents": []any{map[string]any{"key": "n1", "data": map[string]any{"body": "hello"}}},
+	})
+
+	out := runTool(t, h, "delete_instance", map[string]any{"service": "datastore", "instance": "scratch", "confirm": true})
+	if out["deleted"] != true {
+		t.Fatalf("delete_instance did not report a delete: %v", out)
+	}
+
+	listed := runTool(t, h, "list_instances", map[string]any{"service": "datastore"})
+	if rows, _ := listed["datastore"].([]any); len(rows) != 0 {
+		t.Errorf("the instance is still listed after being deleted: %v", rows)
+	}
+	// And it is unreachable by name, rather than answering from a store that outlived it.
+	if _, isErr := toolText(t, h, "datastore_get", map[string]any{
+		"instance": "scratch", "collection": "notes", "keys": []any{"n1"},
+	}); !isErr {
+		t.Error("a deleted instance still answered a data-plane call")
+	}
 }

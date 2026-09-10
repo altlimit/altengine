@@ -82,6 +82,25 @@ func (m *Manager) Namespaces(instanceID string) []string {
 	return out
 }
 
+// DropInstance closes and removes every namespace database an instance owns (used when the
+// instance is deleted). Best effort per namespace: one file that will not go must not leave the
+// rest behind.
+func (m *Manager) DropInstance(instanceID string) {
+	m.mu.Lock()
+	prefix := instanceID + "\x00"
+	for key, db := range m.dbs {
+		if strings.HasPrefix(key, prefix) {
+			_ = db.Close() // in memory mode this destroys the shared-cache database
+			delete(m.dbs, key)
+		}
+	}
+	delete(m.seen, instanceID)
+	m.mu.Unlock()
+	if !m.memory {
+		_ = os.RemoveAll(filepath.Join(m.dir, "search", sanitize(instanceID)))
+	}
+}
+
 var sanitizeRe = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
 func sanitize(s string) string {

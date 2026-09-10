@@ -102,6 +102,20 @@ func (m *Manager) Drop(instanceID, namespace string) (bool, error) {
 	return existed, nil
 }
 
+// DropInstance closes and removes every namespace database an instance owns (used when the
+// instance is deleted).
+func (m *Manager) DropInstance(instanceID string) {
+	for _, ns := range m.Namespaces(instanceID) {
+		_, _ = m.Drop(instanceID, ns)
+	}
+	m.mu.Lock()
+	delete(m.seen, instanceID)
+	m.mu.Unlock()
+	if !m.memory {
+		_ = os.RemoveAll(filepath.Join(m.dir, "datastore", sanitize(instanceID)))
+	}
+}
+
 func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -177,12 +177,11 @@ func TestDestructiveToolRefusesWithoutConfirm(t *testing.T) {
 	}
 }
 
-func TestDeleteInstanceRefusesEvenWithConfirm(t *testing.T) {
-	// Local must not be MORE permissive than hosted. Hosted refuses this outright, so an
-	// agent that learned "delete_instance works" here would carry a broken workflow to
-	// production — the one direction of divergence that actually costs something.
+func TestDeleteInstanceIsConfirmable(t *testing.T) {
+	// It deletes for real, so the confirm gate is the whole safety margin: an agent one
+	// hallucinated token away from removing a customer's data must have to say so twice.
 	if _, ok := registry["delete_instance"]; !ok {
-		t.Fatal("delete_instance should exist (and refuse), not be absent")
+		t.Fatal("delete_instance is missing")
 	}
 	if !registry["delete_instance"].confirmable {
 		t.Error("delete_instance must be confirmable")

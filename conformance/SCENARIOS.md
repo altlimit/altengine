@@ -133,10 +133,15 @@ These apply to the emulator and the hosted server alike; run them against both.
 - [ ] an unrecognised argument is **refused and names the valid ones**, never
       silently ignored: a dropped filter returns every document and looks right
 - [ ] `patch_instance_config` merges — sending one field preserves its siblings
-      and the response reports what actually changed
-- [ ] destructive tools refuse without `confirm: true`; `delete_instance`
-      refuses even WITH it (teardown belongs to the console) — local must never
-      be more permissive than hosted
+      and the response reports what actually changed; a field that IS sent is
+      replaced wholesale, never merged into
+- [ ] destructive tools refuse without `confirm: true`; with it,
+      `delete_instance` removes the instance and everything it HOLDS — its
+      databases and its files, not merely the row that names them (hosted also
+      refuses while another resource depends on it: a blob store an automation
+      fleet keeps its artifacts in, a fleet with machines still enrolled. The
+      emulator serves neither service, so it has nothing that could depend on
+      an instance and nothing to refuse)
 - [ ] `functions_deploy` omitting `schedules` KEEPS the existing ones; `[]`
       clears them; `functions_list` reports them back
 - [ ] `resources/list` offers the four `docs://` grounding resources and every
