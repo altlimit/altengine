@@ -165,6 +165,48 @@ func ContentTypeFor(p string) string {
 	return "application/octet-stream"
 }
 
+// isKnownAssetPath reports whether the extension names a type we serve, other than a page. Only
+// consulted for clients that do not send Sec-Fetch-Dest — see IsNavigationRequest.
+func isKnownAssetPath(p string) bool {
+	base := p[strings.LastIndex(p, "/")+1:]
+	dot := strings.LastIndex(base, ".")
+	if dot <= 0 {
+		return false
+	}
+	ext := strings.ToLower(base[dot+1:])
+	if ext == "html" || ext == "htm" {
+		return false
+	}
+	_, ok := types[ext]
+	return ok
+}
+
+// navigationDests are the destinations that mean "the browser is loading this AS a page". An
+// iframe or frame is a navigation of its own; everything else — script, style, image, font,
+// empty — is a subresource the page asked for by name.
+var navigationDests = map[string]bool{"document": true, "iframe": true, "frame": true}
+
+// IsNavigationRequest reports whether this is a top-level navigation rather than a subresource
+// fetch. That is the question the SPA fallback turns on, and nothing else uses it.
+//
+// /edit/something.js typed into the address bar and /assets/app-4f2a91bc.js referenced by a
+// script tag are the same string, so the extension cannot tell them apart: the first is one of
+// the app's own routes and must get the shell, the second is a file that is genuinely missing and
+// must 404. The browser already says which it is, in a header the page cannot forge.
+//
+// Three rungs, because not every client sends it: Sec-Fetch-Dest from any modern browser, then
+// Accept for older ones that still mark navigations with text/html, then the extension for curl
+// and CI checks. Anything unrecognized is a navigation, which is the permissive answer.
+func IsNavigationRequest(r *http.Request, p string) bool {
+	if dest := r.Header.Get("Sec-Fetch-Dest"); dest != "" {
+		return navigationDests[dest]
+	}
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		return true
+	}
+	return !isKnownAssetPath(p)
+}
+
 var fingerprint = regexp.MustCompile(`[.\-_]([A-Za-z0-9]{8,})\.[A-Za-z0-9]+$`)
 
 // IsImmutablePath reports whether the hosted service would let a browser cache this path for a
@@ -237,7 +279,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := s.resolve(p)
+	res := s.resolve(p, IsNavigationRequest(r, p))
 	switch res.kind {
 	case "redirect":
 		// 302, not the hosted 301: see the package comment.
@@ -253,7 +295,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // resolve applies the hosted resolution order against the filesystem: an exact file, then the
 // directory index, then the trailing-slash redirect, then clean URLs, then the SPA shell, then
 // the custom 404 page.
-func (s *Server) resolve(p string) resolution {
+func (s *Server) resolve(p string, nav bool) resolution {
 	// A path ending in "/" is never a file — hosted, no manifest key ends in a slash.
 	if !strings.HasSuffix(p, "/") {
 		if local, ok := s.file(p); ok {
@@ -278,7 +320,12 @@ func (s *Server) resolve(p string) resolution {
 		}
 	}
 
-	if s.isSPA() {
+	// An unmatched NAVIGATION is one of the app's own routes and gets the shell. A subresource is
+	// the opposite case: a script whose bundle is not there, a stylesheet, an image, the app's own
+	// fetch to a dead path. Answering those with the shell produces a 200 nobody can act on — the
+	// browser reports `Unexpected token '<'`, which reads as a syntax error in your code. Locally
+	// that matters more than hosted, because this is where a missing file should be loudest.
+	if nav && s.isSPA() {
 		if local, ok := s.file("/index.html"); ok {
 			return resolution{kind: "file", path: "/index.html", local: local, status: 200}
 		}

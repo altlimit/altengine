@@ -221,6 +221,70 @@ func TestSPA(t *testing.T) {
 	})
 }
 
+func TestSPAFallbackVsMissingSubresource(t *testing.T) {
+	// A missing script answered with the shell is a 200 nobody can act on: the browser reports
+	// `Unexpected token '<'`, which reads as a syntax error in your own code. The extension cannot
+	// decide it — /edit/something.js is a legitimate route in a client-routed app. The browser
+	// says which it is, and locally is where a missing file should be loudest.
+	spa := true
+	files := map[string]string{"/index.html": "shell", "/404.html": "missing"}
+
+	t.Run("a navigation gets the shell whatever the path looks like", func(t *testing.T) {
+		s, _ := siteWith(t, files, &spa)
+		for _, p := range []string{"/dashboard", "/edit/something.js", "/files/report.pdf"} {
+			res := get(t, s, p, "Sec-Fetch-Dest", "document")
+			if res.StatusCode != 200 || body(t, res) != "shell" {
+				t.Errorf("%s: got %d %q, want 200 shell", p, res.StatusCode, body(t, res))
+			}
+		}
+	})
+
+	t.Run("a subresource the browser asked for by name 404s", func(t *testing.T) {
+		s, _ := siteWith(t, files, &spa)
+		for _, dest := range []string{"script", "style", "image", "font", "empty"} {
+			res := get(t, s, "/assets/gone-4f2a91bc.js", "Sec-Fetch-Dest", dest)
+			if res.StatusCode != 404 {
+				t.Errorf("dest %s: got %d, want 404", dest, res.StatusCode)
+			}
+		}
+	})
+
+	t.Run("a real file is still served to a subresource request", func(t *testing.T) {
+		s, _ := siteWith(t, map[string]string{"/index.html": "shell", "/app.js": "code"}, &spa)
+		res := get(t, s, "/app.js", "Sec-Fetch-Dest", "script")
+		if res.StatusCode != 200 || body(t, res) != "code" {
+			t.Errorf("got %d %q, want 200 code", res.StatusCode, body(t, res))
+		}
+	})
+
+	t.Run("older browsers are read from Accept", func(t *testing.T) {
+		s, _ := siteWith(t, files, &spa)
+		res := get(t, s, "/edit/something.js", "Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+		if res.StatusCode != 200 {
+			t.Errorf("navigation by Accept: got %d, want 200", res.StatusCode)
+		}
+		res = get(t, s, "/assets/gone-4f2a91bc.js", "Accept", "*/*")
+		if res.StatusCode != 404 {
+			t.Errorf("subresource by Accept: got %d, want 404", res.StatusCode)
+		}
+	})
+
+	t.Run("clients that send neither fall back to the extension", func(t *testing.T) {
+		// curl and CI checks. A missing bundle should still read as missing; anything
+		// unrecognized stays permissive.
+		s, _ := siteWith(t, files, &spa)
+		if res := get(t, s, "/assets/gone-4f2a91bc.js"); res.StatusCode != 404 {
+			t.Errorf("missing bundle: got %d, want 404", res.StatusCode)
+		}
+		if res := get(t, s, "/dashboard"); res.StatusCode != 200 {
+			t.Errorf("route: got %d, want 200", res.StatusCode)
+		}
+		if res := get(t, s, "/users/john.doe"); res.StatusCode != 200 {
+			t.Errorf("route with a dot: got %d, want 200", res.StatusCode)
+		}
+	})
+}
+
 func TestDetectSPA(t *testing.T) {
 	cases := []struct {
 		name  string
