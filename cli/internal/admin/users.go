@@ -32,11 +32,32 @@ func (h *Handler) authUsers(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	users, err := s.ListUsers(atoiDefault(r.URL.Query().Get("limit"), 100))
+	users, err := s.ListUsers(atoiDefault(r.URL.Query().Get("limit"), 100), r.URL.Query().Get("q"))
 	if err != nil {
 		return err
 	}
-	common.WriteJSON(w, 200, map[string]any{"users": users})
+	// `has_more` because the hosted page carries it, and a caller written against one should
+	// not find the field missing on the other.
+	common.WriteJSON(w, 200, map[string]any{"users": users, "has_more": false})
+	return nil
+}
+
+// authUser reads one end user — env.auth.getUser. Answers null for a uid that is not there,
+// as the hosted stub does, so `if (!user)` behaves the same on both.
+func (h *Handler) authUser(w http.ResponseWriter, r *http.Request) error {
+	s, err := h.authStore(r)
+	if err != nil {
+		return err
+	}
+	row, err := s.ByUID(r.PathValue("uid"))
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		common.WriteJSON(w, 200, nil)
+		return nil
+	}
+	common.WriteJSON(w, 200, row.Public())
 	return nil
 }
 

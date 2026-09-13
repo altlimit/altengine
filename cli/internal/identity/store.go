@@ -227,6 +227,9 @@ type PublicUser struct {
 	Updated       int64          `json:"updated"`
 }
 
+// Public is the shape every caller outside this package gets: no password hash.
+func (r *UserRow) Public() PublicUser { return r.public() }
+
 func (r *UserRow) public() PublicUser {
 	p := r.Profile
 	if p == nil {
@@ -360,13 +363,17 @@ func (s *Store) ByUID(uid string) (*UserRow, error) {
 
 // ListUsers returns end users newest-first, for the local console's browser. The password
 // hash never leaves the store — callers get the public shape only.
-func (s *Store) ListUsers(limit int) ([]PublicUser, error) {
+//
+// `q` narrows to identifiers containing it, case-insensitively — the hosted page's filter.
+// Empty means everyone.
+func (s *Store) ListUsers(limit int, q string) ([]PublicUser, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	rows, err := s.db.Query(
 		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated
-		   FROM users ORDER BY created DESC LIMIT ?`, limit)
+		   FROM users WHERE (? = '' OR identifier LIKE ?) ORDER BY created DESC LIMIT ?`,
+		q, "%"+strings.ToLower(q)+"%", limit)
 	if err != nil {
 		return nil, err
 	}

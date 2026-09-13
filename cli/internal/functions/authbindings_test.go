@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/altlimit/altengine/cli/internal/admin"
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/identity"
@@ -114,5 +115,66 @@ func TestAuthVerifyTokenRejectsQuietly(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, `"verified":false`) {
 		t.Fatalf("an invalid token should verify as null, got %s", body)
+	}
+}
+
+// The user-administration half of env.auth — find a user, read one, set their claims — is
+// what a function needs to grant access to something. All three dispatched to routes that
+// did not answer them: listUsers named the instance where the admin API wanted its id,
+// getUser had no route at all, and setClaims sent POST to a PUT route. Each fell through to
+// the console's catch-all and came back as HTML. Hosted, the same calls work, so an app that
+// shares things between users could be written but not run locally.
+func TestAuthUserAdminThroughStub(t *testing.T) {
+	reg, err := control.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := auth.NewStore(true)
+	mux := http.NewServeMux()
+	idMgr := identity.NewManager("")
+	identity.NewHandler(reg, identity.NewService(reg, idMgr, true)).Register(mux)
+	admin.NewHandler(reg, a, nil, nil, nil).WithIdentity(idMgr).Register(mux)
+	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+
+	signUpUser(t, mux)
+
+	deployFn(t, mux, "share", `export default { async fetch(request, env) {
+		const target = { instance: "users" };
+		const page = await env.auth.listUsers(target, { q: "PERSON@example", limit: 10 });
+		const found = (page.users || []).find((u) => u.identifier === "person@example.test");
+		const before = await env.auth.getUser(target, found.uid);
+		await env.auth.setClaims(target, found.uid, { boards: ["payments"] });
+		const after = await env.auth.getUser(target, found.uid);
+		const none = await env.auth.listUsers(target, { q: "nobody-by-this-name" });
+		return Response.json({ uid: found.uid, before: before.claims, after: after.claims, none: none.users.length });
+	} };`, map[string]string{"auth": "write"})
+
+	rec := invoke(t, mux, "/fn/main/share")
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		UID    string         `json:"uid"`
+		Before map[string]any `json:"before"`
+		After  map[string]any `json:"after"`
+		None   int            `json:"none"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("%v: %s", err, rec.Body.String())
+	}
+	if out.UID == "" {
+		t.Fatalf("listUsers did not find the user by a case-insensitive substring: %s", rec.Body.String())
+	}
+	if len(out.Before) != 0 {
+		t.Errorf("claims before = %v, want none", out.Before)
+	}
+	boards, _ := out.After["boards"].([]any)
+	if len(boards) != 1 || boards[0] != "payments" {
+		t.Errorf("claims after setClaims = %v, want boards [payments]", out.After)
+	}
+	// q is a filter, not a hint. The console's browser ignored it and returned everyone,
+	// which a function looking a person up by email would read as a match.
+	if out.None != 0 {
+		t.Errorf("listUsers with a q that matches nobody returned %d users", out.None)
 	}
 }

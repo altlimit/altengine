@@ -64,6 +64,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// End users of an auth instance (the console's browser).
 	mux.HandleFunc("GET /admin/auth/{id}/users", common.Wrap(h.authUsers))
+	mux.HandleFunc("GET /admin/auth/{id}/users/{uid}", common.Wrap(h.authUser))
 	mux.HandleFunc("POST /admin/auth/{id}/users/claims/bulk", common.Wrap(h.authBulkClaims))
 	mux.HandleFunc("PUT /admin/auth/{id}/users/{uid}/claims", common.Wrap(h.authSetClaims))
 	mux.HandleFunc("DELETE /admin/auth/{id}/users/{uid}", common.Wrap(h.authDeleteUser))
@@ -126,7 +127,13 @@ func (h *Handler) console(w http.ResponseWriter, r *http.Request) {
 
 // resolveInst finds an instance by id for a service, or 404.
 func (h *Handler) resolveInst(r *http.Request, service string) (*control.Instance, error) {
+	// By id, as the console addresses instances — or by name, as a function's env binding
+	// does. The bindings build these paths from `{ instance: "<name>" }`, and an id-only lookup
+	// answered every one of them "instance not found".
 	inst := h.Reg.GetByID(service, r.PathValue("id"))
+	if inst == nil {
+		inst = h.Reg.Get(service, r.PathValue("id"))
+	}
 	if inst == nil {
 		return nil, common.NotFound("instance not found")
 	}

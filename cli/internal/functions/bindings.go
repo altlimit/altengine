@@ -741,7 +741,7 @@ var serviceMethods = map[string]map[string]call{
 			},
 		},
 		"setClaims": {
-			method: "POST", level: auth.Write, minArgs: 3,
+			method: "PUT", level: auth.Write, minArgs: 3,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/admin/auth/%s/users/%s/claims", esc(t.instance), esc(argStr(a, 1))), nil
 			},
@@ -755,7 +755,7 @@ var serviceMethods = map[string]map[string]call{
 			body: func(a []goja.Value) (any, error) { return map[string]any{"profile": argAny(a, 2)}, nil },
 		},
 		"setDisabled": {
-			method: "POST", level: auth.Write, minArgs: 3,
+			method: "PUT", level: auth.Write, minArgs: 3,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/admin/auth/%s/users/%s/disabled", esc(t.instance), esc(argStr(a, 1))), nil
 			},
