@@ -504,3 +504,51 @@ func TestCryptoGetRandomValuesAndDigest(t *testing.T) {
 		t.Errorf("crypto.subtle.sign said %q, want it to say it is not emulated", msg)
 	}
 }
+
+// Deleting stored code, over the same /v1 routes the MCP tools dispatch into.
+func TestDeleteVersionAndFunction(t *testing.T) {
+	mux := newTestServer(t)
+	for i := 1; i <= 3; i++ {
+		deployFn(t, mux, "hello", fmt.Sprintf(`export default { fetch() { return new Response("v%d"); } };`, i), nil)
+	}
+	call := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"version":1}`))
+		req.Header.Set("Authorization", "Bearer dev")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// v3 is being served: refused, and it keeps serving.
+	if rec := call("DELETE", "/v1/functions/main/hello/versions/3"); rec.Code != 409 {
+		t.Fatalf("deleting the served version: want 409, got %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call("DELETE", "/v1/functions/main/hello/versions/2"); rec.Code != 200 {
+		t.Fatalf("deleting v2: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call("DELETE", "/v1/functions/main/hello/versions/2"); rec.Code != 404 {
+		t.Fatalf("deleting v2 twice: want 404, got %d", rec.Code)
+	}
+	// Gone for rollback too, not merely hidden from the listing.
+	if rec := call("GET", "/v1/functions/main/hello/versions/2/code"); rec.Code != 404 {
+		t.Fatalf("code of a deleted version: want 404, got %d", rec.Code)
+	}
+	// After a rollback the pointer, not "newest", decides what is protected.
+	if rec := call("POST", "/v1/functions/main/hello/activate"); rec.Code != 200 {
+		t.Fatalf("rollback to v1: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call("DELETE", "/v1/functions/main/hello/versions/3"); rec.Code != 200 {
+		t.Fatalf("deleting v3 after rollback: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := call("DELETE", "/v1/functions/main/hello")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"versions_removed":1`) {
+		t.Fatalf("delete function: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := invoke(t, mux, "/fn/main/hello"); rec.Code != 404 {
+		t.Fatalf("a deleted function still answers: %d", rec.Code)
+	}
+	if rec := call("DELETE", "/v1/functions/main/hello"); rec.Code != 404 {
+		t.Fatalf("deleting a missing function: want 404, got %d", rec.Code)
+	}
+}

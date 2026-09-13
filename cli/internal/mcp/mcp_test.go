@@ -111,6 +111,8 @@ var hostedTools = map[string][]string{
 	"datastore_put":              {"instance", "namespace", "collection", "documents"},
 	"datastore_query":            {"instance", "namespace", "collection", "where", "order", "keys_only", "limit", "cursor"},
 	"delete_instance":            {"service", "instance", "confirm"},
+	"functions_delete":           {"instance", "name", "confirm"},
+	"functions_delete_version":   {"instance", "name", "version", "confirm"},
 	"functions_deploy":           {"instance", "name", "code", "grants", "schedules", "activate"},
 	"functions_errors":           {"instance", "function", "limit"},
 	"functions_list":             {"instance"},

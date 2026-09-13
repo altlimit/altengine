@@ -178,6 +178,50 @@ func init() {
 				return h.serveInternal(r, http.MethodPost, path, map[string]any{"version": args["version"]})
 			},
 		},
+		tool{
+			name:        "functions_delete_version",
+			title:       "Delete a function version",
+			description: "Permanently delete one stored version of a function so it can no longer be activated. Refused for the version being served — activate another one first. Deploying already keeps only the newest versions, so this is for removing a specific one. Requires confirm: true.",
+			required:    []string{"instance", "name", "version", "confirm"},
+			props: map[string]any{
+				"instance": instanceArg,
+				"name":     map[string]any{"type": "string", "description": "Function name."},
+				"version":  map[string]any{"type": "number", "description": "A version number from functions_versions."},
+				"confirm":  map[string]any{"type": "boolean", "description": "Must be true. Guards against a deletion nobody asked for."},
+			},
+			annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false},
+			confirmable: true,
+			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
+				in, err := h.instanceOf("functions", argString(args, "instance"))
+				if err != nil {
+					return nil, err
+				}
+				path := fmt.Sprintf("/v1/functions/%s/%s/versions/%s", url.PathEscape(in.Name),
+					url.PathEscape(argString(args, "name")), url.PathEscape(fmt.Sprint(args["version"])))
+				return h.serveInternal(r, http.MethodDelete, path, nil)
+			},
+		},
+		tool{
+			name:        "functions_delete",
+			title:       "Delete a function",
+			description: "Permanently delete a function: it stops serving and running on its schedules immediately, and every stored version of its code is removed. Not recoverable — redeploying the same name starts a new history. Requires confirm: true.",
+			required:    []string{"instance", "name", "confirm"},
+			props: map[string]any{
+				"instance": instanceArg,
+				"name":     map[string]any{"type": "string", "description": "Function name."},
+				"confirm":  map[string]any{"type": "boolean", "description": "Must be true. Confirms the function and its code are gone for good."},
+			},
+			annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false},
+			confirmable: true,
+			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
+				in, err := h.instanceOf("functions", argString(args, "instance"))
+				if err != nil {
+					return nil, err
+				}
+				path := fmt.Sprintf("/v1/functions/%s/%s", url.PathEscape(in.Name), url.PathEscape(argString(args, "name")))
+				return h.serveInternal(r, http.MethodDelete, path, nil)
+			},
+		},
 
 		// --- channel --------------------------------------------------------
 		tool{

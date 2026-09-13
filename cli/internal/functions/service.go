@@ -311,24 +311,78 @@ func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, er
 	return map[string]any{"name": req.Name, "version": next, "size_bytes": v.SizeBytes, "active": activate}, nil
 }
 
-// Activate points a function at an existing version (rollback).
-func (s *Store) Activate(instanceID, name string, version int) error {
+// Activate points a function at an existing version (rollback), returning the version it
+// was serving before.
+func (s *Store) Activate(instanceID, name string, version int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg := s.configs[instanceID]
 	if cfg == nil {
-		return common.NotFound("function '" + name + "' not found")
+		return 0, common.NotFound("function '" + name + "' not found")
 	}
 	fn := cfg.Find(name)
 	if fn == nil {
-		return common.NotFound("function '" + name + "' not found")
+		return 0, common.NotFound("function '" + name + "' not found")
 	}
 	if _, ok := s.code[instanceID][codeKey(name, version)]; !ok {
-		return common.NotFound(fmt.Sprintf("version %d of '%s' not found", version, name))
+		return 0, common.NotFound(fmt.Sprintf("function '%s' has no version %d", name, version))
 	}
+	previous := fn.ActiveVersion
 	fn.ActiveVersion = version
 	s.save()
+	return previous, nil
+}
+
+// DeleteVersion removes one stored version. Refuses the version being served, as hosted
+// does: removing it would leave the function pointing at code that no longer exists.
+func (s *Store) DeleteVersion(instanceID, name string, version int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.configs[instanceID]
+	if cfg != nil {
+		if fn := cfg.Find(name); fn != nil && fn.ActiveVersion == version {
+			return common.Precondition(fmt.Sprintf("v%d of '%s' is being served; activate another version first", version, name))
+		}
+	}
+	if _, ok := s.code[instanceID][codeKey(name, version)]; !ok || cfg == nil {
+		return common.NotFound(fmt.Sprintf("function '%s' has no version %d", name, version))
+	}
+	hist := cfg.Versions[name]
+	kept := make([]Version, 0, len(hist))
+	for _, v := range hist {
+		if v.Version != version {
+			kept = append(kept, v)
+		}
+	}
+	cfg.Versions[name] = kept
+	delete(s.code[instanceID], codeKey(name, version))
+	s.save()
 	return nil
+}
+
+// DeleteFunction removes a function, its schedules, and every stored version. Returns how
+// many versions were removed.
+func (s *Store) DeleteFunction(instanceID, name string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.configs[instanceID]
+	if cfg == nil || (cfg.Find(name) == nil && len(cfg.Versions[name]) == 0) {
+		return 0, common.NotFound("function '" + name + "' not found")
+	}
+	kept := cfg.Functions[:0]
+	for _, f := range cfg.Functions {
+		if f.Name != name {
+			kept = append(kept, f)
+		}
+	}
+	cfg.Functions = kept
+	removed := len(cfg.Versions[name])
+	for _, v := range cfg.Versions[name] {
+		delete(s.code[instanceID], codeKey(name, v.Version))
+	}
+	delete(cfg.Versions, name)
+	s.save()
+	return removed, nil
 }
 
 // Code returns one version's source.

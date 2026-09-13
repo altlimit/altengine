@@ -69,6 +69,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+p+"/{fn}/versions", common.Wrap(h.versions))
 	mux.HandleFunc("POST "+p+"/{fn}/activate", common.Wrap(h.activate))
 	mux.HandleFunc("GET "+p+"/{fn}/versions/{version}/code", common.Wrap(h.code))
+	mux.HandleFunc("DELETE "+p+"/{fn}/versions/{version}", common.Wrap(h.deleteVersion))
+	mux.HandleFunc("DELETE "+p+"/{fn}", common.Wrap(h.deleteFunction))
 	mux.HandleFunc("PUT "+p+"/secrets", common.Wrap(h.setSecrets))
 	mux.HandleFunc("GET "+p+"/secrets", common.Wrap(h.listSecrets))
 	mux.HandleFunc("PUT "+p+"/settings", common.Wrap(h.setSettings))
@@ -175,11 +177,44 @@ func (h *Handler) activate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	name := r.PathValue("fn")
-	if err := h.store.Activate(in.ID, name, body.Version); err != nil {
+	previous, err := h.store.Activate(in.ID, name, body.Version)
+	if err != nil {
 		return err
 	}
 	h.cache.drop(in.ID + ":" + name + ":")
-	common.WriteJSON(w, 200, map[string]any{"name": name, "active_version": body.Version})
+	common.WriteJSON(w, 200, map[string]any{"name": name, "active_version": body.Version, "previous_version": previous})
+	return nil
+}
+
+func (h *Handler) deleteVersion(w http.ResponseWriter, r *http.Request) error {
+	in, err := h.resolve(r, auth.Full)
+	if err != nil {
+		return err
+	}
+	v, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil || v < 1 {
+		return common.BadRequest("version must be a positive integer")
+	}
+	name := r.PathValue("fn")
+	if err := h.store.DeleteVersion(in.ID, name, v); err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"name": name, "version": v, "deleted": true})
+	return nil
+}
+
+func (h *Handler) deleteFunction(w http.ResponseWriter, r *http.Request) error {
+	in, err := h.resolve(r, auth.Full)
+	if err != nil {
+		return err
+	}
+	name := r.PathValue("fn")
+	removed, err := h.store.DeleteFunction(in.ID, name)
+	if err != nil {
+		return err
+	}
+	h.cache.drop(in.ID + ":" + name + ":")
+	common.WriteJSON(w, 200, map[string]any{"name": name, "deleted": true, "versions_removed": removed})
 	return nil
 }
 
