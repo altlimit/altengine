@@ -36,6 +36,12 @@ altengine functions rollback --version 3 hello
 altengine functions pull --out hello.js hello
 ```
 
+Every stored version has its own address, printed by `functions versions`: `{slug}--v{n}-fn`
+hosted, `/fn/{instance}--v{n}/{function}` against `altengine dev`. It runs that version's code
+with the function's **current** grants, limits and secrets. The instance setting `keepVersions`
+(1–50, default 10) is how many versions are kept per function; the active one is always kept, and
+lowering the setting deletes the excess immediately.
+
 Access is granted per function, in the same `service[:instance]=level` form an API key uses:
 
 ```bash
@@ -111,6 +117,11 @@ altengine static deploy --no-activate ./dist
 ```
 
 The label defaults to the current commit, so `altengine static list` is readable without one.
+
+Each deployment is numbered (`v1`, `v2`, …; a number is never reused) and a ready one is served at
+its own address, `{slug}--v{n}-web`, with `x-robots-tag: noindex`. `static list` prints it. The
+instance setting `keepDeployments` (1–50, default 10) is how many are kept; the live one is always
+kept.
 
 Everything in the directory is deployed, dotfiles included — `.well-known/` has to survive, or
 certificate renewal and app-association files break. A symlink pointing outside the directory is

@@ -144,6 +144,16 @@ These apply to the emulator and the hosted server alike; run them against both.
       an instance and nothing to refuse)
 - [ ] `functions_deploy` omitting `schedules` KEEPS the existing ones; `[]`
       clears them; `functions_list` reports them back
+- [ ] `functions_versions` gives every version a `url` that runs that version's
+      code with the function's CURRENT grants and secrets (hosted
+      `https://{slug}--v{n}-fn.<suffix>/{fn}`, or null with no tenant host;
+      emulator `/fn/{instance}--v{n}/{fn}`); an unknown `n` answers 404
+      `NOT_FOUND` "function '<fn>' has no version <n>"; `v0`, `v03` and a
+      versioned blob address are not served
+- [ ] functions `keepVersions` (default 10) outside 1..50 or not an integer is
+      refused `INVALID_ARGUMENT` by `patch_instance_config`; lowering it prunes
+      at once; a deploy prunes past it; the ACTIVE version is never pruned (roll
+      back to v1, deploy with `activate: false` past the limit → v1 still runs)
 - [ ] `resources/list` offers the four `docs://` grounding resources and every
       argument they document is one the matching tool actually accepts
 - [ ] results are bounded: list/query tools cap below the REST default and say so

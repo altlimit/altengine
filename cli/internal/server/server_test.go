@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -161,6 +164,102 @@ func TestStaticSitePortInUseFailsStartup(t *testing.T) {
 
 	if _, err := New(Options{Addr: "127.0.0.1:9191", StaticAddr: taken.Addr().String(), DevOpen: true, StaticDir: t.TempDir()}); err == nil {
 		t.Error("New accepted a port already in use")
+	}
+}
+
+// Retention over the surface an agent uses: patch_instance_config refuses a bad keepVersions,
+// lowering it prunes, and a rolled-back function keeps serving through a later staged deploy.
+func TestFunctionRetentionOverMCP(t *testing.T) {
+	srv := newTestServer(t)
+	tool := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			"params": map[string]any{"name": name, "arguments": args}})
+		req, _ := http.NewRequest("POST", srv.URL+"/mcp", bytes.NewReader(b))
+		req.Header.Set("Authorization", "Bearer dev")
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out struct {
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil || len(out.Result.Content) == 0 {
+			t.Fatalf("%s: undecodable (%v)", name, err)
+		}
+		return out.Result.Content[0].Text, out.Result.IsError
+	}
+	deploy := func(body string, activate bool) {
+		t.Helper()
+		code := `export default { fetch() { return new Response("` + body + `"); } };`
+		if text, isErr := tool("functions_deploy", map[string]any{"instance": "fx", "name": "hello", "code": code, "activate": activate}); isErr {
+			t.Fatalf("deploy %s: %s", body, text)
+		}
+	}
+	get := func(path string) (int, string) {
+		t.Helper()
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(b)
+	}
+
+	if text, isErr := tool("create_instance", map[string]any{"service": "functions", "name": "fx"}); isErr {
+		t.Fatalf("create_instance: %s", text)
+	}
+	for i := 1; i <= 3; i++ {
+		deploy(fmt.Sprintf("v%d", i), true)
+	}
+	if text, isErr := tool("patch_instance_config", map[string]any{"service": "functions", "instance": "fx", "changes": map[string]any{"keepVersions": 51}}); !isErr || !strings.Contains(text, "keepVersions") {
+		t.Fatalf("keepVersions=51 was not refused: %s", text)
+	}
+	if text, isErr := tool("patch_instance_config", map[string]any{"service": "functions", "instance": "fx", "changes": map[string]any{"keepVersions": 2}}); isErr {
+		t.Fatalf("keepVersions=2: %s", text)
+	}
+	if text, isErr := tool("functions_rollback", map[string]any{"instance": "fx", "name": "hello", "version": 2}); isErr {
+		t.Fatalf("rollback: %s", text)
+	}
+	deploy("v4", false)
+	deploy("v5", false)
+
+	text, _ := tool("functions_versions", map[string]any{"instance": "fx", "name": "hello"})
+	var listed struct {
+		Versions []struct {
+			Version int    `json:"version"`
+			URL     string `json:"url"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal([]byte(text), &listed); err != nil {
+		t.Fatalf("versions: %s", text)
+	}
+	var got []int
+	for _, v := range listed.Versions {
+		got = append(got, v.Version)
+		if want := fmt.Sprintf("/fn/fx--v%d/hello", v.Version); v.URL != want {
+			t.Errorf("v%d url = %q, want %q", v.Version, v.URL, want)
+		}
+	}
+	if fmt.Sprint(got) != "[5 4 2]" {
+		t.Fatalf("versions = %v, want [5 4 2]", got)
+	}
+	if status, body := get("/fn/fx/hello"); status != 200 || body != "v2" {
+		t.Errorf("live = %d %q, want v2", status, body)
+	}
+	if status, body := get("/fn/fx--v5/hello"); status != 200 || body != "v5" {
+		t.Errorf("v5 address = %d %q", status, body)
+	}
+	if status, _ := get("/fn/fx--v1/hello"); status != 404 {
+		t.Errorf("pruned v1 address = %d, want 404", status)
 	}
 }
 

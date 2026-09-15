@@ -543,8 +543,10 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request) error {
 // request naming the object differently is redirected rather than given a second live URL for
 // the same bytes.
 func (h *Handler) servePublic(w http.ResponseWriter, r *http.Request) error {
-	inst := h.reg.Get("blob", r.PathValue("instance"))
-	if inst == nil {
+	// Blob has no versions: `{instance}--v{n}` — the local form of a `{slug}--v{n}-blob` host — is
+	// not an address this serves, even when the base instance exists.
+	inst, version := h.reg.ResolveAddressed("blob", r.PathValue("instance"))
+	if inst == nil || version != 0 {
 		return notFoundPlain(w)
 	}
 	rec, ok := h.store.Get(inst.ID, r.PathValue("id"))

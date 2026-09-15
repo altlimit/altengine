@@ -38,7 +38,7 @@ func deploySched(t *testing.T, h *Handler, in *control.Instance, code string, sc
 			raw = []byte(`["` + schedules[0] + `","` + schedules[1] + `"]`)
 		}
 	}
-	if _, err := h.store.Deploy(in.ID, DeployRequest{Name: "job", Code: code, Schedules: raw}); err != nil {
+	if _, err := h.store.Deploy(in.ID, DeployRequest{Name: "job", Code: code, Schedules: raw}, DefaultKeepVersions); err != nil {
 		t.Fatal(err)
 	}
 }

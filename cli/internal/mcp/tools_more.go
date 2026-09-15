@@ -142,7 +142,7 @@ func init() {
 		tool{
 			name:        "functions_versions",
 			title:       "List a function's versions",
-			description: "Every deployed version of one function, newest first, and which one is currently serving. Use it to find the version to roll back to.",
+			description: "Every stored version of one function, newest first, each with the url that runs it, and which one is currently serving. Use it to find the version to roll back to.",
 			required:    []string{"instance", "name"},
 			props: map[string]any{
 				"instance": instanceArg,

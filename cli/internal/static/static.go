@@ -230,7 +230,11 @@ type uploadPage struct {
 
 // Deployment is one row of deploy history.
 type Deployment struct {
-	ID         string `json:"id"`
+	ID string `json:"id"`
+	// Sequential per site and never reused: the version in `{slug}--v{n}-web`.
+	Number int `json:"number"`
+	// That address. Empty unless the deployment is ready and the server has a tenant host.
+	URL        string `json:"url"`
 	CreatedAt  int64  `json:"created_at"`
 	CreatedBy  string `json:"created_by"`
 	Status     string `json:"status"`

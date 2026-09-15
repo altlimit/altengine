@@ -52,9 +52,9 @@ func staticCmd(args []string) {
 			if msg == "" {
 				msg = "—"
 			}
-			fmt.Printf("%s %s  %-18s %5d files  %9s  %s  %s\n",
-				marker, d.ID, truncate(msg, 18), d.FileCount, humanBytes(d.TotalBytes),
-				time.UnixMilli(d.CreatedAt).Format("2006-01-02 15:04"), d.Status)
+			fmt.Printf("%s %-5s %s  %-18s %5d files  %9s  %s  %-7s %s\n",
+				marker, fmt.Sprintf("v%d", d.Number), d.ID, truncate(msg, 18), d.FileCount, humanBytes(d.TotalBytes),
+				time.UnixMilli(d.CreatedAt).Format("2006-01-02 15:04"), d.Status, d.URL)
 		}
 		fmt.Println("\n* = live.  altengine static rollback <id>  to switch to another.")
 		// The part of paging that gets skipped: say when this is not the whole answer.

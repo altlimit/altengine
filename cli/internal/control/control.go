@@ -50,6 +50,9 @@ type Registry struct {
 	keys  map[string]*APIKey   // key: id
 	path  string               // persistence file ("" = memory only)
 	drops map[string][]func(instanceID string)
+
+	validators map[string][]func(cfg map[string]any) error
+	saved      map[string][]func(in *Instance, before map[string]any)
 }
 
 func nowMS() int64 { return time.Now().UnixMilli() }
@@ -59,7 +62,13 @@ func NowMS() int64 { return nowMS() }
 
 // New loads (or initializes) a registry. dir "" means in-memory only.
 func New(dir string) (*Registry, error) {
-	r := &Registry{insts: map[string]*Instance{}, keys: map[string]*APIKey{}, drops: map[string][]func(string){}}
+	r := &Registry{
+		insts:      map[string]*Instance{},
+		keys:       map[string]*APIKey{},
+		drops:      map[string][]func(string){},
+		validators: map[string][]func(map[string]any) error{},
+		saved:      map[string][]func(*Instance, map[string]any){},
+	}
 	if dir == "" {
 		return r, nil
 	}
@@ -117,6 +126,9 @@ func defaultConfig(service string) map[string]any {
 		return map[string]any{"rateLimit": 0, "autoId": "uuid", "autoIndex": true}
 	case "channel":
 		return map[string]any{"presence": false, "publishRateLimit": 0, "connectRateLimit": 0}
+	case "functions":
+		// Stored versions kept per function; the active one is always kept on top of this.
+		return map[string]any{"keepVersions": 10}
 	case "blob":
 		// defaultPublic is FALSE on purpose: the failure mode of getting it wrong in the other
 		// direction is publishing something nobody meant to publish.
@@ -246,6 +258,75 @@ func (r *Registry) OnDelete(service string, drop func(instanceID string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.drops[service] = append(r.drops[service], drop)
+}
+
+// ConfigSnapshot returns a shallow copy of an instance's config, read under the registry lock so
+// a concurrent save cannot race the read.
+func (r *Registry) ConfigSnapshot(in *Instance) map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]any, len(in.Config))
+	for k, v := range in.Config {
+		out[k] = v
+	}
+	return out
+}
+
+// OnValidateConfig registers a check a service's config must pass before SaveConfig writes it.
+func (r *Registry) OnValidateConfig(service string, check func(cfg map[string]any) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.validators[service] = append(r.validators[service], check)
+}
+
+// OnConfigSaved registers what a service does after its config changes — `before` is the config
+// as it was. Pruning versions when retention is lowered is the case it exists for.
+func (r *Registry) OnConfigSaved(service string, fn func(in *Instance, before map[string]any)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.saved[service] = append(r.saved[service], fn)
+}
+
+// SaveConfig is the one config write the console and MCP both use: it merges `changes` onto the
+// instance's config, refuses a result a service's validator rejects (nothing is written), and then
+// runs the service's after-save hooks.
+func (r *Registry) SaveConfig(in *Instance, changes map[string]any) error {
+	before := r.ConfigSnapshot(in)
+	r.mu.RLock()
+	checks := append([]func(map[string]any) error{}, r.validators[in.Service]...)
+	hooks := append([]func(*Instance, map[string]any){}, r.saved[in.Service]...)
+	r.mu.RUnlock()
+
+	merged := make(map[string]any, len(before)+len(changes))
+	for k, v := range before {
+		merged[k] = v
+	}
+	for k, v := range changes {
+		merged[k] = v
+	}
+	for _, check := range checks {
+		if err := check(merged); err != nil {
+			return err
+		}
+	}
+	r.SetConfig(in, changes)
+	for _, hook := range hooks {
+		hook(in, before)
+	}
+	return nil
+}
+
+// ResolveAddressed finds the instance a public address names, and the version it asks for (0 for
+// the live one). `label` is the instance segment of a public path — the local stand-in for a
+// tenant hostname — so `myapp--v3` is version 3 of `myapp`. Hosted no slug may contain `--`; here
+// instance names are free-form, so the versioned reading wins only when its base instance exists.
+func (r *Registry) ResolveAddressed(service, label string) (*Instance, int) {
+	if base, v, ok := common.ParseVersionedName(label); ok {
+		if in := r.Get(service, base); in != nil {
+			return in, v
+		}
+	}
+	return r.Get(service, label), 0
 }
 
 // DeleteInstance removes an instance AND the data it holds. The console and the MCP tool both

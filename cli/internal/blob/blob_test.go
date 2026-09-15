@@ -280,6 +280,17 @@ func TestPublicHost(t *testing.T) {
 		t.Fatalf("redirect location = %q, want the canonical name", loc)
 	}
 
+	// Blob has no versions: the local form of a `{slug}--v{n}-blob` host serves nothing, even
+	// though `assets` exists and the object is public.
+	res, err = noRedirect.Get(srv.URL + "/blob/assets--v1/index.html/" + id)
+	if err != nil {
+		t.Fatalf("versioned get: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Fatalf("versioned blob address = %d, want 404", res.StatusCode)
+	}
+
 	// Unpublishing takes it away again.
 	do(t, "POST", srv.URL+"/v1/blob/assets/"+id+"/public", map[string]any{"public": false})
 	res, err = http.Get(url)

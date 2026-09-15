@@ -23,6 +23,7 @@ package functions
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,7 +43,10 @@ const (
 	// inline is not a function with a big bundle, and reading a request through the code
 	// limit truncated it at 1 MiB.
 	MaxRequestBytes = 10 << 20 // 10 MiB
-	KeepVersions  = 10
+	// Stored versions kept per function, from the instance's `keepVersions` setting. The active
+	// version is always kept on top of it, however old.
+	DefaultKeepVersions = 10
+	MaxKeepVersions     = 50
 	MaxSecrets    = 32
 	MaxSecretSize = 4096
 	DefaultCPUMs  = 50
@@ -227,7 +231,10 @@ type DeployRequest struct {
 // Mirrors the hosted pipeline including the parts that are easy to get wrong: an omitted
 // field INHERITS from the existing function rather than resetting it, so redeploying code
 // does not silently drop the grants the function needs.
-func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, error) {
+//
+// keep is the instance's retention setting (see KeepVersions); history beyond it is pruned after
+// the deploy, never including the version the function serves.
+func (s *Store) Deploy(instanceID string, req DeployRequest, keep int) (map[string]any, error) {
 	if !fnNameRe.MatchString(req.Name) {
 		return nil, common.BadRequest("name must be 1-63 chars of [a-z0-9_-], starting alphanumeric")
 	}
@@ -275,14 +282,6 @@ func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, er
 	}
 	s.code[instanceID][codeKey(req.Name, next)] = req.Code
 
-	// Trim history and the code that backs it, oldest first.
-	if hist := cfg.Versions[req.Name]; len(hist) > KeepVersions {
-		for _, old := range hist[:len(hist)-KeepVersions] {
-			delete(s.code[instanceID], codeKey(req.Name, old.Version))
-		}
-		cfg.Versions[req.Name] = hist[len(hist)-KeepVersions:]
-	}
-
 	activate := req.Activate == nil || *req.Activate
 	fn := existing
 	if fn == nil {
@@ -306,9 +305,107 @@ func (s *Store) Deploy(instanceID string, req DeployRequest) (map[string]any, er
 	if activate {
 		fn.ActiveVersion = next
 	}
+	// After the pointer moves, so "the active version" is the one this deploy leaves live — the
+	// new one, or whatever was serving before an activate:false.
+	s.pruneLocked(instanceID, cfg, req.Name, keep)
 	s.save()
 
 	return map[string]any{"name": req.Name, "version": next, "size_bytes": v.SizeBytes, "active": activate}, nil
+}
+
+// Prune applies a retention setting to every function in an instance, returning how many versions
+// were removed. Called when the setting is lowered, so it takes effect now rather than at each
+// function's next deploy.
+func (s *Store) Prune(instanceID string, keep int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.configs[instanceID]
+	if cfg == nil {
+		return 0
+	}
+	removed := 0
+	for name := range cfg.Versions {
+		removed += s.pruneLocked(instanceID, cfg, name, keep)
+	}
+	if removed > 0 {
+		s.save()
+	}
+	return removed
+}
+
+// pruneLocked keeps one function's newest `keep` versions plus the active one when it is older,
+// deleting the rest with their code. It never deletes the version being served: a function rolled
+// back to v1 that then stages v11 with activate:false is still serving v1.
+func (s *Store) pruneLocked(instanceID string, cfg *Config, name string, keep int) int {
+	if keep < 1 {
+		keep = 1
+	}
+	hist := cfg.Versions[name] // oldest first
+	if len(hist) <= keep {
+		return 0
+	}
+	active := 0
+	if fn := cfg.Find(name); fn != nil {
+		active = fn.ActiveVersion
+	}
+	cut := len(hist) - keep
+	kept := make([]Version, 0, keep+1)
+	removed := 0
+	for i, v := range hist {
+		if i >= cut || v.Version == active {
+			kept = append(kept, v)
+			continue
+		}
+		delete(s.code[instanceID], codeKey(name, v.Version))
+		removed++
+	}
+	cfg.Versions[name] = kept
+	return removed
+}
+
+// KeepVersions reads the retention setting from an instance's config. A missing or malformed
+// value reads as the default, exactly as hosted parses a stored setting.
+func KeepVersions(cfg map[string]any) int {
+	if n, ok := keepValue(cfg["keepVersions"]); ok {
+		return n
+	}
+	return DefaultKeepVersions
+}
+
+// ValidateConfig refuses a functions config whose `keepVersions` is not an integer in 1..50.
+func ValidateConfig(cfg map[string]any) error {
+	raw, present := cfg["keepVersions"]
+	if !present || raw == nil {
+		return nil
+	}
+	if _, ok := keepValue(raw); !ok {
+		return common.BadRequest(fmt.Sprintf("config.keepVersions must be an integer in 1..%d", MaxKeepVersions))
+	}
+	return nil
+}
+
+func keepValue(raw any) (int, bool) {
+	var f float64
+	switch v := raw.(type) {
+	case float64:
+		f = v
+	case int:
+		f = float64(v)
+	case int64:
+		f = float64(v)
+	case json.Number:
+		p, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		f = p
+	default:
+		return 0, false
+	}
+	if f < 1 || f > MaxKeepVersions || f != math.Trunc(f) {
+		return 0, false
+	}
+	return int(f), true
 }
 
 // Activate points a function at an existing version (rollback), returning the version it

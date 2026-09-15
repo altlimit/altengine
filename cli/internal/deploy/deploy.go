@@ -195,6 +195,9 @@ type Version struct {
 	SizeBytes int    `json:"size_bytes"`
 	SHA256    string `json:"sha256"`
 	CreatedAt int64  `json:"created_at"`
+	// The address that runs this version, `{slug}--v{n}-fn`. Empty when the server has no
+	// tenant host configured.
+	URL string `json:"url"`
 }
 
 // Versions lists deploy history for one function, newest first.

@@ -9,6 +9,10 @@
 //
 //     http://127.0.0.1:9191/fn/{instance}/{function}/...
 //
+// A stored version has its own address the same way: hosted `{slug}--v{n}-fn`, locally
+//
+//     http://127.0.0.1:9191/fn/{instance}--v{n}/{function}/...
+//
 // A function therefore sees a different origin and a different pathname prefix locally.
 // Read the path from the request as your router does hosted and it makes no difference;
 // hard-code `/{function}/...` offsets and it will.
@@ -43,7 +47,7 @@ type Handler struct {
 // are dispatched into it in-process, so `env.datastore` behaves exactly as the REST API
 // does rather than as a second implementation of it.
 func NewHandler(reg *control.Registry, a *auth.Store, store *Store, mux http.Handler) *Handler {
-	return &Handler{
+	h := &Handler{
 		reg:    reg,
 		auth:   a,
 		store:  store,
@@ -51,6 +55,22 @@ func NewHandler(reg *control.Registry, a *auth.Store, store *Store, mux http.Han
 		binder: &bindings{mux: mux, token: "emulator-internal"},
 		sched:  newSchedState(),
 	}
+	// Retention is part of the instance config, written by the console and by MCP's
+	// patch_instance_config. A bad value is refused at the write; lowering it prunes now.
+	reg.OnValidateConfig("functions", ValidateConfig)
+	reg.OnConfigSaved("functions", func(in *control.Instance, before map[string]any) {
+		keep := KeepVersions(reg.ConfigSnapshot(in))
+		if keep < KeepVersions(before) && h.store.Prune(in.ID, keep) > 0 {
+			h.cache.drop(in.ID + ":")
+		}
+	})
+	return h
+}
+
+// versionURL is the address that runs one stored version: `/fn/{instance}--v{n}/{fn}`, the local
+// form of `{slug}--v{n}-fn.<suffix>/{fn}`.
+func versionURL(instance, fn string, version int) string {
+	return fmt.Sprintf("/fn/%s--v%d/%s", instance, version, fn)
 }
 
 // WithHost tells the bindings where this emulator answers, so a URL minted inside a
@@ -139,7 +159,7 @@ func (h *Handler) deploy(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	res, err := h.store.Deploy(in.ID, req)
+	res, err := h.store.Deploy(in.ID, req, KeepVersions(h.reg.ConfigSnapshot(in)))
 	if err != nil {
 		return err
 	}
@@ -161,7 +181,15 @@ func (h *Handler) versions(w http.ResponseWriter, r *http.Request) error {
 	if f := cfg.Find(name); f != nil {
 		active = f.ActiveVersion
 	}
-	common.WriteJSON(w, 200, map[string]any{"versions": h.store.Versions(in.ID, name), "active_version": active})
+	type versionOut struct {
+		Version
+		URL string `json:"url"`
+	}
+	versions := []versionOut{}
+	for _, v := range h.store.Versions(in.ID, name) {
+		versions = append(versions, versionOut{Version: v, URL: versionURL(in.Name, name, v.Version)})
+	}
+	common.WriteJSON(w, 200, map[string]any{"versions": versions, "active_version": active})
 	return nil
 }
 
@@ -290,7 +318,8 @@ func (h *Handler) setSettings(w http.ResponseWriter, r *http.Request) error {
 func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 	instName := r.PathValue("instance")
 	fnName := r.PathValue("fn")
-	in := h.reg.Get("functions", instName)
+	// `/fn/{instance}--v{n}/...` runs stored version n — the local form of a `{slug}--v{n}-fn` host.
+	in, version := h.reg.ResolveAddressed("functions", instName)
 	if in == nil {
 		return common.NotFound(fmt.Sprintf("no functions instance '%s'", instName))
 	}
@@ -299,9 +328,24 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 	if fn == nil {
 		return common.NotFound(fmt.Sprintf("function '%s' not found", fnName))
 	}
-	src, ok := h.store.Code(in.ID, fnName, fn.ActiveVersion)
-	if !ok {
-		return common.NewError(500, fmt.Sprintf("function '%s' has no deployed code for version %d", fnName, fn.ActiveVersion), "INTERNAL")
+	var src string
+	if version != 0 && version != fn.ActiveVersion {
+		// A stored version other than the live one. Only the code is the old one: it runs with the
+		// function's CURRENT grants, limits and secrets. A pruned or deleted version is gone.
+		stored, ok := h.store.Code(in.ID, fnName, version)
+		if !ok {
+			return common.NotFound(fmt.Sprintf("function '%s' has no version %d", fnName, version))
+		}
+		src = stored
+		pinned := *fn
+		pinned.ActiveVersion = version
+		fn = &pinned
+	} else {
+		stored, ok := h.store.Code(in.ID, fnName, fn.ActiveVersion)
+		if !ok {
+			return common.NewError(500, fmt.Sprintf("function '%s' has no deployed code for version %d", fnName, fn.ActiveVersion), "INTERNAL")
+		}
+		src = stored
 	}
 
 	origin := r.Header.Get("Origin")

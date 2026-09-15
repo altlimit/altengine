@@ -45,3 +45,59 @@ func TestDeleteInstanceUnknownIDDropsNothing(t *testing.T) {
 		t.Error("DeleteInstance claimed to delete an instance that does not exist")
 	}
 }
+
+func TestResolveAddressed(t *testing.T) {
+	reg, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := reg.GetOrCreate("functions", "myapp")
+
+	if in, v := reg.ResolveAddressed("functions", "myapp"); in != app || v != 0 {
+		t.Errorf("live address = (%v, %d), want myapp live", in, v)
+	}
+	if in, v := reg.ResolveAddressed("functions", "myapp--v3"); in != app || v != 3 {
+		t.Errorf("versioned address = (%v, %d), want myapp v3", in, v)
+	}
+	for _, label := range []string{"myapp--v0", "myapp--v03", "my--app", "other--v3"} {
+		if in, _ := reg.ResolveAddressed("functions", label); in != nil {
+			t.Errorf("%q resolved to %s, want nothing", label, in.Name)
+		}
+	}
+}
+
+func TestSaveConfigValidatesThenRunsHooks(t *testing.T) {
+	reg, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := reg.GetOrCreate("functions", "fx")
+	reg.OnValidateConfig("functions", func(cfg map[string]any) error {
+		if cfg["bad"] == true {
+			return errBad
+		}
+		return nil
+	})
+	var before map[string]any
+	reg.OnConfigSaved("functions", func(_ *Instance, b map[string]any) { before = b })
+
+	if err := reg.SaveConfig(in, map[string]any{"bad": true}); err != errBad {
+		t.Fatalf("SaveConfig = %v, want the validator's error", err)
+	}
+	if _, written := reg.ConfigSnapshot(in)["bad"]; written || before != nil {
+		t.Fatal("a refused config was written, or its hooks ran")
+	}
+
+	if err := reg.SaveConfig(in, map[string]any{"keepVersions": 3}); err != nil {
+		t.Fatal(err)
+	}
+	if before["keepVersions"] != 10 || reg.ConfigSnapshot(in)["keepVersions"] != 3 {
+		t.Errorf("hook saw before=%v, config now %v", before, reg.ConfigSnapshot(in))
+	}
+}
+
+var errBad = &testErr{}
+
+type testErr struct{}
+
+func (*testErr) Error() string { return "bad" }

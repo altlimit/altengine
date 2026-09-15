@@ -449,7 +449,9 @@ func init() {
 					}
 				}
 				sort.Strings(changed)
-				h.reg.SetConfig(in, merged)
+				if err := h.reg.SaveConfig(in, merged); err != nil {
+					return nil, err
+				}
 
 				unchanged := []string{}
 				for k := range changes {

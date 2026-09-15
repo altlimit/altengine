@@ -75,7 +75,9 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 			return err
 		}
 	}
-	h.Reg.SetConfig(in, body.Config)
+	if err := h.Reg.SaveConfig(in, body.Config); err != nil {
+		return err
+	}
 	common.WriteJSON(w, 200, map[string]any{"config": in.Config})
 	return nil
 }

@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -105,6 +107,26 @@ func ReadJSON(r *http.Request, v any) error {
 		return BadRequest("invalid JSON body")
 	}
 	return nil
+}
+
+// versionedLabel is `{name}--v{n}`. A version is a positive integer without leading zeros, so each
+// version has exactly one address.
+var versionedLabel = regexp.MustCompile(`^(.+)--v([1-9][0-9]{0,8})$`)
+
+// ParseVersionedName splits `myapp--v3` into ("myapp", 3). Hosted this is the instance label of a
+// `{slug}--v{n}-{fn|web}` hostname; locally it is the instance segment of a public path, which
+// stands in for that hostname. ok is false for anything that is not exactly that shape — `v0`,
+// `v03`, a bare `my--app`.
+func ParseVersionedName(label string) (base string, version int, ok bool) {
+	m := versionedLabel.FindStringSubmatch(label)
+	if m == nil {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return "", 0, false
+	}
+	return m[1], n, true
 }
 
 // RandID returns n bytes of randomness as base64url (no padding).
