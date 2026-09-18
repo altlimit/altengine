@@ -374,3 +374,47 @@ func TestParseConfigClampsRatherThanTrusts(t *testing.T) {
 }
 
 func intp(v int) *int { return &v }
+
+// A job's image is caller-supplied, and an instance whose allowlist is "*" accepts anything.
+// Docker reads an argument beginning with "-" as a FLAG and keeps taking flags until the first
+// positional argument — so an image of "--privileged" with a cmd of
+// ["-v","/:/host","alpine","chroot","/host","sh","-c",...] was a root shell on the developer's
+// own machine, from a job request.
+func TestImageRefCannotBeADockerFlag(t *testing.T) {
+	bad := []string{
+		"--privileged",
+		"-v",
+		"--rm",
+		" --privileged",
+		"alpine:3 --privileged",
+		"alpine;rm -rf /",
+		"",
+	}
+	for _, img := range bad {
+		if ValidImageRef(img) {
+			t.Errorf("ValidImageRef(%q) = true, want false", img)
+		}
+	}
+	good := []string{
+		"alpine",
+		"alpine:3",
+		"ghcr.io/me/worker:v2",
+		"registry.example.com/team/app:1.2.3",
+		"alpine@sha256:" + strings.Repeat("a", 64),
+	}
+	for _, img := range good {
+		if !ValidImageRef(img) {
+			t.Errorf("ValidImageRef(%q) = false, want true", img)
+		}
+	}
+}
+
+// The allowlist is not the only gate: "*" means the caller chooses the image, so Launch has to
+// refuse an argument-shaped one on its own.
+func TestLaunchRefusesAFlagShapedImageEvenWithWildcardAllowlist(t *testing.T) {
+	s := NewStore(&fakeRunner{avail: true})
+	c := cfgWith(func(c *Config) { c.AllowedImages = []string{"*"} })
+	if _, err := s.Launch("i1", c, LaunchRequest{Image: "--privileged"}, nil); err == nil {
+		t.Fatal("a flag-shaped image must be refused even when every image is allowed")
+	}
+}

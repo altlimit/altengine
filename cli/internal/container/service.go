@@ -31,8 +31,8 @@ package container
 import (
 	"context"
 	"fmt"
-	"math"
 	"io"
+	"math"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -155,6 +155,20 @@ func numOf(v any) (float64, bool) {
 		return float64(n), true
 	}
 	return 0, false
+}
+
+// imageRef is what a container image reference may look like: a name, optionally with a registry
+// and a tag or digest. Deliberately strict, and deliberately anchored — the important part is the
+// FIRST character, since a reference beginning with "-" is a docker flag rather than an image.
+var imageRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$`)
+
+// ValidImageRef reports whether `image` is a plausible image reference rather than an argument
+// docker would interpret. A job's image is caller-supplied, and an instance whose allowlist is
+// "*" accepts anything — so "--privileged" with a cmd of ["-v","/:/host","alpine","chroot",…]
+// was a root shell on the machine running the emulator.
+func ValidImageRef(image string) bool {
+	img := strings.TrimSpace(image)
+	return img != "" && len(img) <= 512 && imageRef.MatchString(img)
 }
 
 // ImageAllowed reports whether this instance may run the image. An exact tag matches only
@@ -308,7 +322,11 @@ func (d *DockerRunner) Run(ctx context.Context, spec RunSpec) (int, error) {
 	for _, k := range sortedKeys(spec.Env) {
 		args = append(args, "-e", k+"="+spec.Env[k])
 	}
-	args = append(args, spec.Image)
+	// "--" ends docker's own flag parsing. Without it an image named "--privileged" is read as a
+	// FLAG, and docker keeps taking flags until the first positional argument — so the image and
+	// cmd of a job could rewrite how the container is run. ValidImageRef refuses such a name as
+	// well; this is the second half, because either one alone is a single point of failure.
+	args = append(args, "--", spec.Image)
 	args = append(args, spec.Cmd...)
 
 	cmd := exec.Command("docker", args...)
@@ -432,6 +450,9 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platfor
 	image := strings.TrimSpace(req.Image)
 	if image == "" {
 		return nil, common.BadRequest("image is required")
+	}
+	if !ValidImageRef(image) {
+		return nil, common.BadRequest("image is not a valid image reference")
 	}
 	if !ImageAllowed(cfg, image) {
 		if len(cfg.AllowedImages) == 0 {
