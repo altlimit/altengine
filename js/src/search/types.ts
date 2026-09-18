@@ -150,6 +150,8 @@ export interface IndexInfo {
 export interface IndexesPage {
   indexes: IndexInfo[];
   has_more: boolean;
+  /** Send back as `cursor` to get the next page. Null on the last one. */
+  cursor?: string | null;
 }
 
 export interface ListDocumentsOptions {

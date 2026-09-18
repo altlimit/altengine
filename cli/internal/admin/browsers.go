@@ -37,11 +37,15 @@ func (h *Handler) searchIndexes(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	limit := atoiDefault(r.URL.Query().Get("limit"), 20)
-	indexes, hasMore, err := store.ListIndexes(r.URL.Query().Get("q"), limit)
+	indexes, hasMore, next, err := store.ListIndexes(r.URL.Query().Get("q"), limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		return err
 	}
-	common.WriteJSON(w, 200, map[string]any{"indexes": indexes, "has_more": hasMore})
+	var cursor any
+	if next != "" {
+		cursor = next
+	}
+	common.WriteJSON(w, 200, map[string]any{"indexes": indexes, "has_more": hasMore, "cursor": cursor})
 	return nil
 }
 

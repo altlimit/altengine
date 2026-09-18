@@ -2,6 +2,7 @@ import { Http, seg, nsSeg } from "../http.js";
 import type {
   IndexSchema,
   IndexesPage,
+  IndexInfo,
   ListDocumentsOptions,
   SearchDocument,
   SearchHit,
@@ -41,9 +42,30 @@ export class SearchClient {
     return new SearchIndex(this.http, this.nsBase, name);
   }
 
-  /** Indexes in this client's namespace. */
-  async listIndexes(opts: { q?: string; limit?: number } = {}): Promise<IndexesPage> {
-    return this.http.request("GET", `${this.nsBase}/idx`, { query: { q: opts.q, limit: opts.limit } });
+  /** Indexes in this client's namespace. When `has_more` is set, pass the returned `cursor`
+   *  back as `cursor` for the next page. */
+  async listIndexes(opts: { q?: string; limit?: number; cursor?: string } = {}): Promise<IndexesPage> {
+    return this.http.request("GET", `${this.nsBase}/idx`, {
+      query: { q: opts.q, limit: opts.limit, cursor: opts.cursor },
+    });
+  }
+
+  /** Every index in this client's namespace, following the cursor for you.
+   *
+   *  Stops on a cursor that does not advance as well as on a missing one: an SDK outlives the
+   *  deployment it was written against, and a server that keeps handing back the same cursor
+   *  would otherwise be followed for ever, billing each round. Same rule as `searchAll`. */
+  async *listAllIndexes(opts: { q?: string; limit?: number } = {}): AsyncGenerator<IndexInfo> {
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const page: IndexesPage = await this.listIndexes({ ...opts, cursor });
+      for (const index of page.indexes ?? []) yield index;
+      const next = page.cursor ?? undefined;
+      if (!page.indexes?.length || !next || seen.has(next)) return;
+      seen.add(next);
+      cursor = next;
+    }
   }
 
   /** Distinct namespaces with live indexes — alphabetical, `q` substring search,

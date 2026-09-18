@@ -135,11 +135,17 @@ func (h *Handler) listIndexes(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	indexes, hasMore, err := store.ListIndexes(r.URL.Query().Get("q"), limit)
+	indexes, hasMore, next, err := store.ListIndexes(r.URL.Query().Get("q"), limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		return err
 	}
-	common.WriteJSON(w, 200, map[string]any{"indexes": indexes, "has_more": hasMore})
+	// `cursor` carries a value exactly when there is another page and is null otherwise — the
+	// hosted API's shape, so a paging loop does not have to know which one it is talking to.
+	var cursor any
+	if next != "" {
+		cursor = next
+	}
+	common.WriteJSON(w, 200, map[string]any{"indexes": indexes, "has_more": hasMore, "cursor": cursor})
 	return nil
 }
 

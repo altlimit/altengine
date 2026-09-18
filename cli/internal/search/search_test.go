@@ -318,3 +318,65 @@ func TestRules(t *testing.T) {
 		}
 	}
 }
+
+// Paging the index registry with a cursor. The hosted API returns `has_more` with a `cursor`;
+// a client that follows it must reach every index here too, or code written against the
+// emulator pages fine locally and silently stops at the first page in production.
+func TestListIndexesCursor(t *testing.T) {
+	s := openTest(t)
+	r := func(v int64) *int64 { return &v }
+	for i := 0; i < 7; i++ {
+		name := string(rune('a'+i)) + "-idx"
+		if _, err := s.Put(name, []Document{{ID: "d1", Rank: r(1), Fields: []Field{field("title", "text", "x")}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 20; page++ {
+		rows, hasMore, next, err := s.ListIndexes("", 2, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			name := row["name"].(string)
+			if seen[name] {
+				t.Fatalf("index %q came back on two pages", name)
+			}
+			seen[name] = true
+		}
+		if !hasMore {
+			if next != "" {
+				t.Fatalf("a last page must not hand out a cursor, got %q", next)
+			}
+			break
+		}
+		if next == "" {
+			t.Fatal("has_more with no cursor: every index past this page is unreachable")
+		}
+		cursor = next
+	}
+	if len(seen) != 7 {
+		t.Fatalf("paging reached %d of 7 indexes", len(seen))
+	}
+}
+
+// A cursor is a position, not a credential: garbage means "start at the beginning" rather than
+// an error, because a truncated cursor in a URL should not fail a listing.
+func TestListIndexesBadCursor(t *testing.T) {
+	s := openTest(t)
+	r := func(v int64) *int64 { return &v }
+	if _, err := s.Put("only-idx", []Document{{ID: "d1", Rank: r(1), Fields: []Field{field("title", "text", "x")}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"%%%", "bm90LWpzb24", "eyJhIjoxfQ"} {
+		rows, _, _, err := s.ListIndexes("", 10, bad)
+		if err != nil {
+			t.Fatalf("cursor %q returned an error: %v", bad, err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("cursor %q returned %d rows, want the whole listing", bad, len(rows))
+		}
+	}
+}

@@ -155,3 +155,45 @@ func Base62(n int) string {
 	}
 	return string(b)
 }
+
+// ListCursor is the keyset position a paged listing hands back: the (created, sort) of the
+// last row it returned. The hosted API encodes it the same way — base64url of [created, sort] —
+// so a client that follows a cursor from the emulator follows one from production unchanged.
+//
+// A cursor is a position, not a credential. Decoding is forgiving by design: anything that does
+// not parse means "start at the beginning" rather than an error, because a truncated cursor in a
+// URL should not fail a listing.
+func EncodeListCursor(created int64, sort string) string {
+	raw, err := json.Marshal([]any{created, sort})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// DecodeListCursor returns the position and whether there was one to read.
+func DecodeListCursor(cursor string) (created int64, sort string, ok bool) {
+	if cursor == "" {
+		return 0, "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(cursor, "="))
+	if err != nil {
+		return 0, "", false
+	}
+	var parts []any
+	if err := json.Unmarshal(raw, &parts); err != nil || len(parts) != 2 {
+		return 0, "", false
+	}
+	c, isNum := parts[0].(float64)
+	s, isStr := parts[1].(string)
+	if !isNum || !isStr {
+		return 0, "", false
+	}
+	return int64(c), s, true
+}
+
+// AfterCursor reports whether a row at (created, sort) falls after the cursor position, in the
+// newest-first order these listings use. Same comparison the hosted API makes in SQL.
+func AfterCursor(created int64, sort string, cCreated int64, cSort string) bool {
+	return created < cCreated || (created == cCreated && sort > cSort)
+}

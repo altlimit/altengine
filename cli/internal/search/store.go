@@ -257,33 +257,50 @@ func (s *Store) createTables(id int64) error {
 }
 
 // ListIndexes returns index registry rows matching q (name substring), newest first.
-func (s *Store) ListIndexes(q string, limit int) ([]map[string]any, bool, error) {
+//
+// `cursor` is the position handed back by the previous page. The keyset predicate and the
+// (created DESC, name) order match the hosted API, so a client that follows cursors here
+// follows them there: every index is reachable, and none comes back twice while others are
+// being created and dropped underneath the pager.
+func (s *Store) ListIndexes(q string, limit int, cursor string) ([]map[string]any, bool, string, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.Query(`SELECT name, created FROM _indexes WHERE name LIKE ? ORDER BY created DESC LIMIT ?`,
-		"%"+q+"%", limit+1)
+	where := "name LIKE ?"
+	args := []any{"%" + q + "%"}
+	if created, name, ok := common.DecodeListCursor(cursor); ok {
+		where += " AND (created < ? OR (created = ? AND name > ?))"
+		args = append(args, created, created, name)
+	}
+	args = append(args, limit+1)
+	rows, err := s.db.Query(`SELECT name, created FROM _indexes WHERE `+where+` ORDER BY created DESC, name LIMIT ?`, args...)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	defer rows.Close()
 	var out []map[string]any
+	var names []string
+	var createds []int64
 	for rows.Next() {
 		var name string
 		var created int64
 		if err := rows.Scan(&name, &created); err != nil {
-			return nil, false, err
+			return nil, false, "", err
 		}
 		out = append(out, map[string]any{"name": name, "namespace": "", "created_at": created})
+		names = append(names, name)
+		createds = append(createds, created)
 	}
 	hasMore := len(out) > limit
+	next := ""
 	if hasMore {
 		out = out[:limit]
+		next = common.EncodeListCursor(createds[limit-1], names[limit-1])
 	}
 	if out == nil {
 		out = []map[string]any{}
 	}
-	return out, hasMore, nil
+	return out, hasMore, next, nil
 }
 
 // DropIndex removes an index and its tables. Returns whether it existed.
