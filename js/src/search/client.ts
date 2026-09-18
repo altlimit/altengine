@@ -100,14 +100,27 @@ export class SearchIndex {
     return this.http.request("POST", `${this.path}/search`, { body: req });
   }
 
-  /** Iterate every hit across cursor pages. */
+  /**
+   * Iterate every hit across cursor pages.
+   *
+   * Stops on a cursor that does not advance, as well as on a missing one. Search paging ends at a
+   * fixed depth, and a server that kept issuing a cursor past it handed back the SAME page — so
+   * "follow the cursor until it is absent", which is what this loop did, fetched that page for
+   * ever and billed each round. The server no longer does that; this is the half that does not
+   * depend on which version you are talking to, since an SDK outlives the deployment it was
+   * written against.
+   */
   async *searchAll(req: SearchRequest): AsyncGenerator<SearchHit> {
     let cursor: string | undefined = req.cursor;
-    do {
+    const seen = new Set<string>();
+    for (;;) {
       const page: SearchResponse = await this.search({ ...req, cursor, offset: undefined });
       for (const hit of page.results) yield hit;
-      cursor = page.cursor;
-    } while (cursor);
+      const next = page.cursor;
+      if (!next || next === cursor || seen.has(next) || page.results.length === 0) return;
+      seen.add(next);
+      cursor = next;
+    }
   }
 
   /** One page of documents in id order (keyset pagination via `start_id`). */
