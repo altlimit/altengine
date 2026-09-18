@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,11 @@ type Options struct {
 	StaticDir  string
 	StaticAddr string // defaults to the API port + 1
 	StaticSPA  *bool  // nil => detected from the directory
+
+	// AllowOrigins are extra browser origins the data plane may be called from, beyond the
+	// loopback ones allowed by default. For the case the default does not cover: a phone or a
+	// second machine on the LAN pointed at this emulator.
+	AllowOrigins []string
 }
 
 // Server is the assembled emulator.
@@ -172,9 +178,9 @@ func (s *Server) staticAddr() string {
 	return net.JoinHostPort(host, strconv.Itoa(n+1))
 }
 
-// Handler returns the root http.Handler (with CORS and a simple request log).
+// Handler returns the root http.Handler (host guard, CSRF-ish origin guard, CORS, request log).
 func (s *Server) Handler() http.Handler {
-	return logMW(corsMW(s.mux))
+	return logMW(hostMW(originMW(corsMW(s.mux, s.opts.DevOpen, s.opts.AllowOrigins))))
 }
 
 // ListenAndServe starts the HTTP server.
@@ -227,6 +233,70 @@ func dataLabel(d string) string {
 	return d
 }
 
+// isLoopbackHost reports whether a host[:port] names this machine.
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// originAllowed reports whether a browser Origin may call the data plane in dev-open mode.
+func originAllowed(origin string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == "*" || strings.EqualFold(strings.TrimSpace(a), origin) {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return isLoopbackHost(u.Host)
+}
+
+// hostMW refuses a request whose Host header does not name this machine.
+//
+// DNS REBINDING. A browser will happily resolve attacker.example to 127.0.0.1 and then treat
+// http://attacker.example:9191 as SAME-ORIGIN with itself — so every same-origin protection
+// (including the Origin check below) is bypassed, and the page can drive /admin and /mcp in
+// full. The Host header is what distinguishes that request from a real local one, and it is the
+// only thing that does.
+func hostMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "" && !isLoopbackHost(r.Host) {
+			http.Error(w, "this emulator only answers on localhost", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// originMW is the emulator's CSRF check for the planes a browser reaches without one.
+//
+// /admin and /mcp are same-origin surfaces: the console is served from this same server, and an
+// agent posts to /mcp from a terminal. Neither is meant to be driven by another website — but a
+// form or a no-cors fetch from any page could POST to them, and the response being unreadable
+// does not undo the write. A cross-site request always carries an Origin, so requiring it to be
+// absent (a real client) or loopback (the console) is the whole check.
+func originMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guarded := strings.HasPrefix(r.URL.Path, "/admin") || strings.HasPrefix(r.URL.Path, "/mcp")
+		origin := r.Header.Get("Origin")
+		if guarded && origin != "" && !originAllowed(origin, nil) {
+			http.Error(w, "cross-origin requests are not allowed here", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // corsMW makes the data plane reachable from a browser app served on another origin — the
 // normal local setup (a Vite dev server on :5173 talking to the emulator on :9191), and the
 // whole point of the auth service. It mirrors the hosted behavior: the request Origin is
@@ -243,7 +313,14 @@ func dataLabel(d string) string {
 // another origin entirely, where CORS is configured on the bucket; without the same allowance
 // here, an upload that works in production would fail from a Vite dev server and look like an
 // emulator bug. PUT is in the method list for that reason and no other.
-func corsMW(next http.Handler) http.Handler {
+//
+// WITH ONE DIFFERENCE FROM HOSTED, and it is the difference that matters. Hosted, the reflection
+// is safe because the endpoints carry no ambient credential: a Bearer token is required and a
+// foreign page does not have one. In dev-open mode ANY bearer works, so a foreign page can
+// simply send one — and reflecting its origin would hand every website the developer visits a
+// complete API client for their local data. So in dev-open mode only LOOPBACK origins are
+// reflected (a Vite dev server is exactly that); --allow-origin widens it for a phone on the LAN.
+func corsMW(next http.Handler, devOpen bool, allowed []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") && !strings.HasPrefix(r.URL.Path, "/_blob/") {
 			next.ServeHTTP(w, r)
@@ -252,6 +329,15 @@ func corsMW(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			origin = "*"
+		} else if devOpen && !originAllowed(origin, allowed) {
+			// No CORS headers: the browser refuses the response, which is the same answer it
+			// would give for a host that was never allowed.
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
 		}
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)

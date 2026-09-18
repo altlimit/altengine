@@ -80,6 +80,10 @@ func devCmd(args []string) {
 	static := fs.String("static", "", "serve this build output directory as a site, e.g. ./dist")
 	staticPort := fs.Int("static-port", 0, "port for the site (default: --port + 1)")
 	spa := fs.Bool("spa", false, "serve index.html for unmatched paths (default: detected from the directory)")
+	// Browser apps on localhost are allowed by default. This is for the case that is not: a
+	// phone or a second machine on the LAN pointed at this emulator. It widens who may drive
+	// your local data, so it is a flag rather than the default.
+	allowOrigin := fs.String("allow-origin", "", "extra browser origin(s) allowed to call the API, comma-separated")
 	_ = fs.Parse(args)
 
 	// Three states, and the third is the point: detection is a guess, and a guess that cannot be
@@ -105,12 +109,13 @@ func devCmd(args []string) {
 	}
 
 	srv, err := server.New(server.Options{
-		Addr:       fmt.Sprintf("%s:%d", *host, *port),
-		DataDir:    dataDir,
-		DevOpen:    true,
-		StaticDir:  *static,
-		StaticAddr: staticAddr,
-		StaticSPA:  spaOverride,
+		Addr:         fmt.Sprintf("%s:%d", *host, *port),
+		DataDir:      dataDir,
+		DevOpen:      true,
+		StaticDir:    *static,
+		StaticAddr:   staticAddr,
+		StaticSPA:    spaOverride,
+		AllowOrigins: splitList(*allowOrigin),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "startup error:", err)
@@ -383,4 +388,15 @@ func functionsCmd(args []string) {
 	default:
 		fail(fmt.Errorf("unknown subcommand %q: expected list, versions, rollback or pull", sub))
 	}
+}
+
+// splitList turns a comma-separated flag value into a trimmed, non-empty list.
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

@@ -274,3 +274,103 @@ func TestNoStaticDirClaimsNoPort(t *testing.T) {
 		t.Error("a site listener was created without --static")
 	}
 }
+
+// While `altengine dev` is running, every website the developer visits can reach it. Hosted, the
+// reflected-origin policy is safe because a request needs an API key a foreign page does not
+// have; in dev-open mode ANY bearer works, so the page simply sends one. Reflecting its origin
+// would hand it a complete API client for the developer's local data — and, with Docker running,
+// a path to the machine itself through the container service.
+func TestForeignOriginGetsNoCorsHeadersInDevOpen(t *testing.T) {
+	srv := newTestServer(t)
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/auth/testauth/config", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want none for a foreign origin", got)
+	}
+}
+
+func TestAllowOriginWidensItDeliberately(t *testing.T) {
+	s, err := New(Options{DataDir: "", DevOpen: true, AllowOrigins: []string{"https://phone.example"}})
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/auth/testauth/config", nil)
+	req.Header.Set("Origin", "https://phone.example")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != "https://phone.example" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want the allowed origin reflected", got)
+	}
+}
+
+// A browser resolves attacker.example to 127.0.0.1 and then treats the emulator as SAME-ORIGIN
+// with the attacker's page — which defeats every same-origin protection, including the Origin
+// check below. The Host header is the only thing that tells the two apart.
+func TestRefusesARebindingHost(t *testing.T) {
+	srv := newTestServer(t)
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/auth/testauth/config", nil)
+	req.Host = "attacker.example"
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a non-local Host", res.StatusCode)
+	}
+}
+
+// /admin and /mcp are same-origin surfaces with no CORS. A no-cors POST from any page still
+// ARRIVES — the response being unreadable does not undo a delete — and a cross-site request
+// always carries an Origin, which is the whole check.
+func TestAdminAndMcpRefuseACrossSitePost(t *testing.T) {
+	srv := newTestServer(t)
+	for _, path := range []string{"/admin/instances", "/mcp"} {
+		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(`{}`))
+		req.Header.Set("Origin", "https://evil.example")
+		req.Header.Set("Content-Type", "text/plain")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request %s: %v", path, err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s status = %d, want 403 for a cross-site POST", path, res.StatusCode)
+		}
+	}
+}
+
+func TestAdminStillWorksFromTheConsoleAndFromATerminal(t *testing.T) {
+	srv := newTestServer(t)
+	// The console: same-origin, so its Origin is this server's own.
+	req, _ := http.NewRequest("GET", srv.URL+"/admin/instances", nil)
+	req.Header.Set("Origin", srv.URL)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("console request: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode == http.StatusForbidden {
+		t.Fatal("the console's own same-origin request must not be refused")
+	}
+	// A terminal client sends no Origin at all.
+	res2, err := http.Get(srv.URL + "/admin/instances")
+	if err != nil {
+		t.Fatalf("cli request: %v", err)
+	}
+	res2.Body.Close()
+	if res2.StatusCode == http.StatusForbidden {
+		t.Fatal("a request with no Origin must not be refused")
+	}
+}
