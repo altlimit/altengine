@@ -88,10 +88,10 @@ func TestSaveConfigValidatesThenRunsHooks(t *testing.T) {
 		t.Fatal("a refused config was written, or its hooks ran")
 	}
 
-	if err := reg.SaveConfig(in, map[string]any{"keepVersions": 3}); err != nil {
+	if err := reg.SaveConfig(in, map[string]any{"keepVersions": 7}); err != nil {
 		t.Fatal(err)
 	}
-	if before["keepVersions"] != 10 || reg.ConfigSnapshot(in)["keepVersions"] != 3 {
+	if before["keepVersions"] != 3 || reg.ConfigSnapshot(in)["keepVersions"] != 7 {
 		t.Errorf("hook saw before=%v, config now %v", before, reg.ConfigSnapshot(in))
 	}
 }

@@ -102,6 +102,10 @@ func TestPruneNeverDeletesTheActiveVersion(t *testing.T) {
 
 func TestLoweringRetentionPrunesImmediately(t *testing.T) {
 	mux, reg, store := newRetentionServer(t)
+	// Above the default, so the six below are all still there to prune later.
+	if err := reg.SaveConfig(reg.GetOrCreate("functions", "main"), map[string]any{"keepVersions": float64(6)}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 1; i <= 6; i++ {
 		deployVersion(t, mux, "hello", fmt.Sprintf("v%d", i), true, nil)
 		deployVersion(t, mux, "other", fmt.Sprintf("o%d", i), true, nil)
@@ -146,11 +150,16 @@ func TestKeepVersionsIsBounded(t *testing.T) {
 			t.Errorf("keepVersions=%v: err = %v, want 400 INVALID_ARGUMENT", bad, err)
 		}
 	}
-	if got := reg.ConfigSnapshot(in)["keepVersions"]; got != 10 {
+	if got := reg.ConfigSnapshot(in)["keepVersions"]; got != DefaultKeepVersions {
 		t.Errorf("a refused save changed the setting to %v", got)
 	}
 	// The read path never trusts what is stored.
-	for stored, want := range map[any]int{float64(0): 10, float64(99): 10, "x": 10, float64(25): 25} {
+	for stored, want := range map[any]int{
+		float64(0):  DefaultKeepVersions,
+		float64(99): DefaultKeepVersions,
+		"x":         DefaultKeepVersions,
+		float64(25): 25,
+	} {
 		if got := KeepVersions(map[string]any{"keepVersions": stored}); got != want {
 			t.Errorf("KeepVersions(%v) = %d, want %d", stored, got, want)
 		}

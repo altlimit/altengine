@@ -128,7 +128,7 @@ func defaultConfig(service string) map[string]any {
 		return map[string]any{"presence": false, "publishRateLimit": 0, "connectRateLimit": 0}
 	case "functions":
 		// Stored versions kept per function; the active one is always kept on top of this.
-		return map[string]any{"keepVersions": 10}
+		return map[string]any{"keepVersions": 3}
 	case "blob":
 		// defaultPublic is FALSE on purpose: the failure mode of getting it wrong in the other
 		// direction is publishing something nobody meant to publish.

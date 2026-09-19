@@ -150,7 +150,7 @@ These apply to the emulator and the hosted server alike; run them against both.
       emulator `/fn/{instance}--v{n}/{fn}`); an unknown `n` answers 404
       `NOT_FOUND` "function '<fn>' has no version <n>"; `v0`, `v03` and a
       versioned blob address are not served
-- [ ] functions `keepVersions` (default 10) outside 1..50 or not an integer is
+- [ ] functions `keepVersions` (default 3) outside 1..50 or not an integer is
       refused `INVALID_ARGUMENT` by `patch_instance_config`; lowering it prunes
       at once; a deploy prunes past it; the ACTIVE version is never pruned (roll
       back to v1, deploy with `activate: false` past the limit → v1 still runs)
