@@ -4,9 +4,14 @@ Official Python SDK for [altengine](https://www.altengine.net) — managed
 **datastore**, **search**, and realtime **channels** behind one API key.
 Built on `httpx` (sync + async); the WebSocket subscriber uses `websockets`.
 
+**Not published to PyPI yet** — `pip install altengine` 404s today. Install it from this
+repository until it is:
+
 ```bash
-pip install altengine          # HTTP clients
-pip install "altengine[ws]"    # + the managed WebSocket subscriber
+# HTTP clients
+pip install "altengine @ git+https://github.com/altlimit/altengine#subdirectory=python"
+# + the managed WebSocket subscriber
+pip install "altengine[ws] @ git+https://github.com/altlimit/altengine#subdirectory=python"
 ```
 
 ## Setup

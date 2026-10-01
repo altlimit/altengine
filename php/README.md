@@ -4,8 +4,13 @@ Official PHP SDK for [altengine](https://www.altengine.net) — managed
 **datastore**, **search**, and realtime **channels** behind one API key.
 PHP ≥ 8.1, Guzzle transport.
 
+**Not published to Packagist yet** — `composer require altlimit/altengine` 404s today. Use it
+from a clone of this repository until it is:
+
 ```bash
-composer require altlimit/altengine
+git clone https://github.com/altlimit/altengine
+composer config repositories.altengine path ./altengine/php
+composer require altlimit/altengine:@dev
 ```
 
 ## Setup
@@ -114,7 +119,7 @@ $roster = $ch->presence('room:1');
 
 This SDK does not open WebSockets — hand `['token' => ..., 'ws_url' => ...]`
 to your web/mobile client and subscribe there (e.g. with
-[`@altengine/sdk/channel`](https://www.npmjs.com/package/@altengine/sdk)).
+[`@altengine/sdk/channel`](../js/)).
 
 ## Local development
 
