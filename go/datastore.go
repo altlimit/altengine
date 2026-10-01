@@ -162,10 +162,25 @@ type IndexSpec struct {
 	Unique     bool     `json:"unique"`
 }
 
-// NamespacesPage is one page of namespace names.
+// NamespacesPage is one page of namespace names (search).
 type NamespacesPage struct {
 	Namespaces []string `json:"namespaces"`
 	HasMore    bool     `json:"has_more"`
+}
+
+// NamespaceInfo is one datastore namespace and when it was created.
+type NamespaceInfo struct {
+	Namespace string `json:"namespace"`
+	// CreatedAt is unix milliseconds.
+	CreatedAt int64 `json:"created_at"`
+}
+
+// DatastoreNamespacesPage is one page of a datastore instance's namespaces, newest first.
+type DatastoreNamespacesPage struct {
+	Namespaces []NamespaceInfo `json:"namespaces"`
+	HasMore    bool            `json:"has_more"`
+	// Cursor is passed back as ListOptions.Cursor for the next page; empty on the last one.
+	Cursor string `json:"cursor"`
 }
 
 // ListOptions filters paged name listings (namespaces, indexes).
@@ -174,6 +189,8 @@ type ListOptions struct {
 	Q string
 	// Limit caps the page size (server default 20–50 depending on endpoint).
 	Limit int
+	// Cursor continues a listing from the page that returned it.
+	Cursor string
 }
 
 func (o ListOptions) query() url.Values {
@@ -183,6 +200,9 @@ func (o ListOptions) query() url.Values {
 	}
 	if o.Limit > 0 {
 		q.Set("limit", strconv.Itoa(o.Limit))
+	}
+	if o.Cursor != "" {
+		q.Set("cursor", o.Cursor)
 	}
 	return q
 }
@@ -409,9 +429,9 @@ func (d *Datastore) DeleteIndex(ctx context.Context, collection string, id int64
 }
 
 // ListNamespaces lists the instance's namespaces (instance-wide, not bound to
-// this client's namespace).
-func (d *Datastore) ListNamespaces(ctx context.Context, opts ListOptions) (*NamespacesPage, error) {
-	var out NamespacesPage
+// this client's namespace), newest first.
+func (d *Datastore) ListNamespaces(ctx context.Context, opts ListOptions) (*DatastoreNamespacesPage, error) {
+	var out DatastoreNamespacesPage
 	err := d.http.do(ctx, request{
 		method: "GET",
 		path:   "/v1/datastore/" + seg(d.Instance) + "/ns",

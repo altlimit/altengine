@@ -119,8 +119,10 @@ export class DatastoreClient {
 export class NamespaceAdmin {
   constructor(private readonly http: Http, private readonly base: string) {}
 
-  async list(opts: { q?: string; limit?: number } = {}): Promise<NamespacesPage> {
-    return this.http.request("GET", `${this.base}/ns`, { query: { q: opts.q, limit: opts.limit } });
+  /** A page of the instance's namespaces, newest first. When `has_more` is set, pass the
+   *  returned `cursor` back as `cursor` for the next page. */
+  async list(opts: { q?: string; limit?: number; cursor?: string } = {}): Promise<NamespacesPage> {
+    return this.http.request("GET", `${this.base}/ns`, { query: { q: opts.q, limit: opts.limit, cursor: opts.cursor } });
   }
 
   /** Delete a namespace and everything in it. Requires a `full` grant. */

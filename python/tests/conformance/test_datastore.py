@@ -136,8 +136,10 @@ class TestNamespaces:
         assert db.get("todos", "only-here") is None
         assert other.get("todos", "only-here") is not None
 
+        # Rows, not bare names: each carries when the namespace was created.
         page = db.list_namespaces(limit=100)
-        assert other.namespace in page["namespaces"]
+        mine = [n for n in page["namespaces"] if n["namespace"] == other.namespace]
+        assert len(mine) == 1 and mine[0]["created_at"] > 0
 
         if destructive_ok:
             assert db.delete_namespace(other.namespace) is True

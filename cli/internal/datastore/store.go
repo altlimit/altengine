@@ -40,15 +40,45 @@ var (
 type Manager struct {
 	mu     sync.Mutex
 	dbs    map[string]*sql.DB
-	seen   map[string]map[string]bool // instanceID -> namespaces opened
-	dir    string                     // "" => in-memory
+	seen   map[string]map[string]int64 // instanceID -> namespace -> when it was created (ms)
+	dir    string                      // "" => in-memory
 	memory bool
 }
 
 // NewManager creates a datastore manager. dir "" (or memory) keeps everything in RAM.
 func NewManager(dir string) *Manager {
-	m := &Manager{dbs: map[string]*sql.DB{}, seen: map[string]map[string]bool{}, dir: dir, memory: dir == ""}
+	m := &Manager{dbs: map[string]*sql.DB{}, seen: map[string]map[string]int64{}, dir: dir, memory: dir == ""}
 	return m
+}
+
+// NamespaceEntry is one namespace and when it was created — the hosted listing's row.
+type NamespaceEntry struct {
+	Namespace string `json:"namespace"`
+	Created   int64  `json:"created_at"`
+}
+
+// NamespaceEntries is Namespaces with each one's creation time.
+//
+// The time lives in the namespace's own database, so it survives a restart. A database that
+// is on disk and has not been opened this session is opened to read it, which is the only way
+// to answer — and at an emulator's scale costs nothing worth saving.
+func (m *Manager) NamespaceEntries(instanceID string) []NamespaceEntry {
+	names := m.Namespaces(instanceID)
+	out := make([]NamespaceEntry, 0, len(names))
+	for _, ns := range names {
+		m.mu.Lock()
+		created, known := m.seen[instanceID][ns]
+		m.mu.Unlock()
+		if !known {
+			if _, err := m.handle(instanceID, ns); err == nil {
+				m.mu.Lock()
+				created = m.seen[instanceID][ns]
+				m.mu.Unlock()
+			}
+		}
+		out = append(out, NamespaceEntry{Namespace: ns, Created: created})
+	}
+	return out
 }
 
 // Namespaces lists namespaces known for an instance (opened this session, plus, in
@@ -60,6 +90,7 @@ func (m *Manager) Namespaces(instanceID string) []string {
 		set[ns] = true
 	}
 	m.mu.Unlock()
+	// Namespaces opened this session are already in the set; the directory adds the rest.
 	if !m.memory {
 		instDir := filepath.Join(m.dir, "datastore", sanitize(instanceID))
 		if entries, err := os.ReadDir(instDir); err == nil {
@@ -82,7 +113,7 @@ func (m *Manager) Namespaces(instanceID string) []string {
 func (m *Manager) Drop(instanceID, namespace string) (bool, error) {
 	m.mu.Lock()
 	key := instanceID + "\x00" + namespace
-	existed := m.seen[instanceID][namespace]
+	_, existed := m.seen[instanceID][namespace]
 	if db, ok := m.dbs[key]; ok {
 		existed = true
 		_ = db.Close() // in memory mode this destroys the shared-cache database
@@ -121,9 +152,8 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	defer m.mu.Unlock()
 	key := instanceID + "\x00" + namespace
 	if m.seen[instanceID] == nil {
-		m.seen[instanceID] = map[string]bool{}
+		m.seen[instanceID] = map[string]int64{}
 	}
-	m.seen[instanceID][namespace] = true
 	if db, ok := m.dbs[key]; ok {
 		return db, nil
 	}
@@ -146,6 +176,16 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	if err := ensureSchema(db); err != nil {
 		return nil, err
 	}
+	// When this namespace came into being. Written once and read back, so a database from a
+	// previous run keeps the time it was first given rather than the time of this open.
+	if _, err := db.Exec(`INSERT OR IGNORE INTO _dsmeta (k, v) VALUES ('created', ?)`, nowMS()); err != nil {
+		return nil, err
+	}
+	var created int64
+	if err := db.QueryRow(`SELECT v FROM _dsmeta WHERE k = 'created'`).Scan(&created); err != nil {
+		return nil, err
+	}
+	m.seen[instanceID][namespace] = created
 	m.dbs[key] = db
 	return db, nil
 }
@@ -176,6 +216,7 @@ func ensureSchema(db *sql.DB) error {
 			UNIQUE(collection, fields, is_unique)
 		)`,
 		`CREATE TABLE IF NOT EXISTS _dsseq (collection TEXT PRIMARY KEY, next INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS _dsmeta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

@@ -338,8 +338,11 @@ func TestDatastoreNamespaces(t *testing.T) {
 	}
 	found := false
 	for _, ns := range page.Namespaces {
-		if ns == other.Namespace {
+		if ns.Namespace == other.Namespace {
 			found = true
+			if ns.CreatedAt <= 0 {
+				t.Fatalf("namespace %q carries no created_at", ns.Namespace)
+			}
 		}
 	}
 	if !found {

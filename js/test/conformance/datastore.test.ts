@@ -162,8 +162,13 @@ describe("datastore namespaces", () => {
     expect(await db.get("todos", "only-here")).toBeNull();
     expect((await other.get("todos", "only-here"))).not.toBeNull();
 
-    const { namespaces } = await db.namespaces.list();
-    expect(namespaces).toContain(other.namespace);
+    // Rows, not bare names: the listing carries when each namespace was created, newest first.
+    const { namespaces } = await db.namespaces.list({ limit: 100 });
+    const mine = namespaces.find((n) => n.namespace === other.namespace);
+    expect(mine, "the new namespace is not in the listing").toBeTruthy();
+    expect(mine!.created_at).toBeGreaterThan(0);
+    const times = namespaces.map((n) => n.created_at);
+    expect(times).toEqual([...times].sort((a, b) => b - a));
 
     if (destructiveOk()) {
       await db.namespaces.delete(other.namespace);

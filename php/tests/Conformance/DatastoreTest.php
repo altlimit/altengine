@@ -186,8 +186,9 @@ final class DatastoreTest extends ConformanceTestCase
         $this->assertNull(self::$db->get('todos', 'only-here'));
         $this->assertNotNull($other->get('todos', 'only-here'));
 
+        // Rows, not bare names: each carries when the namespace was created.
         $page = self::$db->listNamespaces(limit: 100);
-        $this->assertContains($other->namespace, $page['namespaces']);
+        $this->assertContains($other->namespace, array_column($page['namespaces'], 'namespace'));
 
         if (self::destructiveOk()) {
             $this->assertTrue(self::$db->deleteNamespace($other->namespace));

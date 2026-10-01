@@ -125,24 +125,40 @@ func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	inst := h.Reg.GetOrCreate("datastore", name)
-	all := h.Mgr.Namespaces(inst.ID)
-	sort.Strings(all)
-	q := r.URL.Query().Get("q")
+	// The hosted shape and order: `{namespace, created_at}` rows, newest first, with a cursor
+	// that follows them. This used to answer with bare names in alphabetical order, so code
+	// written against the emulator read `undefined` in production and the reverse threw.
+	all := h.Mgr.NamespaceEntries(inst.ID)
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Created != all[j].Created {
+			return all[i].Created > all[j].Created
+		}
+		return all[i].Namespace < all[j].Namespace
+	})
+	q := strings.ToLower(r.URL.Query().Get("q"))
 	limit := 20
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v >= 1 && v <= 100 {
 		limit = v
 	}
-	matched := make([]string, 0, len(all))
-	for _, ns := range all {
-		if q == "" || strings.Contains(ns, q) {
-			matched = append(matched, ns)
+	cCreated, cSort, hasCursor := common.DecodeListCursor(r.URL.Query().Get("cursor"))
+	matched := make([]NamespaceEntry, 0, len(all))
+	for _, e := range all {
+		if q != "" && !strings.Contains(strings.ToLower(e.Namespace), q) {
+			continue
 		}
+		if hasCursor && !common.AfterCursor(e.Created, e.Namespace, cCreated, cSort) {
+			continue
+		}
+		matched = append(matched, e)
 	}
 	hasMore := len(matched) > limit
+	var cursor any
 	if hasMore {
 		matched = matched[:limit]
+		last := matched[limit-1]
+		cursor = common.EncodeListCursor(last.Created, last.Namespace)
 	}
-	common.WriteJSON(w, 200, map[string]any{"namespaces": matched, "has_more": hasMore})
+	common.WriteJSON(w, 200, map[string]any{"namespaces": matched, "has_more": hasMore, "cursor": cursor})
 	return nil
 }
 

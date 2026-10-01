@@ -112,8 +112,12 @@ class DatastoreClient:
 
     # --- namespaces (instance-wide, not bound to this client's namespace) ---
 
-    def list_namespaces(self, q: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
-        return self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit})
+    def list_namespaces(
+        self, q: Optional[str] = None, limit: Optional[int] = None, cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """A page of namespaces, newest first: ``{"namespaces": [{"namespace", "created_at"}],
+        "has_more", "cursor"}``. Pass ``cursor`` back for the next page."""
+        return self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit, "cursor": cursor})
 
     def delete_namespace(self, namespace: str) -> bool:
         """Delete a namespace and everything in it. Requires a ``full`` grant."""
@@ -192,8 +196,10 @@ class AsyncDatastoreClient:
         res = await self._http.request("DELETE", f"{self._ns}/col/{seg(collection)}/indexes/{index_id}")
         return res["deleted"]
 
-    async def list_namespaces(self, q: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
-        return await self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit})
+    async def list_namespaces(
+        self, q: Optional[str] = None, limit: Optional[int] = None, cursor: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return await self._http.request("GET", f"{self._base}/ns", query={"q": q, "limit": limit, "cursor": cursor})
 
     async def delete_namespace(self, namespace: str) -> bool:
         return (await self._http.request("DELETE", f"{self._base}/ns/{ns_seg(namespace)}"))["deleted"]

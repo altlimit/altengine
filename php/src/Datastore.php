@@ -188,10 +188,14 @@ class Datastore
 
     // --- namespaces (instance-wide, not bound to this client's namespace) ---
 
-    /** @return array{namespaces: list<string>, has_more: bool} */
-    public function listNamespaces(?string $q = null, ?int $limit = null): array
+    /**
+     * A page of namespaces, newest first. Pass `cursor` back for the next page.
+     *
+     * @return array{namespaces: list<array{namespace: string, created_at: int}>, has_more: bool, cursor: ?string}
+     */
+    public function listNamespaces(?string $q = null, ?int $limit = null, ?string $cursor = null): array
     {
-        return $this->http->request('GET', "{$this->base}/ns", ['q' => $q, 'limit' => $limit]);
+        return $this->http->request('GET', "{$this->base}/ns", ['q' => $q, 'limit' => $limit, 'cursor' => $cursor]);
     }
 
     /** Delete a namespace and everything in it. Requires a `full` grant. */

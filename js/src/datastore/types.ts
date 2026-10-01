@@ -130,7 +130,16 @@ export interface CreateIndexRequest {
   unique?: boolean;
 }
 
+export interface NamespaceInfo {
+  namespace: string;
+  /** When the namespace was created (unix ms). */
+  created_at: number;
+}
+
+/** One page of an instance's namespaces, newest first. */
 export interface NamespacesPage {
-  namespaces: string[];
+  namespaces: NamespaceInfo[];
   has_more: boolean;
+  /** Pass back as `cursor` for the next page; null on the last one. */
+  cursor?: string | null;
 }
