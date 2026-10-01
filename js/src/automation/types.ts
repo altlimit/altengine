@@ -29,6 +29,15 @@ export interface StartRunRequest {
   /** A wall clock, if this job genuinely has a deadline. Usually unset: what bounds a run is the
    *  instance's cost ceiling, not a timer. */
   timeout_ms?: number;
+  /** Run as a local account the agent created, headless, under that account's own identity
+   *  rather than the machine's.
+   *
+   *  The account is made by an earlier run calling `user.ensure`, which needs the maintenance
+   *  lane and a machine installed to allow managed accounts. The agent is the authority on
+   *  whether a name is one it created and refuses anything else, so this cannot borrow an
+   *  account somebody else put on the PC. Needs agent 0.0.11 or newer; an older one is refused
+   *  rather than quietly running with the machine's own identity. */
+  run_as?: string;
 }
 
 export interface Run {

@@ -238,6 +238,12 @@ type StartOptions struct {
 	Params  map[string]string
 	AgentID string
 	Labels  []string
+	// RunAs runs the script as a local account the agent created, under that account's own
+	// identity rather than the machine's. The account comes from an earlier run calling
+	// `user.ensure`, and the agent refuses a name it did not create — so this cannot borrow an
+	// account somebody else put on the PC. Passed through unvalidated: the hosted API owns the
+	// rules for what a local account name may be, and a second copy of them would drift.
+	RunAs string
 }
 
 func (c Config) Start(o StartOptions) (*Run, error) {
@@ -250,6 +256,9 @@ func (c Config) Start(o StartOptions) (*Run, error) {
 	}
 	if len(o.Labels) > 0 {
 		body["labels"] = o.Labels
+	}
+	if o.RunAs != "" {
+		body["run_as"] = o.RunAs
 	}
 	var out struct {
 		Run Run `json:"run"`

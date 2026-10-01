@@ -303,6 +303,7 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 	fs.Var(&params, "param", "run parameter as k=v (repeatable)")
 	fs.Var(&labels, "label", "require this label on the machine (repeatable, ALL must match)")
 	agent := fs.String("agent", "", "pin the run to one agent id")
+	runAs := fs.String("run-as", "", "run as a local account the agent created (see user.ensure)")
 	wait := fs.Bool("wait", false, "follow the run to completion and print its log")
 	_ = fs.Parse(rest)
 	if fs.NArg() < 1 {
@@ -317,6 +318,7 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 		Params:  kvMap(params),
 		AgentID: *agent,
 		Labels:  labels,
+		RunAs:   *runAs,
 	})
 	if err != nil {
 		fail(err)
