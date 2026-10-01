@@ -10,23 +10,30 @@ const authInstance = uniq("sdk-auth");
 const dsInstance = uniq("sdk-authds");
 
 /** Row rules for the suite: `posts` is read-all/edit-own with stamped authorship;
- * `notes` is owner-private; `secrets` is deliberately absent (default-deny). */
+ * `notes` is owner-private; `secrets` is deliberately absent (default-deny).
+ *
+ * Keyed by NAMESPACE, then collection — `_default` is the unnamed namespace the suite writes
+ * to. This fixture predated that and keyed by collection alone, which reads as two namespaces
+ * called "posts" and "notes" and leaves the real one unlisted, so every write was refused —
+ * by the emulator and by the hosted API alike. */
 const accessConfig = {
   [`datastore:${dsInstance}`]: {
     level: "full",
     rules: {
-      posts: {
-        read: "authenticated",
-        create: { stamp: { author_uid: "$auth.uid", author_name: "$auth.profile.name" } },
-        update: {
-          match: [{ field: "author_uid", op: "=", value: "$auth.uid" }],
-          immutable: ["author_uid"],
+      _default: {
+        posts: {
+          read: "authenticated",
+          create: { stamp: { author_uid: "$auth.uid", author_name: "$auth.profile.name" } },
+          update: {
+            match: [{ field: "author_uid", op: "=", value: "$auth.uid" }],
+            immutable: ["author_uid"],
+          },
+          delete: { match: [{ field: "author_uid", op: "=", value: "$auth.uid" }] },
         },
-        delete: { match: [{ field: "author_uid", op: "=", value: "$auth.uid" }] },
-      },
-      notes: {
-        read: [{ field: "owner", op: "=", value: "$auth.uid" }],
-        create: { stamp: { owner: "$auth.uid" } },
+        notes: {
+          read: [{ field: "owner", op: "=", value: "$auth.uid" }],
+          create: { stamp: { owner: "$auth.uid" } },
+        },
       },
     },
   },
