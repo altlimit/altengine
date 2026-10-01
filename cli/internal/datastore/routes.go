@@ -468,8 +468,10 @@ func fieldsEqual(a, b []string) bool {
 	return true
 }
 
+// dropIndex takes `full`, not the `write` that creates one — the level the hosted API and the
+// function binding both require. Dropping an index un-serves every query that relied on it.
 func (h *Handler) dropIndex(w http.ResponseWriter, r *http.Request) error {
-	_, store, user, err := h.resolve(r, auth.Write)
+	_, store, user, err := h.resolve(r, auth.Full)
 	if err != nil {
 		return err
 	}
