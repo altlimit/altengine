@@ -84,7 +84,7 @@ func devCmd(args []string) {
 	// phone or a second machine on the LAN pointed at this emulator. It widens who may drive
 	// your local data, so it is a flag rather than the default.
 	allowOrigin := fs.String("allow-origin", "", "extra browser origin(s) allowed to call the API, comma-separated")
-	_ = fs.Parse(args)
+	_ = fs.Parse(flagsFirst(fs, args))
 
 	// Three states, and the third is the point: detection is a guess, and a guess that cannot be
 	// overridden is worse than none — both -spa and -spa=false have to beat it.
@@ -163,6 +163,52 @@ func fail(err error) {
 	os.Exit(1)
 }
 
+// flagsFirst moves every flag in args ahead of the positionals, so a flag written after the
+// file argument is parsed rather than dropped.
+//
+// Go's flag package stops at the first positional and treats everything after it as more
+// positionals, without complaint. `altengine deploy app.js --dry-run` therefore deployed for
+// real, and `static deploy ./dist --no-activate` put the build live.
+//
+// A flag this set does not define is kept among the flags, so Parse reports it by name instead
+// of it becoming a second file argument. A literal `--` still ends flag parsing.
+func flagsFirst(fs *flag.FlagSet, args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		// A bare "-" and a negative number are values, not flags.
+		if len(a) < 2 || a[0] != '-' || (a[1] >= '0' && a[1] <= '9') || a[1] == '.' {
+			positional = append(positional, a)
+			continue
+		}
+		flags = append(flags, a)
+		name := strings.TrimLeft(a, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+			continue
+		}
+		// It takes a value, and the value is the next argument whatever that looks like.
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	if len(positional) == 0 {
+		return flags
+	}
+	return append(append(flags, "--"), positional...)
+}
+
 func deployCmd(args []string) {
 	fs := flag.NewFlagSet("deploy", flag.ExitOnError)
 	url, key, instance := hostedFlags(fs)
@@ -174,7 +220,7 @@ func deployCmd(args []string) {
 	fs.Var(&schedules, "schedule", "UTC cron expression to run this function on; repeat for several (e.g. -schedule '0 9 * * 1-5' -schedule '0 12 * * 6')")
 	unschedule := fs.Bool("unschedule", false, "remove this function's schedules")
 	dryRun := fs.Bool("dry-run", false, "bundle and report the size, but do not upload")
-	_ = fs.Parse(args)
+	_ = fs.Parse(flagsFirst(fs, args))
 
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine deploy [flags] <entry.js>"))
@@ -288,7 +334,7 @@ func functionsCmd(args []string) {
 
 	switch sub {
 	case "list":
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := resolveConfig(fs, url, key, instance)
 		if err != nil {
 			fail(err)
@@ -309,7 +355,7 @@ func functionsCmd(args []string) {
 		}
 
 	case "versions":
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {
 			fail(fmt.Errorf("usage: altengine functions versions [flags] <name>"))
 		}
@@ -332,7 +378,7 @@ func functionsCmd(args []string) {
 
 	case "rollback":
 		version := fs.Int("version", 0, "version to activate")
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 || *version < 1 {
 			fail(fmt.Errorf("usage: altengine functions rollback --version <n> <name>"))
 		}
@@ -348,7 +394,7 @@ func functionsCmd(args []string) {
 	case "pull":
 		version := fs.Int("version", 0, "version to fetch (default: the active one)")
 		out := fs.String("out", "", "write to this file instead of stdout")
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {
 			fail(fmt.Errorf("usage: altengine functions pull [--version n] [--out file] <name>"))
 		}

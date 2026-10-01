@@ -131,7 +131,7 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 	parallel := fs.Bool("parallel", false, "this script drives ONLY browsers and HTTP, so it may share a machine")
 	exclusive := fs.Bool("exclusive", false, "this script drives the desktop and must have the machine to itself")
 	dryRun := fs.Bool("dry-run", false, "bundle and report the size, but do not upload")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation deploy [flags] <entry.js>"))
 	}
@@ -186,7 +186,7 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 }
 
 func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *string) {
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)
@@ -236,7 +236,7 @@ func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *stri
 
 func automationActivate(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	version := fs.Int("version", 0, "version to make live")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 || *version < 1 {
 		fail(fmt.Errorf("usage: altengine automation activate --version <n> <name>"))
 	}
@@ -252,7 +252,7 @@ func automationActivate(fs *flag.FlagSet, rest []string, url, key, instance *str
 
 func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	q := fs.String("q", "", "match name, hostname or label")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)
@@ -305,7 +305,7 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 	agent := fs.String("agent", "", "pin the run to one agent id")
 	runAs := fs.String("run-as", "", "run as a local account the agent created (see user.ensure)")
 	wait := fs.Bool("wait", false, "follow the run to completion and print its log")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation run [flags] <script>"))
 	}
@@ -396,7 +396,7 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	status := fs.String("status", "", "filter by status")
 	script := fs.String("script", "", "filter by script name")
 	limit := fs.Int("limit", 20, "how many to list")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)
@@ -412,7 +412,7 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 }
 
 func automationLogs(fs *flag.FlagSet, rest []string, url, key, instance *string) {
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation logs <run-id>"))
 	}
@@ -445,7 +445,7 @@ func automationLogs(fs *flag.FlagSet, rest []string, url, key, instance *string)
 }
 
 func automationGet(fs *flag.FlagSet, rest []string, url, key, instance *string) {
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation get <run-id>"))
 	}
@@ -462,7 +462,7 @@ func automationGet(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 }
 
 func automationCancel(fs *flag.FlagSet, rest []string, url, key, instance *string) {
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation cancel <run-id>"))
 	}
@@ -499,7 +499,7 @@ func automationSend(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	script := fs.String("script", "", "only deliver to runs of this script")
 	agent := fs.String("agent", "", "only deliver to runs on this machine")
 	raw := fs.Bool("raw", false, "send the value as a string even if it looks like JSON")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation send [flags] <key> [value]   (value may come from stdin)"))
 	}
@@ -558,7 +558,7 @@ func automationSend(fs *flag.FlagSet, rest []string, url, key, instance *string)
 func automationEnv(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	set := fs.String("set", "", "name of a credential to set (value from the argument, or stdin)")
 	unset := fs.String("unset", "", "name of a credential to remove")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)

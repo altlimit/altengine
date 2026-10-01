@@ -27,7 +27,7 @@ func staticCmd(args []string) {
 		staticDeploy(fs, rest, url, key, instance)
 
 	case "list":
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := staticConfig(fs, url, key, instance)
 		if err != nil {
 			fail(err)
@@ -63,7 +63,7 @@ func staticCmd(args []string) {
 		}
 
 	case "rollback":
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {
 			fail(fmt.Errorf("usage: altengine static rollback [flags] <deployment-id>\n" +
 				"       (altengine static list shows the ids)"))
@@ -82,7 +82,7 @@ func staticCmd(args []string) {
 		printLive(res.URL)
 
 	case "info":
-		_ = fs.Parse(rest)
+		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := staticConfig(fs, url, key, instance)
 		if err != nil {
 			fail(err)
@@ -110,7 +110,7 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	message := fs.String("message", "", "label for this deployment (defaults to the git commit)")
 	noActivate := fs.Bool("no-activate", false, "upload the deployment but keep serving the current one")
 	dryRun := fs.Bool("dry-run", false, "hash the directory and report what would upload, without uploading")
-	_ = fs.Parse(rest)
+	_ = fs.Parse(flagsFirst(fs, rest))
 
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine static deploy [flags] <directory>\n" +
