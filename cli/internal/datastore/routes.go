@@ -398,6 +398,20 @@ func (h *Handler) transaction(w http.ResponseWriter, r *http.Request) error {
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
+	// A transaction that deletes is a delete, and takes what the delete route takes. Checked
+	// once the body is read, as the hosted API does.
+	for _, op := range body.Operations {
+		if op.Op == "delete" {
+			id, _, err := h.Ident.ResolveRequest(r, h.Auth)
+			if err != nil {
+				return err
+			}
+			if err := auth.Require(id, "datastore", r.PathValue("instance"), auth.Full); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	keys, _, err := store.RunTransaction(body.Operations)
 	if err != nil {
 		return err

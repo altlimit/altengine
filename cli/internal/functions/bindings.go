@@ -301,6 +301,20 @@ func argAny(args []goja.Value, i int) any {
 	return v.Export()
 }
 
+// txnDeletes reports whether a transaction's operations include a delete.
+func txnDeletes(ops any) bool {
+	list, ok := ops.([]any)
+	if !ok {
+		return false
+	}
+	for _, o := range list {
+		if m, ok := o.(map[string]any); ok && m["op"] == "delete" {
+			return true
+		}
+	}
+	return false
+}
+
 // nsSegment spells the namespace the way the URL does.
 func nsSegment(ns string) string {
 	if ns == "" {
@@ -392,6 +406,15 @@ var serviceMethods = map[string]map[string]call{
 		// exists at all.
 		"transaction": {
 			method: "POST", level: auth.Write, minArgs: 2,
+			// A transaction that carries a delete op is a delete, and a delete takes `full` —
+			// as the hosted stub decides it. Left at `write`, a function would delete locally
+			// on a grant that 403s in production.
+			levelFor: func(a []goja.Value) auth.Level {
+				if txnDeletes(argAny(a, 1)) {
+					return auth.Full
+				}
+				return auth.Write
+			},
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/v1/datastore/%s/ns/%s/transaction", esc(t.instance), nsSegment(t.namespace)), nil
 			},

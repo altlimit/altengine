@@ -33,8 +33,10 @@ func levelName(l auth.Level) string {
 }
 
 // levelsForCall reports every level a call can demand: one for a fixed level, or the set a
-// levelFor can return. Only channel.token is argument-dependent, and both of its outcomes are
-// exercised here rather than assumed.
+// levelFor can return. Two methods are argument-dependent — channel.token (a publish-capable
+// token is a write) and datastore.transaction (one that deletes takes full) — and each outcome
+// is exercised here rather than assumed. A probe that means nothing to a method leaves it at
+// its lowest level, so one list serves both.
 func levelsForCall(vm *goja.Runtime, m call) []string {
 	if m.levelFor == nil {
 		return []string{levelName(m.level)}
@@ -42,6 +44,8 @@ func levelsForCall(vm *goja.Runtime, m call) []string {
 	probes := [][]goja.Value{
 		{vm.ToValue(map[string]any{"instance": "i"}), vm.ToValue(map[string]any{})},
 		{vm.ToValue(map[string]any{"instance": "i"}), vm.ToValue(map[string]any{"publish": true})},
+		{vm.ToValue(map[string]any{"instance": "i"}), vm.ToValue([]any{map[string]any{"op": "put", "collection": "c"}})},
+		{vm.ToValue(map[string]any{"instance": "i"}), vm.ToValue([]any{map[string]any{"op": "delete", "collection": "c", "key": "k"}})},
 	}
 	seen := map[string]bool{}
 	for _, args := range probes {
