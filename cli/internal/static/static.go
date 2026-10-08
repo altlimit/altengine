@@ -347,12 +347,16 @@ func PutAll(uploads []Upload, byHash map[string]File, onDone func()) error {
 		firstErr error
 		sem      = make(chan struct{}, UploadParallel)
 	)
+	// Every hash is checked before any upload starts: returning from inside the loop left the
+	// goroutines already started running, and reporting progress, after PutAll had returned.
+	for _, u := range uploads {
+		if _, ok := byHash[u.Hash]; !ok {
+			return fmt.Errorf("server asked for a file we do not have (%s) — re-run the deploy", hosted.Short(u.Hash, 12))
+		}
+	}
 	client := &http.Client{Timeout: 5 * time.Minute}
 	for _, u := range uploads {
-		f, ok := byHash[u.Hash]
-		if !ok {
-			return fmt.Errorf("server asked for a file we do not have (%s) — re-run the deploy", u.Hash[:12])
-		}
+		f := byHash[u.Hash]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(u Upload, f File) {
@@ -375,19 +379,33 @@ func PutAll(uploads []Upload, byHash map[string]File, onDone func()) error {
 	return firstErr
 }
 
+// put uploads one file, retrying a failure that is safe to repeat: a PUT of the same bytes to the
+// same presigned URL is idempotent, and one dropped connection should not fail a deploy of
+// thousands of files.
 func put(client *http.Client, u Upload, f File) error {
 	if err := hosted.CheckURL(u.URL); err != nil {
 		return fmt.Errorf("uploading %s: %w", f.Path, err)
 	}
+	for attempt := 1; ; attempt++ {
+		retry, wait, err := putOnce(client, u, f)
+		if err == nil || !retry || attempt >= hosted.MaxAttempts {
+			return err
+		}
+		hosted.Sleep(hosted.Backoff(attempt, wait))
+	}
+}
+
+// putOnce makes one attempt, saying whether a failure is worth another and any Retry-After.
+func putOnce(client *http.Client, u Upload, f File) (retry bool, retryAfter string, err error) {
 	body, err := os.Open(f.Local)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %w", f.Path, err)
+		return false, "", fmt.Errorf("cannot read %s: %w", f.Path, err)
 	}
 	defer body.Close()
 
 	req, err := http.NewRequest(http.MethodPut, u.URL, body)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	// The size is signed into the URL, so it must be sent exactly. Setting ContentLength rather
 	// than a header is what stops Go using chunked transfer encoding, which a presigned PUT
@@ -401,14 +419,15 @@ func put(client *http.Client, u Upload, f File) error {
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("uploading %s: %w", f.Path, err)
+		return true, "", fmt.Errorf("uploading %s: %w", f.Path, err)
 	}
 	defer res.Body.Close()
 	io.Copy(io.Discard, res.Body)
 	if res.StatusCode >= 300 {
-		return fmt.Errorf("uploading %s: %s", f.Path, res.Status)
+		return hosted.Retryable(res.StatusCode, true) || res.StatusCode >= 500, res.Header.Get("Retry-After"),
+			fmt.Errorf("uploading %s: %s", f.Path, res.Status)
 	}
-	return nil
+	return false, "", nil
 }
 
 // GitDescribe returns a short commit sha for the working directory, or "" when there is no git

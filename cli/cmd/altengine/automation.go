@@ -205,12 +205,8 @@ func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *stri
 			if v.Version == active {
 				marker = "*"
 			}
-			hash := v.CodeHash
-			if len(hash) > 12 {
-				hash = hash[:12]
-			}
 			fmt.Printf("%s v%-4d %8d bytes  %s  %s\n", marker, v.Version, v.SizeBytes,
-				time.UnixMilli(v.CreatedAt).Format(time.RFC3339), hash)
+				time.UnixMilli(v.CreatedAt).Format(time.RFC3339), hosted.Short(v.CodeHash, 12))
 		}
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/altlimit/altengine/cli/internal/hosted"
 	"github.com/altlimit/altengine/cli/internal/static"
 )
 
@@ -78,7 +79,7 @@ func staticCmd(args []string) {
 		if err != nil {
 			fail(err)
 		}
-		fmt.Printf("rolled back to %s — %d files, %s\n", res.DeploymentID[:12], res.FileCount, humanBytes(res.TotalBytes))
+		fmt.Printf("rolled back to %s — %d files, %s\n", hosted.Short(res.DeploymentID, 12), res.FileCount, humanBytes(res.TotalBytes))
 		printLive(res.URL)
 
 	case "info":
@@ -187,7 +188,7 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	}
 
 	if *noActivate {
-		fmt.Printf("deployment %s uploaded, not activated\n", created.DeploymentID[:12])
+		fmt.Printf("deployment %s uploaded, not activated\n", hosted.Short(created.DeploymentID, 12))
 		fmt.Printf("  altengine static rollback %s   # to publish it\n", created.DeploymentID)
 		return
 	}
@@ -196,7 +197,7 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	if err != nil {
 		fail(err)
 	}
-	fmt.Printf("deployed %s — %d files, %s\n", res.DeploymentID[:12], res.FileCount, humanBytes(res.TotalBytes))
+	fmt.Printf("deployed %s — %d files, %s\n", hosted.Short(res.DeploymentID, 12), res.FileCount, humanBytes(res.TotalBytes))
 	printLive(res.URL)
 }
 

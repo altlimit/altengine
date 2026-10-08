@@ -377,7 +377,7 @@ func functionsCmd(args []string) {
 				marker = "*"
 			}
 			fmt.Printf("%s v%-4d %8d bytes  %s  %s  %s\n", marker, v.Version, v.SizeBytes,
-				time.UnixMilli(v.CreatedAt).Format(time.RFC3339), v.SHA256[:12], v.URL)
+				time.UnixMilli(v.CreatedAt).Format(time.RFC3339), hosted.Short(v.SHA256, 12), v.URL)
 		}
 
 	case "rollback":
