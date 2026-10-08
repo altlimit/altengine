@@ -55,27 +55,29 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 	if err != nil {
 		return err
 	}
-	var body struct {
-		Config map[string]any `json:"config"`
-	}
+	// `{"config": {...}}` or the bare object, as hosted. Read once: the body is a stream, and a
+	// second decode of it sees nothing — which is how a bare body used to save nothing and 200.
+	var body map[string]any
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
 	}
-	if body.Config == nil {
-		// allow a bare config object
-		var bare map[string]any
-		if err := common.ReadJSON(r, &bare); err == nil {
-			body.Config = bare
+	cfg := body
+	if inner, present := body["config"]; present {
+		m, ok := inner.(map[string]any)
+		if !ok {
+			return common.BadRequest("config must be an object")
 		}
+		cfg = m
 	}
 	// Auth `access` config: reject a row rule the entry's level can't reach (dead config that
 	// would silently 403 at runtime) — mirrors the hosted admin save-time guard.
-	if service == "auth" && body.Config != nil {
-		if err := identity.ValidateAccessLevels(body.Config["access"]); err != nil {
+	if service == "auth" && cfg != nil {
+		if err := identity.ValidateAccessLevels(cfg["access"]); err != nil {
 			return err
 		}
 	}
-	if err := h.Reg.SaveConfig(in, body.Config); err != nil {
+	// A full replace, as hosted: a key the body leaves out is removed.
+	if err := h.Reg.ReplaceConfig(in, cfg); err != nil {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"config": in.Config()})

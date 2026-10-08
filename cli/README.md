@@ -243,6 +243,9 @@ Auth instances are managed through the admin API (`/admin/auth`) — create them
 `signup`/`access` config, and rotate the signing secret (which invalidates every outstanding
 identity token).
 
+`PUT /admin/{service}/{id}/config` replaces the whole config, as it does hosted — send every field
+you want to keep. MCP's `patch_instance_config` merges top-level fields instead.
+
 ## Services & endpoints
 
 All data-plane routes require `Authorization: Bearer <token>` (except the public auth endpoints,

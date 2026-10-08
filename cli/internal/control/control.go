@@ -354,29 +354,43 @@ func (r *Registry) OnConfigSaved(service string, fn func(in *Instance, before ma
 	r.saved[service] = append(r.saved[service], fn)
 }
 
-// SaveConfig is the one config write the console and MCP both use: it merges `changes` onto the
-// instance's config, refuses a result a service's validator rejects (nothing is written), and then
-// runs the service's after-save hooks.
+// SaveConfig is MCP's patch: it merges `changes` onto the instance's config (top level only, as
+// hosted) and writes the result through ReplaceConfig.
 func (r *Registry) SaveConfig(in *Instance, changes map[string]any) error {
+	merged := r.ConfigSnapshot(in)
+	for k, v := range changes {
+		merged[k] = v
+	}
+	return r.ReplaceConfig(in, merged)
+}
+
+// ReplaceConfig is the one config write every surface ends in, and the console's PUT calls it
+// directly: `cfg` becomes the whole config, as it does hosted — a key it leaves out is gone, and
+// the service reads its default. A result a service's validator rejects writes nothing; after a
+// write, the service's after-save hooks run.
+func (r *Registry) ReplaceConfig(in *Instance, cfg map[string]any) error {
+	if cfg == nil {
+		return common.BadRequest("config must be an object")
+	}
 	before := r.ConfigSnapshot(in)
 	r.mu.RLock()
 	checks := append([]func(map[string]any) error{}, r.validators[in.Service]...)
 	hooks := append([]func(*Instance, map[string]any){}, r.saved[in.Service]...)
 	r.mu.RUnlock()
 
-	merged := make(map[string]any, len(before)+len(changes))
-	for k, v := range before {
-		merged[k] = v
-	}
-	for k, v := range changes {
-		merged[k] = v
+	next := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		next[k] = v
 	}
 	for _, check := range checks {
-		if err := check(merged); err != nil {
+		if err := check(next); err != nil {
 			return err
 		}
 	}
-	r.SetConfig(in, changes)
+	r.mu.Lock()
+	in.setConfig(next)
+	r.save()
+	r.mu.Unlock()
 	for _, hook := range hooks {
 		hook(in, before)
 	}
