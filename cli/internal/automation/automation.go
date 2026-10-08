@@ -10,14 +10,11 @@
 package automation
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
-	"time"
+
+	"github.com/altlimit/altengine/cli/internal/hosted"
 )
 
 // Config is everything needed to reach one automation instance.
@@ -27,53 +24,9 @@ type Config struct {
 	Instance string
 }
 
-type apiError struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 func (c Config) do(method, path string, body any, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	full := strings.TrimRight(c.BaseURL, "/") + "/v1/automation/" + url.PathEscape(c.Instance) + path
-	req, err := http.NewRequest(method, full, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// Generous, for the same reason the functions deploy is: a large bundle on a slow link is a
-	// legitimately slow request, and a timeout here leaves someone unsure whether it landed.
-	client := &http.Client{Timeout: 60 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, full, err)
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 400 {
-		var ae apiError
-		if json.Unmarshal(raw, &ae) == nil && ae.Error.Message != "" {
-			return fmt.Errorf("%s (%s)", ae.Error.Message, ae.Error.Code)
-		}
-		return fmt.Errorf("%s %s: %s: %s", method, full, res.Status, strings.TrimSpace(string(raw)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("unexpected response: %w", err)
-		}
-	}
-	return nil
+	return hosted.Client{BaseURL: c.BaseURL, APIKey: c.APIKey}.
+		Do(method, "/v1/automation/"+hosted.Seg(c.Instance)+path, body, out)
 }
 
 // --- scripts --------------------------------------------------------------

@@ -19,6 +19,7 @@ import (
 
 	"github.com/altlimit/altengine/cli/internal/automation"
 	"github.com/altlimit/altengine/cli/internal/deploy"
+	"github.com/altlimit/altengine/cli/internal/hosted"
 )
 
 func automationUsage() error {
@@ -76,6 +77,9 @@ func resolveAutomation(url, key, instance *string) (automation.Config, error) {
 	}
 	if cfg.BaseURL == "" {
 		return cfg, fmt.Errorf("no service URL: pass --url or set ALTENGINE_URL")
+	}
+	if err := hosted.CheckURL(cfg.BaseURL); err != nil {
+		return cfg, err
 	}
 	if cfg.APIKey == "" {
 		return cfg, fmt.Errorf("no API key: pass --key or set ALTENGINE_KEY")

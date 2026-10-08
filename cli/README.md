@@ -36,6 +36,9 @@ altengine functions rollback --version 3 hello
 altengine functions pull --out hello.js hello
 ```
 
+`ALTENGINE_URL` must be `https://`; plain `http://` is accepted only for `localhost`, so the key is
+never sent unencrypted.
+
 Every stored version has its own address, printed by `functions versions`: `{slug}--v{n}-fn`
 hosted, `/fn/{instance}--v{n}/{function}` against `altengine dev`. It runs that version's code
 with the function's **current** grants, limits and secrets. The instance setting `keepVersions`

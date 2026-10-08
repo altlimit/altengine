@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/deploy"
+	"github.com/altlimit/altengine/cli/internal/hosted"
 	"github.com/altlimit/altengine/cli/internal/server"
 )
 
@@ -142,6 +143,9 @@ func resolveConfig(fs *flag.FlagSet, url, key, instance *string) (deploy.Config,
 	}
 	if cfg.BaseURL == "" {
 		return cfg, fmt.Errorf("no service URL: pass --url or set ALTENGINE_URL")
+	}
+	if err := hosted.CheckURL(cfg.BaseURL); err != nil {
+		return cfg, err
 	}
 	if cfg.APIKey == "" {
 		return cfg, fmt.Errorf("no API key: pass --key or set ALTENGINE_KEY")

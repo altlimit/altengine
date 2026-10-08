@@ -7,16 +7,13 @@
 package deploy
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/altlimit/altengine/cli/internal/hosted"
 	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
@@ -95,56 +92,12 @@ type Result struct {
 	Active    bool   `json:"active"`
 }
 
-type apiError struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 func (c Config) do(method, path string, body any, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	url := strings.TrimRight(c.BaseURL, "/") + path
-	req, err := http.NewRequest(method, url, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	// Generous: a large bundle over a slow link is a legitimate slow request, and a
-	// timeout here would leave the user unsure whether the deploy landed.
-	client := &http.Client{Timeout: 60 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, url, err)
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
-
-	if res.StatusCode >= 400 {
-		var ae apiError
-		if json.Unmarshal(raw, &ae) == nil && ae.Error.Message != "" {
-			return fmt.Errorf("%s (%s)", ae.Error.Message, ae.Error.Code)
-		}
-		return fmt.Errorf("%s %s: %s: %s", method, url, res.Status, strings.TrimSpace(string(raw)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("unexpected response: %w", err)
-		}
-	}
-	return nil
+	return hosted.Client{BaseURL: c.BaseURL, APIKey: c.APIKey}.Do(method, path, body, out)
 }
+
+// base is this instance's route prefix, its name escaped as one path segment.
+func (c Config) base() string { return "/v1/functions/" + hosted.Seg(c.Instance) }
 
 // Deploy uploads code as a new version of the named function.
 //
@@ -160,7 +113,7 @@ func (c Config) Deploy(fnName, code string, grants map[string]string, schedules 
 		body.Activate = &activate
 	}
 	var r Result
-	if err := c.do(http.MethodPost, "/v1/functions/"+c.Instance+"/deploy", body, &r); err != nil {
+	if err := c.do(http.MethodPost, c.base()+"/deploy", body, &r); err != nil {
 		return nil, err
 	}
 	return &r, nil
@@ -183,7 +136,7 @@ type Listing struct {
 // List reports what is currently deployed.
 func (c Config) List() (*Listing, error) {
 	var l Listing
-	if err := c.do(http.MethodGet, "/v1/functions/"+c.Instance, nil, &l); err != nil {
+	if err := c.do(http.MethodGet, c.base(), nil, &l); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -206,7 +159,7 @@ func (c Config) Versions(fnName string) ([]Version, int, error) {
 		Versions      []Version `json:"versions"`
 		ActiveVersion int       `json:"active_version"`
 	}
-	if err := c.do(http.MethodGet, "/v1/functions/"+c.Instance+"/"+fnName+"/versions", nil, &out); err != nil {
+	if err := c.do(http.MethodGet, c.base()+"/"+hosted.Seg(fnName)+"/versions", nil, &out); err != nil {
 		return nil, 0, err
 	}
 	return out.Versions, out.ActiveVersion, nil
@@ -215,7 +168,7 @@ func (c Config) Versions(fnName string) ([]Version, int, error) {
 // Activate points traffic at an already-deployed version. No upload — a rollback moves a
 // pointer, so it is fast and cannot fail halfway.
 func (c Config) Activate(fnName string, version int) error {
-	return c.do(http.MethodPost, "/v1/functions/"+c.Instance+"/"+fnName+"/activate",
+	return c.do(http.MethodPost, c.base()+"/"+hosted.Seg(fnName)+"/activate",
 		map[string]any{"version": version}, nil)
 }
 
@@ -224,7 +177,7 @@ func (c Config) Pull(fnName string, version int) (string, error) {
 	var out struct {
 		Code string `json:"code"`
 	}
-	path := fmt.Sprintf("/v1/functions/%s/%s/versions/%d/code", c.Instance, fnName, version)
+	path := fmt.Sprintf("%s/%s/versions/%d/code", c.base(), hosted.Seg(fnName), version)
 	if err := c.do(http.MethodGet, path, nil, &out); err != nil {
 		return "", err
 	}

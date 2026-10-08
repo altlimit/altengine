@@ -16,14 +16,13 @@
 package static
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +31,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/altlimit/altengine/cli/internal/hosted"
 )
 
 // Config is everything needed to reach an instance. Flags win over environment.
@@ -204,53 +205,12 @@ func Manifest(files []File) map[string]manifestEntry {
 	return m
 }
 
-type apiError struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 func (c Config) do(method, path string, body any, out any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	url := strings.TrimRight(c.BaseURL, "/") + path
-	req, err := http.NewRequest(method, url, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, url, err)
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
-
-	if res.StatusCode >= 400 {
-		var ae apiError
-		if json.Unmarshal(raw, &ae) == nil && ae.Error.Message != "" {
-			return fmt.Errorf("%s (%s)", ae.Error.Message, ae.Error.Code)
-		}
-		return fmt.Errorf("%s %s: %s: %s", method, url, res.Status, strings.TrimSpace(string(raw)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("unexpected response: %w", err)
-		}
-	}
-	return nil
+	return hosted.Client{BaseURL: c.BaseURL, APIKey: c.APIKey}.Do(method, path, body, out)
 }
+
+// base is this instance's route prefix, its name escaped as one path segment.
+func (c Config) base() string { return "/v1/static/" + hosted.Seg(c.Instance) }
 
 // Upload is one presigned PUT the client must perform.
 type Upload struct {
@@ -306,7 +266,7 @@ func (c Config) Create(files []File, message string) (*Created, error) {
 		body["message"] = message
 	}
 	var out Created
-	if err := c.do(http.MethodPost, "/v1/static/"+c.Instance+"/deployments", body, &out); err != nil {
+	if err := c.do(http.MethodPost, c.base()+"/deployments", body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -315,7 +275,7 @@ func (c Config) Create(files []File, message string) (*Created, error) {
 // UploadPage fetches the next page of presigned URLs.
 func (c Config) UploadPage(deploymentID, cursor string) ([]Upload, string, error) {
 	var out uploadPage
-	path := fmt.Sprintf("/v1/static/%s/deployments/%s/uploads?cursor=%s", c.Instance, deploymentID, cursor)
+	path := fmt.Sprintf("%s/deployments/%s/uploads?cursor=%s", c.base(), hosted.Seg(deploymentID), url.QueryEscape(cursor))
 	if err := c.do(http.MethodGet, path, nil, &out); err != nil {
 		return nil, "", err
 	}
@@ -325,7 +285,7 @@ func (c Config) UploadPage(deploymentID, cursor string) ([]Upload, string, error
 // Activate points the site at a deployment. Also the rollback: an older id is the same call.
 func (c Config) Activate(deploymentID string) (*Activated, error) {
 	var out Activated
-	path := fmt.Sprintf("/v1/static/%s/deployments/%s/activate", c.Instance, deploymentID)
+	path := fmt.Sprintf("%s/deployments/%s/activate", c.base(), hosted.Seg(deploymentID))
 	if err := c.do(http.MethodPost, path, nil, &out); err != nil {
 		return nil, err
 	}
@@ -340,9 +300,9 @@ func (c Config) Deployments(cursor string) ([]Deployment, string, string, error)
 		Active      string       `json:"active"`
 		URL         string       `json:"url"`
 	}
-	path := "/v1/static/" + c.Instance + "/deployments"
+	path := c.base() + "/deployments"
 	if cursor != "" {
-		path += "?cursor=" + cursor
+		path += "?cursor=" + url.QueryEscape(cursor)
 	}
 	if err := c.do(http.MethodGet, path, nil, &out); err != nil {
 		return nil, "", "", err
@@ -364,7 +324,7 @@ type Site struct {
 // Info reports where the site lives and which build is answering.
 func (c Config) Info() (*Site, error) {
 	var s Site
-	if err := c.do(http.MethodGet, "/v1/static/"+c.Instance+"/site", nil, &s); err != nil {
+	if err := c.do(http.MethodGet, c.base()+"/site", nil, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -416,6 +376,9 @@ func PutAll(uploads []Upload, byHash map[string]File, onDone func()) error {
 }
 
 func put(client *http.Client, u Upload, f File) error {
+	if err := hosted.CheckURL(u.URL); err != nil {
+		return fmt.Errorf("uploading %s: %w", f.Path, err)
+	}
 	body, err := os.Open(f.Local)
 	if err != nil {
 		return fmt.Errorf("cannot read %s: %w", f.Path, err)

@@ -1,6 +1,8 @@
 package deploy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +65,23 @@ func TestBundleMinifyShrinks(t *testing.T) {
 func TestBundleMissingFile(t *testing.T) {
 	if _, err := Bundle(filepath.Join(t.TempDir(), "nope.js"), false); err == nil {
 		t.Fatal("expected an error for a missing entry file")
+	}
+}
+
+// A name is one path segment: a `/` or `?` in it must not address a different route.
+func TestNamesAreEscapedAsOnePathSegment(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`{"versions":[]}`))
+	}))
+	defer srv.Close()
+	c := Config{BaseURL: srv.URL, APIKey: "k", Instance: "my app"}
+	if _, _, err := c.Versions("../other?x=1"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/functions/my%20app/..%2Fother%3Fx=1/versions"; got != want {
+		t.Errorf("path %q, want %q", got, want)
 	}
 }
 
