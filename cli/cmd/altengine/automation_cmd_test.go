@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// fakeHosted answers the hosted routes a test names, recording each request as "METHOD path".
-func fakeHosted(t *testing.T, routes map[string]func(w http.ResponseWriter)) (*[]string, func()) {
+// fakeHosted answers the hosted routes a test names, recording each request as "METHOD path";
+// the first function returns a copy of what was recorded.
+func fakeHosted(t *testing.T, routes map[string]func(w http.ResponseWriter)) (func() []string, func()) {
 	t.Helper()
 	var mu sync.Mutex
 	var seen []string
@@ -27,7 +28,12 @@ func fakeHosted(t *testing.T, routes map[string]func(w http.ResponseWriter)) (*[
 	isolate(t)
 	t.Setenv("ALTENGINE_URL", srv.URL)
 	t.Setenv(keyEnv, "ae_test")
-	return &seen, srv.Close
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+	return snapshot, srv.Close
 }
 
 func body(s string) func(w http.ResponseWriter) {
@@ -82,9 +88,9 @@ func TestDeleteNeedsConfirmation(t *testing.T) {
 	if code, _, _ := runMain(t, "functions delete --instance app hello"); code != 1 {
 		t.Fatalf("delete without --yes: exit %d", code)
 	}
-	for _, s := range *seen {
+	for _, s := range seen() {
 		if strings.HasPrefix(s, "DELETE") {
-			t.Fatalf("deleted without confirmation: %v", *seen)
+			t.Fatalf("deleted without confirmation: %v", seen())
 		}
 	}
 	for _, args := range []string{
@@ -112,7 +118,7 @@ func TestActivateAndRollbackAreAliases(t *testing.T) {
 		"static activate --instance web d1",
 	} {
 		if code, _, errOut := runMain(t, args); code != 0 {
-			t.Errorf("%s: exit %d %s (%v)", args, code, errOut, *seen)
+			t.Errorf("%s: exit %d %s (%v)", args, code, errOut, seen())
 		}
 	}
 }
