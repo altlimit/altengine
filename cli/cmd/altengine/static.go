@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,7 @@ func staticCmd(args []string) {
 
 	case "list":
 		from := fs.String("cursor", "", "continue from where a previous page stopped")
+		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := staticConfig(fs, url, key, instance)
 		if err != nil {
@@ -52,6 +54,13 @@ func staticCmd(args []string) {
 		deployments, cursor, active, err := cfg.Deployments(*from)
 		if err != nil {
 			fail(err)
+		}
+		if *asJSON {
+			if deployments == nil {
+				deployments = []static.Deployment{}
+			}
+			printJSON(map[string]any{"deployments": deployments, "active": active, "cursor": cursor})
+			return
 		}
 		if len(deployments) == 0 {
 			fmt.Println("no deployments yet")
@@ -80,6 +89,7 @@ func staticCmd(args []string) {
 		}
 
 	case "rollback":
+		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {
 			fail(fmt.Errorf("usage: altengine static rollback [flags] <deployment-id>\n" +
@@ -95,10 +105,15 @@ func staticCmd(args []string) {
 		if err != nil {
 			fail(err)
 		}
+		if *asJSON {
+			printJSON(res)
+			return
+		}
 		fmt.Printf("rolled back to %s — %d files, %s\n", hosted.Short(res.DeploymentID, 12), res.FileCount, humanBytes(res.TotalBytes))
 		printLive(res.URL)
 
 	case "info":
+		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := staticConfig(fs, url, key, instance)
 		if err != nil {
@@ -107,6 +122,10 @@ func staticCmd(args []string) {
 		s, err := cfg.Info()
 		if err != nil {
 			fail(err)
+		}
+		if *asJSON {
+			printJSON(s)
+			return
 		}
 		fmt.Printf("%-14s %s\n", "site", s.Name)
 		fmt.Printf("%-14s %s\n", "url", s.URL)
@@ -128,6 +147,7 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	message := fs.String("message", "", "label for this deployment (defaults to the git commit)")
 	noActivate := fs.Bool("no-activate", false, "upload the deployment but keep serving the current one")
 	dryRun := fs.Bool("dry-run", false, "hash the directory and report what would upload, without uploading")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 
 	if fs.NArg() < 1 {
@@ -135,6 +155,11 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 			"       e.g. altengine static deploy ./dist"))
 	}
 	dir := fs.Arg(0)
+	// With --json, stdout carries only the result; progress goes to stderr.
+	var out io.Writer = os.Stdout
+	if *asJSON {
+		out = os.Stderr
+	}
 
 	// Hashing first, and locally: the server can only tell us what it is missing if we tell it
 	// what we have, and this is what makes an unchanged asset never upload twice.
@@ -149,10 +174,14 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 		// One entry per distinct hash: a file at two paths is one upload.
 		byHash[f.Hash] = f
 	}
-	fmt.Printf("%d files, %s\n", len(files), humanBytes(total))
+	fmt.Fprintf(out, "%d files, %s\n", len(files), humanBytes(total))
 
 	if *dryRun {
-		fmt.Println("(dry run — nothing uploaded; the server decides which of these it already has)")
+		if *asJSON {
+			printJSON(map[string]any{"file_count": len(files), "total_bytes": total, "uploaded": false})
+			return
+		}
+		fmt.Fprintln(out, "(dry run — nothing uploaded; the server decides which of these it already has)")
 		return
 	}
 
@@ -172,9 +201,9 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	}
 	reused := created.FileCount - created.MissingCount
 	if created.MissingCount == 0 {
-		fmt.Printf("nothing to upload — all %d files are already stored\n", created.FileCount)
+		fmt.Fprintf(out, "nothing to upload — all %d files are already stored\n", created.FileCount)
 	} else {
-		fmt.Printf("uploading %d files (%d already stored)\n", created.MissingCount, reused)
+		fmt.Fprintf(out, "uploading %d files (%d already stored)\n", created.MissingCount, reused)
 	}
 
 	// Page until the cursor runs out. A first deploy of a large site has more missing files than
@@ -183,12 +212,12 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	var done int64
 	onDone := func() {
 		n := atomic.AddInt64(&done, 1)
-		fmt.Printf("\r  %d/%d", n, created.MissingCount)
+		fmt.Fprintf(out, "\r  %d/%d", n, created.MissingCount)
 	}
 	uploads, cursor := created.Uploads, created.Cursor
 	for {
 		if err := static.PutAll(uploads, byHash, onDone); err != nil {
-			fmt.Println()
+			fmt.Fprintln(out)
 			fail(err)
 		}
 		if cursor == "" {
@@ -196,15 +225,20 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 		}
 		uploads, cursor, err = cfg.UploadPage(created.DeploymentID, cursor)
 		if err != nil {
-			fmt.Println()
+			fmt.Fprintln(out)
 			fail(err)
 		}
 	}
 	if created.MissingCount > 0 {
-		fmt.Println()
+		fmt.Fprintln(out)
 	}
 
 	if *noActivate {
+		if *asJSON {
+			printJSON(map[string]any{"deployment_id": created.DeploymentID, "file_count": created.FileCount,
+				"total_bytes": created.TotalBytes, "uploaded": created.MissingCount, "active": false})
+			return
+		}
 		fmt.Printf("deployment %s uploaded, not activated\n", hosted.Short(created.DeploymentID, 12))
 		fmt.Printf("  altengine static rollback %s   # to publish it\n", created.DeploymentID)
 		return
@@ -213,6 +247,10 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	res, err := cfg.Activate(created.DeploymentID)
 	if err != nil {
 		fail(err)
+	}
+	if *asJSON {
+		printJSON(res)
+		return
 	}
 	fmt.Printf("deployed %s — %d files, %s\n", hosted.Short(res.DeploymentID, 12), res.FileCount, humanBytes(res.TotalBytes))
 	printLive(res.URL)

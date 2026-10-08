@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -257,6 +258,7 @@ func deployCmd(args []string) {
 	fs.Var(&schedules, "schedule", "UTC cron expression to run this function on; repeat for several (e.g. -schedule '0 9 * * 1-5' -schedule '0 12 * * 6')")
 	unschedule := fs.Bool("unschedule", false, "remove this function's schedules")
 	dryRun := fs.Bool("dry-run", false, "bundle and report the size, but do not upload")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, args))
 
 	if fs.NArg() < 1 {
@@ -275,6 +277,10 @@ func deployCmd(args []string) {
 		fail(err)
 	}
 	if *dryRun {
+		if *asJSON {
+			printJSON(map[string]any{"name": fnName, "size_bytes": len(code), "uploaded": false})
+			return
+		}
 		fmt.Printf("%s: %d bytes bundled (not uploaded)\n", fnName, len(code))
 		return
 	}
@@ -305,6 +311,18 @@ func deployCmd(args []string) {
 	if err != nil {
 		fail(err)
 	}
+	if *asJSON {
+		out := map[string]any{"name": res.Name, "version": res.Version, "size_bytes": res.SizeBytes, "active": res.Active}
+		if list, err := cfg.List(); err == nil {
+			for _, f := range list.Functions {
+				if f.Name == res.Name {
+					out["url"] = f.URL
+				}
+			}
+		}
+		printJSON(out)
+		return
+	}
 	state := "active"
 	if !res.Active {
 		state = "uploaded, not activated"
@@ -317,6 +335,28 @@ func deployCmd(args []string) {
 				fmt.Println(f.URL)
 			}
 		}
+	}
+}
+
+// jsonFlag declares --json: print the command's result as JSON on stdout instead of text, for
+// scripts and CI.
+func jsonFlag(fs *flag.FlagSet) *bool {
+	return fs.Bool("json", false, "print the result as JSON")
+}
+
+// orEmpty keeps an empty list `[]` in JSON output rather than `null`.
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
+func printJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fail(err)
 	}
 }
 
@@ -371,6 +411,7 @@ func functionsCmd(args []string) {
 
 	switch sub {
 	case "list":
+		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := resolveConfig(fs, url, key, instance)
 		if err != nil {
@@ -379,6 +420,10 @@ func functionsCmd(args []string) {
 		list, err := cfg.List()
 		if err != nil {
 			fail(err)
+		}
+		if *asJSON {
+			printJSON(list)
+			return
 		}
 		if len(list.Functions) == 0 {
 			fmt.Println("no functions deployed")
@@ -392,6 +437,7 @@ func functionsCmd(args []string) {
 		}
 
 	case "versions":
+		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {
 			fail(fmt.Errorf("usage: altengine functions versions [flags] <name>"))
@@ -403,6 +449,10 @@ func functionsCmd(args []string) {
 		versions, active, err := cfg.Versions(fs.Arg(0))
 		if err != nil {
 			fail(err)
+		}
+		if *asJSON {
+			printJSON(map[string]any{"versions": versions, "active_version": active})
+			return
 		}
 		for _, v := range versions {
 			marker := " "

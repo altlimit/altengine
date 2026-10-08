@@ -121,6 +121,7 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 	parallel := fs.Bool("parallel", false, "this script drives ONLY browsers and HTTP, so it may share a machine")
 	exclusive := fs.Bool("exclusive", false, "this script drives the desktop and must have the machine to itself")
 	dryRun := fs.Bool("dry-run", false, "bundle and report the size, but do not upload")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation deploy [flags] <entry.js>"))
@@ -143,6 +144,10 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 		fail(err)
 	}
 	if *dryRun {
+		if *asJSON {
+			printJSON(map[string]any{"name": scriptName, "size_bytes": len(code), "uploaded": false})
+			return
+		}
 		fmt.Printf("%s: %d bytes bundled (not uploaded)\n", scriptName, len(code))
 		return
 	}
@@ -168,6 +173,10 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 	if err != nil {
 		fail(err)
 	}
+	if *asJSON {
+		printJSON(res)
+		return
+	}
 	state := "live"
 	if !res.Active {
 		state = "uploaded, not live"
@@ -176,6 +185,7 @@ func automationDeploy(fs *flag.FlagSet, rest []string, url, key, instance *strin
 }
 
 func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *string) {
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
@@ -185,6 +195,10 @@ func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *stri
 		versions, active, err := cfg.Versions(fs.Arg(0))
 		if err != nil {
 			fail(err)
+		}
+		if *asJSON {
+			printJSON(map[string]any{"versions": orEmpty(versions), "active_version": active})
+			return
 		}
 		for _, v := range versions {
 			marker := " "
@@ -199,6 +213,10 @@ func automationScripts(fs *flag.FlagSet, rest []string, url, key, instance *stri
 	scripts, err := cfg.Scripts()
 	if err != nil {
 		fail(err)
+	}
+	if *asJSON {
+		printJSON(map[string]any{"scripts": orEmpty(scripts)})
+		return
 	}
 	if len(scripts) == 0 {
 		fmt.Println("no scripts deployed")
@@ -238,6 +256,7 @@ func automationActivate(fs *flag.FlagSet, rest []string, url, key, instance *str
 
 func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	q := fs.String("q", "", "match name, hostname or label")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
@@ -246,6 +265,10 @@ func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *strin
 	agents, err := cfg.Agents(*q)
 	if err != nil {
 		fail(err)
+	}
+	if *asJSON {
+		printJSON(map[string]any{"agents": orEmpty(agents)})
+		return
 	}
 	if len(agents) == 0 {
 		if *q != "" {
@@ -291,9 +314,13 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 	agent := fs.String("agent", "", "pin the run to one agent id")
 	runAs := fs.String("run-as", "", "run as a local account the agent created (see user.ensure)")
 	wait := fs.Bool("wait", false, "follow the run to completion and print its log")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 	if fs.NArg() < 1 {
 		fail(fmt.Errorf("usage: altengine automation run [flags] <script>"))
+	}
+	if *asJSON && *wait {
+		fail(fmt.Errorf("--json prints the started run; it cannot be combined with --wait"))
 	}
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
@@ -308,6 +335,10 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 	})
 	if err != nil {
 		fail(err)
+	}
+	if *asJSON {
+		printJSON(run)
+		return
 	}
 	// "queued" is said out loud, because it is a different promise from "running" and the
 	// difference is a machine being asleep — which is normal, not a failure.
@@ -382,6 +413,7 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	script := fs.String("script", "", "filter by script name")
 	limit := fs.Int("limit", 20, "how many to list")
 	cursor := fs.String("cursor", "", "continue from where a previous page stopped")
+	asJSON := jsonFlag(fs)
 	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
@@ -390,6 +422,10 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	runs, next, err := cfg.Runs(*limit, *status, *script, *cursor)
 	if err != nil {
 		fail(err)
+	}
+	if *asJSON {
+		printJSON(map[string]any{"runs": orEmpty(runs), "cursor": next})
+		return
 	}
 	for _, r := range runs {
 		when := time.UnixMilli(r.QueuedAt).Format(time.RFC3339)
