@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -90,13 +91,19 @@ func (m *Manager) Namespaces(instanceID string) []string {
 		set[ns] = true
 	}
 	m.mu.Unlock()
-	// Namespaces opened this session are already in the set; the directory adds the rest.
+	// Namespaces opened this session are already in the set; the directory adds the rest. A
+	// file whose name no valid namespace maps to is not a namespace — a stray from an older
+	// emulator that opened one it should have refused.
 	if !m.memory {
 		instDir := filepath.Join(m.dir, "datastore", sanitize(instanceID))
 		if entries, err := os.ReadDir(instDir); err == nil {
 			for _, e := range entries {
-				if n := e.Name(); strings.HasSuffix(n, ".db") {
-					set[strings.TrimSuffix(n, ".db")] = true
+				stem, isDB := strings.CutSuffix(e.Name(), ".db")
+				if !isDB {
+					continue
+				}
+				if ns, ok := common.NamespaceFromFileName(stem); ok && common.ValidateNamespace(ns) == nil {
+					set[ns] = true
 				}
 			}
 		}
@@ -111,6 +118,9 @@ func (m *Manager) Namespaces(instanceID string) []string {
 // Drop deletes a namespace: closes its handle, forgets it, and (in file mode)
 // removes the database file. Returns whether the namespace existed.
 func (m *Manager) Drop(instanceID, namespace string) (bool, error) {
+	if err := common.ValidateNamespace(namespace); err != nil {
+		return false, err
+	}
 	m.mu.Lock()
 	key := instanceID + "\x00" + namespace
 	_, existed := m.seen[instanceID][namespace]
@@ -122,7 +132,7 @@ func (m *Manager) Drop(instanceID, namespace string) (bool, error) {
 	delete(m.seen[instanceID], namespace)
 	m.mu.Unlock()
 	if !m.memory {
-		path := filepath.Join(m.dir, "datastore", sanitize(instanceID), sanitize(namespace)+".db")
+		path := filepath.Join(m.dir, "datastore", sanitize(instanceID), common.NamespaceFileName(namespace)+".db")
 		if _, err := os.Stat(path); err == nil {
 			existed = true
 			if err := os.Remove(path); err != nil {
@@ -147,7 +157,12 @@ func (m *Manager) DropInstance(instanceID string) {
 	}
 }
 
+// handle opens a namespace's database. The namespace is validated here, where it becomes a file
+// name, so no caller — data plane, console or MCP — can open one the hosted service refuses.
 func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
+	if err := common.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := instanceID + "\x00" + namespace
@@ -159,14 +174,15 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	}
 	var dsn string
 	if m.memory {
-		// A named shared-cache in-memory DB keeps one logical database per namespace.
-		dsn = "file:" + sanitize(key) + "?mode=memory&cache=shared"
+		// A named shared-cache in-memory DB keeps one logical database per namespace. Hex, so
+		// two namespaces can never share a name.
+		dsn = "file:ds_" + hex.EncodeToString([]byte(key)) + "?mode=memory&cache=shared"
 	} else {
 		instDir := filepath.Join(m.dir, "datastore", sanitize(instanceID))
 		if err := os.MkdirAll(instDir, 0o755); err != nil {
 			return nil, err
 		}
-		dsn = "file:" + filepath.Join(instDir, sanitize(namespace)+".db")
+		dsn = "file:" + filepath.Join(instDir, common.NamespaceFileName(namespace)+".db")
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

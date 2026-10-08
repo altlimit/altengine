@@ -58,7 +58,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	}
 	inst := h.Reg.GetOrCreate("search", name)
 	ns := decodeNs(r.PathValue("ns"))
-	if err := validateNamespace(ns); err != nil {
+	if err := common.ValidateNamespace(ns); err != nil {
 		return nil, err
 	}
 	cfg := inst.Config()
@@ -75,27 +75,6 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	// service applies instance config.
 	store.ApplyConfig(cfg)
 	return store, nil
-}
-
-// validateNamespace enforces the hosted API's namespace rules: printable ASCII,
-// at most 100 bytes; "" (the default namespace) is allowed. Everything keyed on
-// (namespace, name) NUL-joins the pair, so a namespace may never contain NUL.
-func validateNamespace(ns string) error {
-	if ns == "" {
-		return nil
-	}
-	if ns == nsDefaultSegment {
-		return common.BadRequest(`"` + nsDefaultSegment + `" is reserved; use the default namespace ("")`)
-	}
-	if len(ns) > 100 {
-		return common.BadRequest("namespace must be at most 100 bytes")
-	}
-	for i := 0; i < len(ns); i++ {
-		if ns[i] < 0x20 || ns[i] > 0x7e {
-			return common.BadRequest("namespace must contain only printable ASCII characters")
-		}
-	}
-	return nil
 }
 
 // GET /namespaces — distinct namespaces with live indexes, alphabetical, `q`

@@ -7,6 +7,7 @@ package search
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,11 +65,13 @@ func (m *Manager) Namespaces(instanceID string) []string {
 		instDir := filepath.Join(m.dir, "search", sanitize(instanceID))
 		if entries, err := os.ReadDir(instDir); err == nil {
 			for _, e := range entries {
-				if n := e.Name(); strings.HasSuffix(n, ".db") {
-					ns := strings.TrimSuffix(n, ".db")
-					if ns == "_default" {
-						ns = ""
-					}
+				stem, isDB := strings.CutSuffix(e.Name(), ".db")
+				if !isDB {
+					continue
+				}
+				if stem == common.NamespaceDefaultSegment {
+					set[""] = true
+				} else if ns, ok := common.NamespaceFromFileName(stem); ok && common.ValidateNamespace(ns) == nil {
 					set[ns] = true
 				}
 			}
@@ -103,14 +106,23 @@ func (m *Manager) DropInstance(instanceID string) {
 
 var sanitizeRe = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
-func sanitize(s string) string {
-	if s == "" {
-		return "_default"
+func sanitize(s string) string { return sanitizeRe.ReplaceAllString(s, "_") }
+
+// nsFileName is the stem of a namespace's database file. The default namespace is stored as
+// "_default", which no valid namespace can be.
+func nsFileName(ns string) string {
+	if ns == "" {
+		return common.NamespaceDefaultSegment
 	}
-	return sanitizeRe.ReplaceAllString(s, "_")
+	return common.NamespaceFileName(ns)
 }
 
+// handle opens a namespace's database. The namespace is validated here, where it becomes a file
+// name, so no caller — data plane, console or MCP — can open one the hosted service refuses.
 func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
+	if err := common.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := instanceID + "\x00" + namespace
@@ -123,13 +135,13 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 	}
 	var dsn string
 	if m.memory {
-		dsn = "file:s_" + sanitize(key) + "?mode=memory&cache=shared"
+		dsn = "file:s_" + hex.EncodeToString([]byte(key)) + "?mode=memory&cache=shared"
 	} else {
 		instDir := filepath.Join(m.dir, "search", sanitize(instanceID))
 		if err := os.MkdirAll(instDir, 0o755); err != nil {
 			return nil, err
 		}
-		dsn = "file:" + filepath.Join(instDir, sanitize(namespace)+".db")
+		dsn = "file:" + filepath.Join(instDir, nsFileName(namespace)+".db")
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
