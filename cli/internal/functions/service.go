@@ -22,7 +22,10 @@ package functions
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -107,29 +110,41 @@ type Store struct {
 	code    map[string]map[string]string // instance id -> "fn@version" -> source
 }
 
-// NewStore builds the store, loading anything previously persisted.
-func NewStore(dataDir string) *Store {
+// NewStore builds the store, loading anything previously persisted. It fails rather than start
+// empty when the persisted state exists but cannot be read.
+func NewStore(dataDir string) (*Store, error) {
 	s := &Store{dataDir: dataDir, configs: map[string]*Config{}, code: map[string]map[string]string{}}
 	if dataDir != "" {
-		_ = os.MkdirAll(s.dir(), 0o755)
-		s.load()
+		if err := os.MkdirAll(s.dir(), 0o755); err != nil {
+			return nil, err
+		}
+		if err := s.load(); err != nil {
+			return nil, err
+		}
 	}
-	return s
+	return s, nil
 }
 
 func (s *Store) dir() string { return filepath.Join(s.dataDir, "functions") }
 
-func (s *Store) load() {
-	b, err := os.ReadFile(filepath.Join(s.dir(), "state.json"))
+func (s *Store) statePath() string { return filepath.Join(s.dir(), "state.json") }
+
+func (s *Store) load() error {
+	b, err := os.ReadFile(s.statePath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return
+		return fmt.Errorf("reading %s: %w", s.statePath(), err)
 	}
 	var st struct {
 		Configs map[string]*Config           `json:"configs"`
 		Code    map[string]map[string]string `json:"code"`
 	}
-	if json.Unmarshal(b, &st) != nil {
-		return
+	// Refused, not treated as empty: the first deploy after starting empty would save over it
+	// and every function, version and secret in it would be gone.
+	if err := json.Unmarshal(b, &st); err != nil {
+		return fmt.Errorf("%s is not valid functions state (%v); repair it or move it aside to start with none", s.statePath(), err)
 	}
 	if st.Configs != nil {
 		s.configs = st.Configs
@@ -137,19 +152,24 @@ func (s *Store) load() {
 	if st.Code != nil {
 		s.code = st.Code
 	}
+	return nil
 }
 
-// save persists under the caller's lock. Best-effort: a local emulator losing a deploy on
-// a disk error is an annoyance, not a reason to fail the request that triggered it.
-func (s *Store) save() {
+// save persists under the caller's lock. A failure is logged, not returned: a local emulator
+// losing a deploy on a disk error is an annoyance, not a reason to fail the request that
+// triggered it. The write is atomic, so a failure leaves the previous state intact.
+func (s *Store) save() error {
 	if s.dataDir == "" {
-		return
+		return nil
 	}
 	b, err := json.MarshalIndent(map[string]any{"configs": s.configs, "code": s.code}, "", "  ")
-	if err != nil {
-		return
+	if err == nil {
+		err = common.WriteFileAtomic(s.statePath(), b, 0o600)
 	}
-	_ = os.WriteFile(filepath.Join(s.dir(), "state.json"), b, 0o600)
+	if err != nil {
+		log.Printf("functions: saving %s: %v", s.statePath(), err)
+	}
+	return err
 }
 
 // Config returns a COPY of an instance's config, so callers cannot mutate shared state.

@@ -30,7 +30,7 @@ func newAuthServer(t *testing.T) *http.ServeMux {
 	mux := http.NewServeMux()
 	idMgr := identity.NewManager("")
 	identity.NewHandler(reg, identity.NewService(reg, idMgr, true)).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+	NewHandler(reg, a, memStore(), mux).Register(mux)
 	return mux
 }
 
@@ -134,7 +134,7 @@ func TestAuthUserAdminThroughStub(t *testing.T) {
 	idMgr := identity.NewManager("")
 	identity.NewHandler(reg, identity.NewService(reg, idMgr, true)).Register(mux)
 	admin.NewHandler(reg, a, nil, nil, nil).WithIdentity(idMgr).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+	NewHandler(reg, a, memStore(), mux).Register(mux)
 
 	signUpUser(t, mux)
 

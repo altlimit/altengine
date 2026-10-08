@@ -8,6 +8,10 @@ package control
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -76,23 +80,35 @@ func New(dir string) (*Registry, error) {
 		return nil, err
 	}
 	r.path = filepath.Join(dir, "control.json")
-	if data, err := os.ReadFile(r.path); err == nil {
-		var p persisted
-		if json.Unmarshal(data, &p) == nil {
-			for _, in := range p.Instances {
-				r.insts[in.Service+"/"+in.Name] = in
-			}
-			for _, k := range p.Keys {
-				r.keys[k.ID] = k
-			}
-		}
+	data, err := os.ReadFile(r.path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return r, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", r.path, err)
+	}
+	// A file that does not parse is refused, never treated as empty: the next save would write
+	// an empty registry over it, and every instance's data on disk would lose the only record
+	// of which instance it belongs to.
+	var p persisted
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("%s is not a valid registry (%v); repair it or move it aside to start with an empty one", r.path, err)
+	}
+	for _, in := range p.Instances {
+		r.insts[in.Service+"/"+in.Name] = in
+	}
+	for _, k := range p.Keys {
+		r.keys[k.ID] = k
 	}
 	return r, nil
 }
 
-func (r *Registry) save() {
+// save persists the registry under the caller's lock. A failure is logged rather than failing
+// the request that triggered it — the change is still live in memory and the next save retries —
+// and the write is atomic, so a failure leaves the previous file intact.
+func (r *Registry) save() error {
 	if r.path == "" {
-		return
+		return nil
 	}
 	p := persisted{}
 	for _, in := range r.insts {
@@ -101,9 +117,14 @@ func (r *Registry) save() {
 	for _, k := range r.keys {
 		p.Keys = append(p.Keys, k)
 	}
-	if data, err := json.MarshalIndent(p, "", "  "); err == nil {
-		_ = os.WriteFile(r.path, data, 0o644)
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err == nil {
+		err = common.WriteFileAtomic(r.path, data, 0o644)
 	}
+	if err != nil {
+		log.Printf("control: saving %s: %v", r.path, err)
+	}
+	return err
 }
 
 // Services is every service the emulator knows how to hold instances for.

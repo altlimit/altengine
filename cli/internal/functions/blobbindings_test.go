@@ -34,7 +34,7 @@ func newBlobServer(t *testing.T) *http.ServeMux {
 	a := auth.NewStore(true)
 	mux := http.NewServeMux()
 	blob.NewHandler(reg, a, blob.NewStore("")).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+	NewHandler(reg, a, memStore(), mux).Register(mux)
 	return mux
 }
 
@@ -239,7 +239,7 @@ func TestBlobUrlsPointAtTheEmulator(t *testing.T) {
 	a := auth.NewStore(true)
 	mux := http.NewServeMux()
 	blob.NewHandler(reg, a, blob.NewStore("")).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).WithHost("127.0.0.1:9191").Register(mux)
+	NewHandler(reg, a, memStore(), mux).WithHost("127.0.0.1:9191").Register(mux)
 
 	deployFn(t, mux, "urls", `export default { async fetch(request, env) {
 		const up = await env.blob.uploadUrl({ instance: "files" }, { name: "a.png", size: 3, contentType: "image/png" });

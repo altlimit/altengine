@@ -25,8 +25,17 @@ func newTestServer(t *testing.T) *http.ServeMux {
 	a := auth.NewStore(true)
 	mux := http.NewServeMux()
 	datastore.NewHandler(reg, a, datastore.NewManager("")).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+	NewHandler(reg, a, memStore(), mux).Register(mux)
 	return mux
+}
+
+// memStore is an in-memory store, which has nothing to load and so cannot fail.
+func memStore() *Store {
+	s, err := NewStore("")
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func deployFn(t *testing.T, mux *http.ServeMux, name, code string, grants map[string]string) {
@@ -416,7 +425,7 @@ func TestExpandSecrets(t *testing.T) {
 }
 
 func TestSecretKeepExisting(t *testing.T) {
-	s := NewStore("")
+	s := memStore()
 	if _, err := s.SetSecrets("i1", raw(map[string]string{"A": `"keep-me"`})); err != nil {
 		t.Fatal(err)
 	}

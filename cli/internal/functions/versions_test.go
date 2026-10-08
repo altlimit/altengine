@@ -27,7 +27,7 @@ func newRetentionServer(t *testing.T) (*http.ServeMux, *control.Registry, *Store
 	a := auth.NewStore(true)
 	mux := http.NewServeMux()
 	datastore.NewHandler(reg, a, datastore.NewManager("")).Register(mux)
-	store := NewStore("")
+	store := memStore()
 	NewHandler(reg, a, store, mux).Register(mux)
 	return mux, reg, store
 }

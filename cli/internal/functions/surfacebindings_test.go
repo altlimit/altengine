@@ -31,7 +31,7 @@ func newSurfaceServer(t *testing.T) *http.ServeMux {
 	channel.NewHandler(reg, a, channel.NewHub()).Register(mux)
 	search.NewHandler(reg, a, search.NewManager("")).Register(mux)
 	datastore.NewHandler(reg, a, datastore.NewManager("")).Register(mux)
-	NewHandler(reg, a, NewStore(""), mux).Register(mux)
+	NewHandler(reg, a, memStore(), mux).Register(mux)
 	return mux
 }
 

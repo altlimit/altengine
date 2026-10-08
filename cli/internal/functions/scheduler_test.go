@@ -22,7 +22,7 @@ func schedHandler(t *testing.T) (*Handler, *control.Instance) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	h := NewHandler(reg, auth.NewStore(true), NewStore(""), mux)
+	h := NewHandler(reg, auth.NewStore(true), memStore(), mux)
 	h.Register(mux)
 	in := reg.GetOrCreate("functions", "main")
 	return h, in

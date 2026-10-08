@@ -1,6 +1,13 @@
 package control
 
-import "testing"
+import (
+	"bytes"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // Deleting an instance has to take its DATA with it, and the registry is where the two halves
 // are joined: a service says how to drop its files, the registry runs that before the instance
@@ -93,6 +100,62 @@ func TestSaveConfigValidatesThenRunsHooks(t *testing.T) {
 	}
 	if before["keepVersions"] != 3 || reg.ConfigSnapshot(in)["keepVersions"] != 7 {
 		t.Errorf("hook saw before=%v, config now %v", before, reg.ConfigSnapshot(in))
+	}
+}
+
+// A registry file that does not parse must stop the emulator, not load as empty — the next save
+// would write the empty registry over it and orphan every instance's data.
+func TestNewRefusesCorruptRegistry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.json")
+	corrupt := []byte(`{"instances":[{"id":"abc","service":"datastore","na`) // a half-written file
+	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(dir); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("New = %v, want an error naming %s", err, path)
+	}
+	if b, _ := os.ReadFile(path); !bytes.Equal(b, corrupt) {
+		t.Fatalf("the corrupt file was replaced with %q", b)
+	}
+}
+
+func TestRegistryPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := reg.GetOrCreate("datastore", "orders")
+	reg2, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reg2.Get("datastore", "orders"); got == nil || got.ID != in.ID {
+		t.Fatalf("after restart got %+v, want instance %s", got, in.ID)
+	}
+}
+
+// A save that fails must leave the previous file as it was.
+func TestFailedSaveKeepsPreviousFile(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := reg.GetOrCreate("search", "docs")
+	path := filepath.Join(dir, "control.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NaN cannot be encoded, so this save fails.
+	reg.SetConfig(in, map[string]any{"bad": math.NaN()})
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatalf("a failed save changed the file:\n%s", after)
+	}
+	if _, err := New(dir); err != nil {
+		t.Fatalf("the file left by a failed save does not load: %v", err)
 	}
 }
 
