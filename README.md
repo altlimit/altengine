@@ -2,11 +2,11 @@
 
 Developer tooling and SDKs for [altengine](https://console.altengine.net) — managed
 **datastore**, **search**, realtime **channels**, end-user **auth**, **functions**,
-**blob** storage and **containers**, behind one API key.
+**blob** storage, **containers**, **static** sites and desktop **automation**, behind one API key.
 
 | Folder | What it is | Install |
 |---|---|---|
-| [`cli/`](cli/) | Local emulator + admin console (`altengine dev`) | `alt install altlimit/altengine` |
+| [`cli/`](cli/) | Local emulator + admin console (`altengine dev`); deploys functions, sites and automation scripts | `alt install altlimit/altengine` |
 | [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | from this repo — see below |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
 | [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | from this repo — see below |
@@ -34,13 +34,19 @@ SDK's README has the command that installs it from this repository instead.
 
 ## Quick start
 
-Run the whole platform locally — one static binary, no dependencies, no signup:
+Run datastore, search, channels, auth, functions, blob and containers locally — one static
+binary, no signup (containers need Docker):
 
 ```bash
 alt install altlimit/altengine     # via https://github.com/altlimit/alt
 altengine dev
-# → http://127.0.0.1:9191  (admin console + every data plane)
+# → http://127.0.0.1:9191  (admin console + the emulated data planes)
 ```
+
+Static sites are served from a build directory (`altengine dev --static ./dist`) rather than
+deployed locally, and automation has no local stand-in — its runs need enrolled machines, so
+those commands talk to the hosted service. [`cli/README.md`](cli/README.md#not-emulated) lists
+what else is not emulated.
 
 The emulator is unauthenticated by design and binds localhost for that reason — see
 [SECURITY.md](SECURITY.md) before changing `--host`.
@@ -110,8 +116,9 @@ console.log(done.exit_code, (await jobs.logs(job.id)).lines);
 ```
 
 Drop `dev: true` and the SDK targets production (`https://api.altengine.net`) —
-get an API key at [www.altengine.net](https://www.altengine.net). Everything
-behaves the same.
+get an API key at [www.altengine.net](https://www.altengine.net). The calls above behave the
+same there; what the emulator does not reproduce (billing, plan-level limits, TOTP and passkeys,
+email delivery, …) is listed under [Not emulated](cli/README.md#not-emulated).
 
 ## Building with an AI agent
 

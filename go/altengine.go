@@ -25,6 +25,9 @@ const DefaultBaseURL = "https://api.altengine.net"
 // DevBaseURL is where `altengine dev` (the local emulator) listens by default.
 const DevBaseURL = "http://127.0.0.1:9191"
 
+// UserAgent is sent on every request, so the service can tell which SDK made it.
+const UserAgent = "altengine-go"
+
 // Retry configures the retry policy for retryable failures
 // (429/502/503/504/network). Transactions and publishes are never retried.
 type Retry struct {

@@ -5,6 +5,14 @@
     "license": "MIT",
     "keywords": ["altengine", "search", "datastore", "pubsub", "realtime"],
     "homepage": "https://www.altengine.net",
+    "authors": [
+        { "name": "altlimit", "homepage": "https://github.com/altlimit" }
+    ],
+    "support": {
+        "issues": "https://github.com/altlimit/altengine/issues",
+        "source": "https://github.com/altlimit/altengine/tree/main/php",
+        "docs": "https://www.altengine.net/docs"
+    },
     "require": {
         "php": ">=8.1",
         "guzzlehttp/guzzle": "^7.5",

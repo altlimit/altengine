@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import random
 import time
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any, Dict, Mapping, Optional
 
 import httpx
@@ -15,6 +17,13 @@ from .errors import AltEngineError, AltEngineNetworkError
 DEFAULT_BASE_URL = "https://api.altengine.net"
 #: Where ``altengine dev`` (the local emulator) listens by default.
 DEV_BASE_URL = "http://127.0.0.1:9191"
+
+try:
+    _VERSION = _pkg_version("altengine")
+except PackageNotFoundError:  # running from a source tree
+    _VERSION = "dev"
+#: Sent on every request, so the service can tell which SDK and version made it.
+USER_AGENT = f"altengine-python/{_VERSION}"
 
 _DEFAULT_MAX_ATTEMPTS = 3
 _DEFAULT_BASE_DELAY = 0.25
@@ -119,6 +128,7 @@ class Http:
 
     def _once(self, method, path, query, body, headers) -> Any:
         hdrs = dict(headers or {})
+        hdrs.setdefault("user-agent", USER_AGENT)
         if self.api_key:
             hdrs["authorization"] = f"Bearer {self.api_key}"
         try:
@@ -187,6 +197,7 @@ class AsyncHttp:
 
     async def _once(self, method, path, query, body, headers) -> Any:
         hdrs = dict(headers or {})
+        hdrs.setdefault("user-agent", USER_AGENT)
         if self.api_key:
             hdrs["authorization"] = f"Bearer {self.api_key}"
         try:

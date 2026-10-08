@@ -122,6 +122,7 @@ func (t *transport) once(ctx context.Context, req request, out any) error {
 	if err != nil {
 		return err
 	}
+	hr.Header.Set("User-Agent", UserAgent)
 	if t.apiKey != "" {
 		hr.Header.Set("Authorization", "Bearer "+t.apiKey)
 	}

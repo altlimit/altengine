@@ -85,6 +85,7 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_darwin_amd64 ./cmd/altengine
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_darwin_arm64 ./cmd/altengine
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_windows_amd64.exe ./cmd/altengine
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_windows_arm64.exe ./cmd/altengine
 
       - name: Generate checksums
         working-directory: cli/dist
@@ -111,6 +112,7 @@ jobs:
             cli/dist/altengine_darwin_amd64
             cli/dist/altengine_darwin_arm64
             cli/dist/altengine_windows_amd64.exe
+            cli/dist/altengine_windows_arm64.exe
             cli/dist/checksums.txt
 
       # Go resolves a module in a subdirectory by a tag prefixed with that directory, so this is

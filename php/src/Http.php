@@ -18,6 +18,8 @@ final class Http
     public const DEFAULT_BASE_URL = 'https://api.altengine.net';
     /** Where `altengine dev` (the local emulator) listens by default. */
     public const DEV_BASE_URL = 'http://127.0.0.1:9191';
+    /** Sent on every request, so the service can tell which SDK made it. */
+    public const USER_AGENT = 'altengine-php';
 
     private const MAX_ATTEMPTS = 3;
     private const BASE_DELAY = 0.25;
@@ -98,7 +100,7 @@ final class Http
      */
     private function once(string $method, string $path, ?array $query, mixed $body, ?array $headers): mixed
     {
-        $hdrs = $headers ?? [];
+        $hdrs = ($headers ?? []) + ['user-agent' => self::USER_AGENT];
         if ($this->apiKey !== null) {
             $hdrs['authorization'] = 'Bearer ' . $this->apiKey;
         }

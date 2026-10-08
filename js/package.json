@@ -28,19 +28,34 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./channel": {
-      "types": "./dist/channel.d.ts",
-      "import": "./dist/channel.js",
-      "require": "./dist/channel.cjs"
+      "import": {
+        "types": "./dist/channel.d.ts",
+        "default": "./dist/channel.js"
+      },
+      "require": {
+        "types": "./dist/channel.d.cts",
+        "default": "./dist/channel.cjs"
+      }
     },
     "./auth": {
-      "types": "./dist/auth.d.ts",
-      "import": "./dist/auth.js",
-      "require": "./dist/auth.cjs"
+      "import": {
+        "types": "./dist/auth.d.ts",
+        "default": "./dist/auth.js"
+      },
+      "require": {
+        "types": "./dist/auth.d.cts",
+        "default": "./dist/auth.cjs"
+      }
     }
   },
   "files": [

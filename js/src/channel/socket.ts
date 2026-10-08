@@ -43,6 +43,12 @@ export interface SocketEvents {
 
 type Listener<T> = (payload: T) => void;
 
+// readyState values, spelled out rather than read off the global `WebSocket`: Node 20 has no
+// global one (that is what the `webSocket` option is for), and `WebSocket.OPEN` there is a
+// ReferenceError the first time a connected socket is checked.
+const CONNECTING = 0;
+const OPEN = 1;
+
 export class ChannelSocket {
   private readonly opts: ChannelSocketOptions;
   private readonly listeners: { [K in keyof SocketEvents]: Set<Listener<SocketEvents[K]>> } = {
@@ -92,7 +98,7 @@ export class ChannelSocket {
    * `close()` is called. */
   async connect(): Promise<void> {
     this.closedByUser = false;
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    if (this.ws && (this.ws.readyState === OPEN || this.ws.readyState === CONNECTING)) return;
     await this.dial();
   }
 
@@ -139,7 +145,7 @@ export class ChannelSocket {
   // --- internals ---
 
   private isOpen(): boolean {
-    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+    return !!this.ws && this.ws.readyState === OPEN;
   }
 
   private send(frame: unknown): void {
