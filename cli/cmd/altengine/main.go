@@ -6,10 +6,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +21,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/deploy"
 	"github.com/altlimit/altengine/cli/internal/hosted"
 	"github.com/altlimit/altengine/cli/internal/server"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -101,7 +105,8 @@ func devCmd(args []string) {
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	data := fs.String("data", "./.altengine", "data directory for persistent storage")
 	memory := fs.Bool("memory", false, "keep all data in memory (no persistence)")
-	reset := fs.Bool("reset", false, "wipe the data directory before starting")
+	reset := fs.Bool("reset", false, "wipe the data directory before starting (asks first on a terminal)")
+	yes := fs.Bool("yes", false, "with --reset, do not ask")
 	static := fs.String("static", "", "serve this build output directory as a site, e.g. ./dist")
 	staticPort := fs.Int("static-port", 0, "port for the site (default: --port + 1)")
 	spa := fs.Bool("spa", false, "serve index.html for unmatched paths (default: detected from the directory)")
@@ -128,9 +133,17 @@ func devCmd(args []string) {
 	if *memory {
 		dataDir = ""
 	} else if *reset {
-		abs, _ := filepath.Abs(dataDir)
-		fmt.Println("resetting data directory:", abs)
-		_ = os.RemoveAll(dataDir)
+		confirm := func(abs string) bool {
+			if *yes || !term.IsTerminal(int(os.Stdin.Fd())) {
+				return true
+			}
+			fmt.Fprintf(os.Stderr, "delete everything in %s? [y/N] ", abs)
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			return strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
+		}
+		if err := resetDataDir(dataDir, confirm); err != nil {
+			fail(err)
+		}
 	}
 
 	srv, err := server.New(server.Options{
@@ -150,6 +163,33 @@ func devCmd(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// resetDataDir deletes an emulator data directory, and nothing that is not one.
+//
+// --data can point anywhere, and --reset used to RemoveAll it unasked: `--data . --reset` deleted
+// the project. A directory is wiped only when it holds the emulator's registry (control.json) or
+// is empty; confirm is asked first and may refuse.
+func resetDataDir(dir string, confirm func(abs string) bool) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // nothing to reset
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(abs, "control.json")); err != nil && len(entries) > 0 {
+		return fmt.Errorf("refusing to reset %s: it has no control.json, so it is not an altengine data directory", abs)
+	}
+	if !confirm(abs) {
+		return fmt.Errorf("not reset")
+	}
+	fmt.Fprintln(os.Stderr, "resetting data directory:", abs)
+	return os.RemoveAll(abs)
 }
 
 // resolveConfig builds the hosted-service config from flags, falling back to the

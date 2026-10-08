@@ -189,14 +189,15 @@ altengine dev [flags]
   --host 127.0.0.1       host to bind
   --data ./.altengine     data directory (SQLite files + control.json)
   --memory               keep everything in RAM (nothing persisted)
-  --reset                wipe the data directory before starting
+  --reset                wipe the data directory before starting (asks on a terminal; --yes skips)
   --static ./dist        serve a built site on its own port (see above)
   --static-port 9192     port for that site (default: --port + 1)
   --spa                  serve index.html for unmatched paths (default: detected)
 ```
 
 Data persists to `--data` by default and survives restarts. Instances **auto-create on first use**,
-so no setup is needed — just start issuing requests.
+so no setup is needed — just start issuing requests. `--reset` deletes only a directory that holds
+the emulator's `control.json` (or is empty); pointed at anything else it refuses.
 
 ### Local data
 
