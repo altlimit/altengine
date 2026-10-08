@@ -137,8 +137,10 @@ and a model that has not read them will confidently invent Lucene or SQL instead
 
 ## Releases
 
-- **CLI**: every push to `main` touching `cli/**` builds and publishes per-platform
-  binaries (installable via [`alt`](https://github.com/altlimit/alt)).
+- **CLI**: push a `vX.Y.Z` tag (or run the *Release CLI* workflow with a version) to build
+  and publish per-platform binaries (installable via [`alt`](https://github.com/altlimit/alt)).
+  Each binary carries a signed build-provenance attestation:
+  `gh attestation verify altengine_linux_amd64 --repo altlimit/altengine`.
 - **JS SDK**: push a `js/vX.Y.Z` tag matching `js/package.json` to publish
   `@altengine/sdk` to npm.
 

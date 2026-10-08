@@ -1,40 +1,76 @@
 # Release the altengine CLI (local emulator) as raw per-platform binaries, the same
 # way altlimit/sitegen releases — installable with `alt install altlimit/altengine`.
-# Auto-versions on every push to main that touches cli/**.
+#
+# A release is cut deliberately, never by an ordinary push:
+#   - push a tag:  git tag v0.3.0 && git push origin v0.3.0
+#   - or run this workflow from the Actions tab with a version (e.g. 0.3.0); it creates the
+#     v<version> tag on the commit it ran from.
+#
+# Every binary and checksums.txt gets a signed build-provenance attestation. Verify a download
+# with:  gh attestation verify altengine_linux_amd64 --repo altlimit/altengine
+#
+# Actions are pinned by commit SHA; the comment names the release each SHA is.
 name: Release CLI
 
 on:
   push:
-    branches:
-      - "main"
-    paths:
-      - "cli/**"
-      - ".github/workflows/release.yaml"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (e.g. 0.3.0)"
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release (and the tag, on a manual run)
+      id-token: write # sign the provenance attestation
+      attestations: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.25"
           cache-dependency-path: cli/go.sum
 
-      - name: Run tests
-        working-directory: cli
-        run: go test ./...
-
       - name: Set version
         id: version
-        run: echo "VERSION=0.2.${{ github.run_number }}" >> $GITHUB_OUTPUT
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a semantic version (expected e.g. 0.3.0)"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        working-directory: cli
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
 
       - name: Build all platforms
         working-directory: cli
@@ -44,22 +80,31 @@ jobs:
           LDFLAGS="-s -w -X main.version=v${VERSION}"
           mkdir -p dist
 
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/altengine_linux_amd64 ./cmd/altengine
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/altengine_linux_arm64 ./cmd/altengine
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/altengine_darwin_amd64 ./cmd/altengine
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/altengine_darwin_arm64 ./cmd/altengine
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/altengine_windows_amd64.exe ./cmd/altengine
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_linux_amd64 ./cmd/altengine
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_linux_arm64 ./cmd/altengine
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_darwin_amd64 ./cmd/altengine
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_darwin_arm64 ./cmd/altengine
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/altengine_windows_amd64.exe ./cmd/altengine
 
       - name: Generate checksums
         working-directory: cli/dist
         run: sha256sum * > checksums.txt
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            cli/dist/altengine_*
+            cli/dist/checksums.txt
+
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: v${{ steps.version.outputs.VERSION }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             cli/dist/altengine_linux_amd64
             cli/dist/altengine_linux_arm64
