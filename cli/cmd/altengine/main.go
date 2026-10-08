@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -45,7 +46,7 @@ func main() {
 	case "logout":
 		logoutCmd(os.Args[2:])
 	case "version", "-v", "--version":
-		fmt.Println("altengine", version)
+		fmt.Println("altengine", resolveVersion(version, readBuildInfo))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -73,6 +74,40 @@ func subUsage(text string, args []string) {
 
 // version is stamped at release time via -ldflags "-X main.version=v0.2.0".
 var version = "dev"
+
+var readBuildInfo = debug.ReadBuildInfo
+
+// resolveVersion is the stamped version, or — for a `go install ...@v0.3.0` build, which
+// stamps nothing — the module version Go recorded, or the commit a source build came from.
+func resolveVersion(stamped string, read func() (*debug.BuildInfo, bool)) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	info, ok := read()
+	if !ok {
+		return stamped
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	rev, dirty := "", false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return stamped
+	}
+	v := "dev-" + hosted.Short(rev, 12)
+	if dirty {
+		v += "-dirty"
+	}
+	return v
+}
 
 func usage(w io.Writer) {
 	fmt.Fprint(w, `altengine — local emulator for altengine services

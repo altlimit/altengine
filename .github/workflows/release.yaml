@@ -112,3 +112,14 @@ jobs:
             cli/dist/altengine_darwin_arm64
             cli/dist/altengine_windows_amd64.exe
             cli/dist/checksums.txt
+
+      # Go resolves a module in a subdirectory by a tag prefixed with that directory, so this is
+      # what makes `go install github.com/altlimit/altengine/cli/cmd/altengine@vX.Y.Z` (and
+      # @latest) resolve to the release rather than a pseudo-version.
+      - name: Tag the cli module
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/cli/v$VERSION" -f "sha=$GITHUB_SHA" \
+            || echo "::warning::cli/v$VERSION was not created (it may already exist)"

@@ -142,7 +142,11 @@ and a model that has not read them will confidently invent Lucene or SQL instead
 - **CLI**: push a `vX.Y.Z` tag (or run the *Release CLI* workflow with a version) to build
   and publish per-platform binaries (installable via [`alt`](https://github.com/altlimit/alt)).
   Each binary carries a signed build-provenance attestation:
-  `gh attestation verify altengine_linux_amd64 --repo altlimit/altengine`.
+  `gh attestation verify altengine_linux_amd64 --repo altlimit/altengine`. The workflow also
+  tags `cli/vX.Y.Z`, so `go install github.com/altlimit/altengine/cli/cmd/altengine@latest`
+  builds the release and `altengine version` reports it.
+- **Go SDK**: push a `go/vX.Y.Z` tag — Go finds a module in a subdirectory by a tag with that
+  prefix — and `go get github.com/altlimit/altengine/go@vX.Y.Z` resolves to it.
 - **JS SDK**: push a `js/vX.Y.Z` tag matching `js/package.json` to publish
   `@altengine/sdk` to npm.
 
