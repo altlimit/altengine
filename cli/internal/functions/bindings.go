@@ -358,8 +358,8 @@ func optField(args []goja.Value, i int, field string) any {
 
 func esc(s string) string { return url.PathEscape(s) }
 
-// serviceMethods maps every stub method onto its REST equivalent. The signatures match
-// src/functions/api/*.ts exactly — a function written against the hosted stubs runs here
+// serviceMethods maps every stub method onto its REST equivalent. The signatures match the
+// hosted service's bindings exactly — a function written against the hosted stubs runs here
 // unchanged, which is the entire point.
 var serviceMethods = map[string]map[string]call{
 	"datastore": {

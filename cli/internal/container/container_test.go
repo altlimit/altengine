@@ -101,7 +101,7 @@ func TestImageMatching(t *testing.T) {
 func TestReservedEnvIsRefusedNotDropped(t *testing.T) {
 	// Dropping would be quieter and worse: the job runs believing it was given something it
 	// was not, and does the wrong thing successfully.
-	for _, name := range []string{"AE_JOB_ID", "FLY_API_TOKEN"} {
+	for _, name := range []string{"AE_JOB_ID", "AE_ANYTHING"} {
 		if _, err := BuildEnv(map[string]string{name: "x"}, "j1", nil); err == nil {
 			t.Errorf("%s must be refused", name)
 		}

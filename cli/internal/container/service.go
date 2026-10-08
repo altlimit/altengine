@@ -81,8 +81,9 @@ const (
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // reservedEnvPrefixes are refused rather than dropped: a silently ignored variable is a job
-// that runs and does the wrong thing successfully.
-var reservedEnvPrefixes = []string{"AE_", "FLY_"}
+// that runs and does the wrong thing successfully. The hosted service reserves a few more
+// prefixes of its own; only the one a job can rely on is enforced here.
+var reservedEnvPrefixes = []string{"AE_"}
 
 // Config is a container instance's settings.
 type Config struct {

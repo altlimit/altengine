@@ -565,7 +565,7 @@ func (s *Server) Summary() []string {
 		lines = append(lines, fmt.Sprintf("spa %s (--spa)", onOff(s.spa)))
 	}
 	// The one thing this can tell you that a local server otherwise cannot: whether your build's
-	// filenames will let the edge cache hold them. Assets without a fingerprint revalidate on
+	// filenames will let the hosted service's cache hold them. Assets without a fingerprint revalidate on
 	// every visit, which is a build setting, not a platform one.
 	assets := st.Files - st.Pages
 	if assets > 0 {

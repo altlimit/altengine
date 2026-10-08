@@ -553,10 +553,10 @@ func TestDotfilesAreServed(t *testing.T) {
 
 func TestSummaryCountsWhatDeploysImmutably(t *testing.T) {
 	// The thing a local server can tell you that a deploy cannot: whether your build's filenames
-	// will let the edge hold them.
+	// will let the hosted cache hold them.
 	s, _ := site(t, map[string]string{
 		"/index.html":             "home",
-		"/assets/app-4f2a91bc.js": "fingerprinted, so the edge can hold it for a year",
+		"/assets/app-4f2a91bc.js": "fingerprinted, so it can be cached for a year",
 		"/assets/style.css":       "not fingerprinted, so it revalidates on every visit",
 	})
 	joined := strings.Join(s.Summary(), "\n")

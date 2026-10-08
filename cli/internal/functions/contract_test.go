@@ -11,8 +11,8 @@ import (
 	"github.com/dop251/goja"
 )
 
-// The env.* grant ladder is enforced twice — here, and in the hosted worker's
-// src/functions/api/*.ts, which this repo cannot import. conformance/fn-bindings.json is the
+// The env.* grant ladder is enforced twice — here, and in the hosted service, whose code this
+// repo cannot import. conformance/fn-bindings.json is the
 // contract between them, and this asserts our half of it.
 //
 // It is not busywork: the two ladders HAD drifted. datastore.delete and search.delete asked

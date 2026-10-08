@@ -341,9 +341,8 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 
 // follow prints a run's log as it arrives and exits non-zero if the run failed.
 //
-// Polling rather than streaming, deliberately: the log lives on the agent and is PULLED (see the
-// control plane's automation/logs.ts), so there is nothing to stream from. The exit code matters
-// more than the mechanism — this is the form a CI job uses.
+// Polling rather than streaming: the log lives on the agent and the hosted service pulls it, so
+// there is nothing to stream from. The exit code is what a CI job checks.
 func follow(cfg automation.Config, runID string) error {
 	cursor := ""
 	seen := map[int64]bool{}

@@ -1,14 +1,12 @@
 // Package automation talks to a hosted automation instance: deploying scripts, starting runs,
 // and reading what they produced.
 //
-// SCRIPTS ARE BUNDLED HERE, exactly like functions and for the same reason — the agent's goja
-// runtime resolves no imports, so a script has to arrive as one flat ES module. Doing it in the
-// CLI rather than the Worker keeps a 10MB bundler out of the edge and means what you ran locally
-// with `altengine-worker run` is byte-for-byte what the machine in the office will run.
+// Scripts are bundled here, like functions: the agent's runtime resolves no imports, so a script
+// has to arrive as one flat ES module, and what you ran locally with `altengine-worker run` is
+// byte-for-byte what the machine will run.
 //
-// THE ORG API KEY LIVES HERE AND ONLY HERE. It never goes near an enrolled machine: an agent
-// authenticates as itself with a credential issued at enrollment, because "the machine" in this
-// service is a receptionist's PC.
+// The org API key is used only here. An enrolled machine authenticates with its own credential,
+// issued at enrollment.
 package automation
 
 import (

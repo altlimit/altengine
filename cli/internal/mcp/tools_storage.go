@@ -268,7 +268,7 @@ func init() {
 				"image":      map[string]any{"type": "string", "description": "Docker image reference, e.g. 'alpine:3'."},
 				"size":       map[string]any{"type": "string", "enum": []string{"small", "medium", "large"}, "description": "Default small."},
 				"cmd":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Overrides the image's command."},
-				"env":        map[string]any{"type": "object", "description": "Environment variables. Names beginning AE_ or FLY_ are refused."},
+				"env":        map[string]any{"type": "object", "description": "Environment variables. Names beginning AE_ are reserved, as are a few platform prefixes."},
 				"timeout_ms": map[string]any{"type": "number", "description": "Kill the job after this long. Capped by the instance's maximum."},
 			},
 			annotations: writes,

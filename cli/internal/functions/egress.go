@@ -5,7 +5,7 @@
 // matters is that a fetch which production will refuse also fails here — otherwise the
 // first thing a deploy does is break a call that worked all through development.
 //
-// The rules, kept identical to src/functions/egress.ts:
+// The rules, kept identical to the hosted service's:
 //   - https only
 //   - no IP literals (one rule that kills metadata endpoints, loopback and private ranges)
 //   - no non-public names (localhost, .internal, .local)
