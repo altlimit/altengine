@@ -81,7 +81,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, 
 		return nil, Config{}, err
 	}
 	inst := h.reg.GetOrCreate("blob", name)
-	return inst, ParseConfig(inst.Config), nil
+	return inst, ParseConfig(inst.Config()), nil
 }
 
 func origin(r *http.Request) string {

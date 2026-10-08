@@ -17,8 +17,9 @@ func (h *Handler) searchStore(r *http.Request) (*search.Store, error) {
 		return nil, err
 	}
 	ns := r.URL.Query().Get("namespace")
+	cfg := in.Config()
 	stemming := true
-	if v, ok := in.Config["stemming"].(bool); ok {
+	if v, ok := cfg["stemming"].(bool); ok {
 		stemming = v
 	}
 	store, err := h.Srch.Open(in.ID, ns, stemming)
@@ -27,7 +28,7 @@ func (h *Handler) searchStore(r *http.Request) (*search.Store, error) {
 	}
 	// Apply the instance's synonyms + rules so the admin browser previews results exactly
 	// as the data plane serves them (same ApplyConfig entry point routes.go uses).
-	store.ApplyConfig(in.Config)
+	store.ApplyConfig(cfg)
 	return store, nil
 }
 
@@ -142,9 +143,10 @@ func (h *Handler) dsStore(r *http.Request) (*datastore.Store, *bool, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	autoID, _ := in.Config["autoId"].(string)
+	cfg := in.Config()
+	autoID, _ := cfg["autoId"].(string)
 	autoIndex := true
-	if v, ok := in.Config["autoIndex"].(bool); ok {
+	if v, ok := cfg["autoIndex"].(bool); ok {
 		autoIndex = v
 	}
 	// DecodeNs, not the raw segment: "_default" is the wire spelling of the default

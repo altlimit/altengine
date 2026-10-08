@@ -9,7 +9,7 @@ import (
 )
 
 func instanceJSON(in *control.Instance) map[string]any {
-	m := map[string]any{"id": in.ID, "name": in.Name, "created_at": in.CreatedAt, "config": in.Config}
+	m := map[string]any{"id": in.ID, "name": in.Name, "created_at": in.CreatedAt, "config": in.Config()}
 	return m
 }
 
@@ -78,7 +78,7 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 	if err := h.Reg.SaveConfig(in, body.Config); err != nil {
 		return err
 	}
-	common.WriteJSON(w, 200, map[string]any{"config": in.Config})
+	common.WriteJSON(w, 200, map[string]any{"config": in.Config()})
 	return nil
 }
 

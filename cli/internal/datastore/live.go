@@ -94,7 +94,7 @@ func (h *Handler) emitLive(inst *control.Instance, ns, collection, op string, do
 	if h.Live == nil || len(docs) == 0 {
 		return
 	}
-	live := parseLive(inst.Config)
+	live := parseLive(inst.Config())
 	if live == nil {
 		return
 	}

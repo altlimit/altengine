@@ -89,7 +89,7 @@ func unimplemented(what string) common.HandlerFunc {
 // emulated service) plus its parsed config and end-user store.
 func (h *Handler) instance(r *http.Request) (*control.Instance, Config, *Store, error) {
 	inst := h.Reg.GetOrCreate("auth", r.PathValue("instance"))
-	cfg := ParseConfig(inst.Config)
+	cfg := ParseConfig(inst.Config())
 	store, err := h.Svc.Mgr.Open(inst.ID)
 	if err != nil {
 		return nil, cfg, nil, err

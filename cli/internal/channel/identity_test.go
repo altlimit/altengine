@@ -18,6 +18,12 @@ import (
 // identity to the token's uid.
 func newIdentityEnv(t *testing.T) (*httptest.Server, *control.Instance) {
 	t.Helper()
+	srv, _, authInst := newIdentityEnvReg(t)
+	return srv, authInst
+}
+
+func newIdentityEnvReg(t *testing.T) (*httptest.Server, *control.Registry, *control.Instance) {
+	t.Helper()
 	reg, _ := control.New("")
 	idSvc := identity.NewService(reg, identity.NewManager(""), true)
 	mux := http.NewServeMux()
@@ -32,7 +38,7 @@ func newIdentityEnv(t *testing.T) (*httptest.Server, *control.Instance) {
 			"channels": []any{"posts.*", "dm.$auth.uid"},
 		},
 	}})
-	return srv, authInst
+	return srv, reg, authInst
 }
 
 func identityToken(inst *control.Instance, uid string) string {
@@ -91,9 +97,9 @@ func TestIdentityTokenMintIsPatternScoped(t *testing.T) {
 }
 
 func TestIdentityTokenWithoutChannelAccessIsDenied(t *testing.T) {
-	srv, authInst := newIdentityEnv(t)
+	srv, reg, authInst := newIdentityEnvReg(t)
 	// Strip the channel entry: no access means no mint, whatever is requested.
-	authInst.Config["access"] = map[string]any{}
+	reg.SetConfig(authInst, map[string]any{"access": map[string]any{}})
 	if status, out := mint(t, srv, `{"channels":["posts.general"]}`, identityToken(authInst, "alice")); status != 403 {
 		t.Fatalf("no channel access -> %d: %v", status, out)
 	}

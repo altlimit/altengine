@@ -83,7 +83,7 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 	if claims == nil || claims.Iss != inst.ID {
 		return nil, common.Unauthenticated("invalid or expired token")
 	}
-	cfg := ParseConfig(inst.Config)
+	cfg := ParseConfig(inst.Config())
 	p := claims.Profile
 	if p == nil {
 		p = map[string]any{}

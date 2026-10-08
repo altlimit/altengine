@@ -61,7 +61,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, 
 		return nil, Config{}, err
 	}
 	inst := h.reg.GetOrCreate("container", name)
-	return inst, ParseConfig(inst.Config), nil
+	return inst, ParseConfig(inst.Config()), nil
 }
 
 func (h *Handler) launch(w http.ResponseWriter, r *http.Request) error {

@@ -411,7 +411,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				access, _ := in.Config["access"].(map[string]any)
+				access, _ := in.Config()["access"].(map[string]any)
 				if access == nil {
 					access = map[string]any{}
 				}

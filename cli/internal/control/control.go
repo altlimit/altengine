@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -23,12 +24,60 @@ import (
 
 // Instance is one service instance owned by the dev org.
 type Instance struct {
+	ID        string
+	Service   string // search | channel | datastore | auth
+	Name      string
+	CreatedAt int64
+	Secret    string // channel / auth JWT signing secret
+
+	// config is copy-on-write: a change swaps in a new map and never writes into the old one,
+	// so a map Config() returned stays valid and unchanging while requests read it — a shared
+	// map written by a save would crash the process with a concurrent map read and write.
+	config atomic.Pointer[map[string]any]
+}
+
+// instanceWire is Instance's JSON shape, on disk and over the admin API.
+type instanceWire struct {
 	ID        string         `json:"id"`
-	Service   string         `json:"service"` // search | channel | datastore | auth
+	Service   string         `json:"service"`
 	Name      string         `json:"name"`
 	CreatedAt int64          `json:"created_at"`
 	Config    map[string]any `json:"config"`
-	Secret    string         `json:"secret,omitempty"` // channel / auth JWT signing secret
+	Secret    string         `json:"secret,omitempty"`
+}
+
+func newInstance(service, name string) *Instance {
+	in := &Instance{ID: common.UUID(), Service: service, Name: name, CreatedAt: nowMS()}
+	in.setConfig(defaultConfig(service))
+	if needsSecret(service) {
+		in.Secret = common.RandID(32)
+	}
+	return in
+}
+
+// Config returns the instance's current config. It is a snapshot shared with other readers:
+// read it freely, never write to it — change config through the Registry.
+func (in *Instance) Config() map[string]any {
+	if p := in.config.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func (in *Instance) setConfig(m map[string]any) { in.config.Store(&m) }
+
+func (in *Instance) MarshalJSON() ([]byte, error) {
+	return json.Marshal(instanceWire{ID: in.ID, Service: in.Service, Name: in.Name, CreatedAt: in.CreatedAt, Config: in.Config(), Secret: in.Secret})
+}
+
+func (in *Instance) UnmarshalJSON(b []byte) error {
+	var w instanceWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	in.ID, in.Service, in.Name, in.CreatedAt, in.Secret = w.ID, w.Service, w.Name, w.CreatedAt, w.Secret
+	in.setConfig(w.Config)
+	return nil
 }
 
 // APIKey is a minted key's metadata. The plaintext is returned once at creation and
@@ -194,16 +243,7 @@ func (r *Registry) GetOrCreate(service, name string) *Instance {
 	if in, ok := r.insts[key]; ok {
 		return in
 	}
-	in := &Instance{
-		ID:        common.UUID(),
-		Service:   service,
-		Name:      name,
-		CreatedAt: nowMS(),
-		Config:    defaultConfig(service),
-	}
-	if needsSecret(service) {
-		in.Secret = common.RandID(32)
-	}
+	in := newInstance(service, name)
 	r.insts[key] = in
 	r.save()
 	return in
@@ -250,22 +290,26 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 	if _, ok := r.insts[key]; ok {
 		return nil, common.AlreadyExists("instance already exists")
 	}
-	in := &Instance{ID: common.UUID(), Service: service, Name: name, CreatedAt: nowMS(), Config: defaultConfig(service)}
-	if needsSecret(service) {
-		in.Secret = common.RandID(32)
-	}
+	in := newInstance(service, name)
 	r.insts[key] = in
 	r.save()
 	return in, nil
 }
 
-// SetConfig replaces an instance's config (shallow merge of provided keys).
+// SetConfig replaces an instance's config (shallow merge of provided keys). The merge is built
+// in a new map and swapped in: readers holding the old one keep a consistent snapshot.
 func (r *Registry) SetConfig(in *Instance, cfg map[string]any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for k, v := range cfg {
-		in.Config[k] = v
+	cur := in.Config()
+	next := make(map[string]any, len(cur)+len(cfg))
+	for k, v := range cur {
+		next[k] = v
 	}
+	for k, v := range cfg {
+		next[k] = v
+	}
+	in.setConfig(next)
 	r.save()
 }
 
@@ -281,13 +325,12 @@ func (r *Registry) OnDelete(service string, drop func(instanceID string)) {
 	r.drops[service] = append(r.drops[service], drop)
 }
 
-// ConfigSnapshot returns a shallow copy of an instance's config, read under the registry lock so
-// a concurrent save cannot race the read.
+// ConfigSnapshot returns a shallow copy of an instance's config, which — unlike Config() — the
+// caller may write to.
 func (r *Registry) ConfigSnapshot(in *Instance) map[string]any {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]any, len(in.Config))
-	for k, v := range in.Config {
+	cur := in.Config()
+	out := make(map[string]any, len(cur))
+	for k, v := range cur {
 		out[k] = v
 	}
 	return out

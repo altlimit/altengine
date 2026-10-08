@@ -2,10 +2,13 @@ package control
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -156,6 +159,53 @@ func TestFailedSaveKeepsPreviousFile(t *testing.T) {
 	}
 	if _, err := New(dir); err != nil {
 		t.Fatalf("the file left by a failed save does not load: %v", err)
+	}
+}
+
+// Requests read an instance's config while the console saves it. Run under -race: a save that
+// wrote into the map readers hold is a fatal "concurrent map read and map write".
+func TestConfigReadsRaceSaves(t *testing.T) {
+	reg, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := reg.GetOrCreate("search", "docs")
+	held := in.Config()
+	heldLen := len(held)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				for k, v := range reg.Get("search", "docs").Config() {
+					_, _ = k, v
+				}
+				_, _ = json.Marshal(in)
+				_ = reg.ConfigSnapshot(in)
+			}
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		if err := reg.SaveConfig(in, map[string]any{"rateLimit": i, fmt.Sprintf("k%d", i%7): i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if len(held) != heldLen {
+		t.Errorf("a config snapshot a reader held changed under it: %v", held)
+	}
+	if got := in.Config()["rateLimit"]; got != 199 {
+		t.Errorf("rateLimit = %v, want 199", got)
 	}
 }
 

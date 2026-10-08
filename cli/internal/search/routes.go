@@ -61,8 +61,9 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	if err := validateNamespace(ns); err != nil {
 		return nil, err
 	}
+	cfg := inst.Config()
 	stemming := true
-	if v, ok := inst.Config["stemming"].(bool); ok {
+	if v, ok := cfg["stemming"].(bool); ok {
 		stemming = v
 	}
 	store, err := h.Mgr.Open(inst.ID, ns, stemming)
@@ -72,7 +73,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*Store, error) {
 	// Instance-level query-time config: the synonym dictionary (incl. computed numeral
 	// synonyms) and the query rules, applied to every search the same way the hosted
 	// service applies instance config.
-	store.ApplyConfig(inst.Config)
+	store.ApplyConfig(cfg)
 	return store, nil
 }
 

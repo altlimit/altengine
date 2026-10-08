@@ -128,7 +128,7 @@ func (h *Handler) authSignInCode(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	cfg := identity.ParseConfig(in.Config)
+	cfg := identity.ParseConfig(in.Config())
 	// The public route's own check. An instance that has turned the method off has turned it
 	// off, and a door around that is not a door anyone asked for.
 	if !cfg.PasswordlessEnabled {

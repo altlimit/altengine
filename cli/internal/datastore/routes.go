@@ -87,7 +87,7 @@ func (h *Handler) resolve(r *http.Request, need auth.Level) (*control.Instance, 
 	}
 	inst := h.Reg.GetOrCreate("datastore", name)
 	ns := decodeNs(r.PathValue("ns"))
-	autoID, _ := inst.Config["autoId"].(string)
+	autoID, _ := inst.Config()["autoId"].(string)
 	store, err := h.Mgr.Open(inst.ID, ns, autoID)
 	if err != nil {
 		return nil, nil, nil, err
@@ -106,7 +106,7 @@ func backendOnly(user *identity.EndUser, what string) error {
 }
 
 func autoIndexEnabled(inst *control.Instance) bool {
-	if v, ok := inst.Config["autoIndex"].(bool); ok {
+	if v, ok := inst.Config()["autoIndex"].(bool); ok {
 		return v
 	}
 	return true
@@ -530,7 +530,7 @@ func (h *Handler) livePublishes(inst *control.Instance, collection string) bool 
 	if h.Live == nil {
 		return false
 	}
-	live := parseLive(inst.Config)
+	live := parseLive(inst.Config())
 	if live == nil {
 		return false
 	}

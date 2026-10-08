@@ -64,7 +64,7 @@ func (h *Handler) rooms(w http.ResponseWriter, r *http.Request) error {
 }
 
 func presenceEnabled(inst *control.Instance) bool {
-	v, _ := inst.Config["presence"].(bool)
+	v, _ := inst.Config()["presence"].(bool)
 	return v
 }
 

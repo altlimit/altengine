@@ -392,7 +392,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				cfg := in.Config
+				cfg := in.Config()
 				if cfg == nil {
 					cfg = map[string]any{}
 				}
@@ -431,7 +431,7 @@ func init() {
 					return nil, fmt.Errorf("changes must be an object of top-level config fields")
 				}
 				current := map[string]any{}
-				for k, v := range in.Config {
+				for k, v := range in.Config() {
 					current[k] = v
 				}
 				// Top-level merge only. A deep merge would make it impossible to CLEAR a
