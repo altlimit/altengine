@@ -43,12 +43,13 @@ func staticCmd(args []string) {
 		staticDeploy(fs, rest, url, key, instance)
 
 	case "list":
+		from := fs.String("cursor", "", "continue from where a previous page stopped")
 		_ = fs.Parse(flagsFirst(fs, rest))
 		cfg, err := staticConfig(fs, url, key, instance)
 		if err != nil {
 			fail(err)
 		}
-		deployments, cursor, active, err := cfg.Deployments("")
+		deployments, cursor, active, err := cfg.Deployments(*from)
 		if err != nil {
 			fail(err)
 		}
@@ -75,7 +76,7 @@ func staticCmd(args []string) {
 		fmt.Println("\n* = live.  altengine static rollback <id>  to switch to another.")
 		// The part of paging that gets skipped: say when this is not the whole answer.
 		if cursor != "" {
-			fmt.Printf("\n(more deployments — this is the newest %d)\n", len(deployments))
+			fmt.Printf("\n(more deployments: altengine static list %s--cursor %s)\n", repeatFlags(fs, "cursor"), cursor)
 		}
 
 	case "rollback":

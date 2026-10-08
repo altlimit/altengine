@@ -381,12 +381,13 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 	status := fs.String("status", "", "filter by status")
 	script := fs.String("script", "", "filter by script name")
 	limit := fs.Int("limit", 20, "how many to list")
+	cursor := fs.String("cursor", "", "continue from where a previous page stopped")
 	_ = fs.Parse(flagsFirst(fs, rest))
 	cfg, err := resolveAutomation(url, key, instance)
 	if err != nil {
 		fail(err)
 	}
-	runs, err := cfg.Runs(*limit, *status, *script)
+	runs, next, err := cfg.Runs(*limit, *status, *script, *cursor)
 	if err != nil {
 		fail(err)
 	}
@@ -394,6 +395,30 @@ func automationRuns(fs *flag.FlagSet, rest []string, url, key, instance *string)
 		when := time.UnixMilli(r.QueuedAt).Format(time.RFC3339)
 		fmt.Printf("%-36s %-9s %-24s v%-4d %s\n", r.ID, r.Status, r.Script, r.Version, when)
 	}
+	// Said when this is not the whole answer, with the command that continues it.
+	if next != "" {
+		fmt.Fprintf(os.Stderr, "(more runs: altengine automation runs %s--cursor %s)\n", repeatFlags(fs, "cursor"), next)
+	}
+}
+
+// repeatFlags renders the flags that were set, other than skip, so a "next page" hint can be
+// pasted as it is.
+func repeatFlags(fs *flag.FlagSet, skip string) string {
+	var b strings.Builder
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == skip || f.Name == "key" {
+			return
+		}
+		fmt.Fprintf(&b, "--%s %s ", f.Name, shellQuote(f.Value.String()))
+	})
+	return b.String()
+}
+
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?;&|<>()[]{}#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func automationLogs(fs *flag.FlagSet, rest []string, url, key, instance *string) {

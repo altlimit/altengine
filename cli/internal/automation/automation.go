@@ -68,12 +68,29 @@ type Script struct {
 	UpdatedAt     int64  `json:"updated_at"`
 }
 
+// Scripts lists every deployed script, walking the pages: a caller that read the first page as
+// the whole list would print a shorter one with nothing to say it was short.
 func (c Config) Scripts() ([]Script, error) {
-	var out struct {
-		Scripts []Script `json:"scripts"`
+	var all []Script
+	cursor := ""
+	for {
+		var out struct {
+			Scripts []Script `json:"scripts"`
+			Cursor  string   `json:"cursor"`
+		}
+		path := "/scripts"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
+		}
+		if err := c.do(http.MethodGet, path, nil, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Scripts...)
+		if out.Cursor == "" {
+			return all, nil
+		}
+		cursor = out.Cursor
 	}
-	err := c.do(http.MethodGet, "/scripts", nil, &out)
-	return out.Scripts, err
 }
 
 type Version struct {
@@ -83,13 +100,30 @@ type Version struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+// Versions lists a script's whole version history (walking `versions_cursor`) and its live one.
 func (c Config) Versions(name string) ([]Version, int, error) {
-	var out struct {
-		Script   Script    `json:"script"`
-		Versions []Version `json:"versions"`
+	var all []Version
+	active, cursor := 0, ""
+	for {
+		var out struct {
+			Script         Script    `json:"script"`
+			Versions       []Version `json:"versions"`
+			VersionsCursor string    `json:"versions_cursor"`
+		}
+		path := "/scripts/" + url.PathEscape(name)
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
+		}
+		if err := c.do(http.MethodGet, path, nil, &out); err != nil {
+			return nil, 0, err
+		}
+		active = out.Script.ActiveVersion
+		all = append(all, out.Versions...)
+		if out.VersionsCursor == "" {
+			return all, active, nil
+		}
+		cursor = out.VersionsCursor
 	}
-	err := c.do(http.MethodGet, "/scripts/"+url.PathEscape(name), nil, &out)
-	return out.Versions, out.Script.ActiveVersion, err
 }
 
 func (c Config) Activate(name string, version int) error {
@@ -220,7 +254,8 @@ func (c Config) Start(o StartOptions) (*Run, error) {
 	return &out.Run, nil
 }
 
-func (c Config) Runs(limit int, status, script string) ([]Run, error) {
+// Runs lists one page of runs, newest first, and the cursor for the next page ("" at the end).
+func (c Config) Runs(limit int, status, script, cursor string) ([]Run, string, error) {
 	q := url.Values{}
 	if limit > 0 {
 		q.Set("limit", fmt.Sprint(limit))
@@ -231,11 +266,15 @@ func (c Config) Runs(limit int, status, script string) ([]Run, error) {
 	if script != "" {
 		q.Set("script", script)
 	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
 	var out struct {
-		Runs []Run `json:"runs"`
+		Runs   []Run  `json:"runs"`
+		Cursor string `json:"cursor"`
 	}
 	err := c.do(http.MethodGet, "/runs?"+q.Encode(), nil, &out)
-	return out.Runs, err
+	return out.Runs, out.Cursor, err
 }
 
 // Get returns one run and the files it produced, with freshly minted download links.
