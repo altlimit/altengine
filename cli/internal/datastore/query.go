@@ -731,29 +731,94 @@ func (s *Store) CreateIndex(collection string, fields []string, unique bool) (in
 	if err := validateCollection(collection); err != nil {
 		return 0, err
 	}
-	if len(fields) == 0 {
-		return 0, common.BadRequest("index requires at least one field")
+	canonical, err := canonicalIndexFields(fields, unique)
+	if err != nil {
+		return 0, err
 	}
-	fieldsJSON, _ := json.Marshal(fields)
+	fieldsJSON, _ := json.Marshal(canonical)
 	uniq := 0
 	if unique {
 		uniq = 1
 	}
-	res, err := s.db.Exec(`INSERT INTO _dsindexes(collection, fields, is_unique, created) VALUES(?,?,?,?)
-		ON CONFLICT(collection, fields, is_unique) DO NOTHING`, collection, string(fieldsJSON), uniq, nowMS())
-	if err != nil {
+	// Re-declaring an index the collection already has is a no-op, and is checked before the cap
+	// so it keeps working at the limit.
+	var exists int
+	_ = s.db.QueryRow(`SELECT count(*) FROM _dsindexes WHERE collection=? AND fields=? AND is_unique=?`,
+		collection, string(fieldsJSON), uniq).Scan(&exists)
+	if exists > 0 {
+		return 0, nil
+	}
+	var have int
+	_ = s.db.QueryRow(`SELECT count(*) FROM _dsindexes WHERE collection=?`, collection).Scan(&have)
+	if have >= maxIndexesPerCollection {
+		return 0, common.NewError(400, fmt.Sprintf("'%s' already has %d indexes, which is the limit — drop one before declaring another",
+			collection, maxIndexesPerCollection), "FAILED_PRECONDITION")
+	}
+	if _, err := s.db.Exec(`INSERT INTO _dsindexes(collection, fields, is_unique, created) VALUES(?,?,?,?)
+		ON CONFLICT(collection, fields, is_unique) DO NOTHING`, collection, string(fieldsJSON), uniq, nowMS()); err != nil {
 		return 0, err
 	}
 	if unique {
-		if err := s.buildUniqueIndex(collection, fields); err != nil {
+		if err := s.buildUniqueIndex(collection, canonical); err != nil {
+			// Existing rows that collide: the declaration goes with the index that could not be built.
+			_, _ = s.db.Exec(`DELETE FROM _dsindexes WHERE collection=? AND fields=? AND is_unique=1`, collection, string(fieldsJSON))
 			return 0, err
 		}
 	}
-	id, _ := res.LastInsertId()
-	_ = id
 	var n int
 	_ = s.db.QueryRow(`SELECT count(*) FROM docs WHERE collection=?`, collection).Scan(&n)
 	return n, nil
+}
+
+// Index declaration limits, as hosted.
+const (
+	maxIndexFields          = 8
+	maxIndexesPerCollection = 64
+)
+
+// canonicalIndexFields validates an index declaration with the hosted rules and returns its
+// stored form: each field "path" or "path:desc" (ascending omitted, so "age" and "age:asc" are one
+// index). __created__/__updated__ may only end a composite; other reserved fields are refused.
+func canonicalIndexFields(fields []string, unique bool) ([]string, error) {
+	if len(fields) == 0 || len(fields) > maxIndexFields {
+		return nil, common.BadRequest(fmt.Sprintf("an index must declare 1..%d fields", maxIndexFields))
+	}
+	out := make([]string, len(fields))
+	seen := map[string]bool{}
+	for i, spec := range fields {
+		path, desc := spec, false
+		if j := strings.LastIndexByte(spec, ':'); j > 0 {
+			switch strings.ToLower(spec[j+1:]) {
+			case "asc":
+				path = spec[:j]
+			case "desc":
+				path, desc = spec[:j], true
+			}
+		}
+		if seen[path] {
+			return nil, common.BadRequest("an index cannot repeat the same field")
+		}
+		seen[path] = true
+		if _, err := fieldExpr(path); err != nil {
+			return nil, err
+		}
+		if _, isMeta := meta[path]; isMeta {
+			if path != "__updated__" && path != "__created__" {
+				return nil, common.BadRequest("cannot index reserved field " + path)
+			}
+			if unique {
+				return nil, common.BadRequest("a unique index cannot include " + path)
+			}
+			if i == 0 || i != len(fields)-1 {
+				return nil, common.BadRequest(path + " may only be the last column of a composite index")
+			}
+		}
+		out[i] = path
+		if desc {
+			out[i] = path + ":desc"
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) buildUniqueIndex(collection string, fields []string) error {
