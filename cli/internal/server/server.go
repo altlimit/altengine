@@ -1,7 +1,8 @@
-// Package server wires the emulator's HTTP surface: the four data planes
-// (/v1/search, /v1/datastore, /v1/channel, /v1/auth), the control-plane admin API
-// (/admin), and the embedded admin console — mounted in the same order as the hosted
-// platform (data plane, then admin, then static assets).
+// Package server wires the emulator's HTTP surface: the data planes (/v1/search,
+// /v1/datastore, /v1/channel, /v1/auth, /v1/functions, /v1/blob, /v1/container and the
+// public /fn and /blob paths), the control-plane admin API (/admin), MCP, and the embedded
+// admin console — mounted in the same order as the hosted platform (data plane, then admin,
+// then static assets).
 package server
 
 import (

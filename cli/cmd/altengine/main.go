@@ -1,8 +1,8 @@
-// Command altengine runs a local emulator for the altengine services (search,
-// datastore, channels) plus an admin console, so applications can develop against the
-// altengine APIs without connecting to the real cloud services.
+// Command altengine runs a local emulator for the altengine services plus an admin console, so
+// applications can develop against the altengine APIs without the hosted service, and deploys
+// functions, static sites and automation scripts to the hosted service.
 //
-//	altengine dev [--port 8080] [--data ./.altengine] [--memory] [--reset]
+//	altengine dev [--port 9191] [--data ./.altengine] [--memory] [--reset]
 package main
 
 import (

@@ -1,14 +1,16 @@
 # altengine CLI (local emulator)
 
 A local **emulator** for the altengine services — **datastore**, **search**, **channels**,
-and **auth** — plus a built-in **admin console**. It lets you develop against the
-altengine APIs on your machine without connecting to the hosted service. One static
-Go binary, no external dependencies.
+**auth**, **functions**, **blob** and **containers** — plus a built-in **admin console** and the
+MCP endpoint. It lets you develop against the altengine APIs on your machine without connecting
+to the hosted service. **Static** sites are served from a directory (`dev --static`) rather than
+deployed; **automation** has no local stand-in — its commands below talk to the hosted service.
+One static Go binary, no external dependencies (containers need a local Docker daemon).
 
 ```bash
 alt install altlimit/altengine   # via https://github.com/altlimit/alt
 altengine dev
-# → http://127.0.0.1:9191  (admin console + all four data planes)
+# → http://127.0.0.1:9191  (admin console + every emulated data plane)
 
 # or from source:
 cd cli && go build -o altengine ./cmd/altengine
@@ -174,6 +176,41 @@ easier to fix before the deploy than after.
 
 The directory need not exist yet: the site answers 404 saying so, and serves the build as soon as
 it lands.
+
+## Automation
+
+`automation` deploys scripts to an automation instance's enrolled machines, starts runs and reads
+what they produced. It talks to the **hosted** service; the emulator has no automation plane.
+Enrolling machines and minting enrollment tokens happen in the console.
+
+```bash
+altengine login
+export ALTENGINE_AUTOMATION_INSTANCE=fleet      # or --instance; falls back to ALTENGINE_INSTANCE
+
+altengine automation deploy --name nightly ./nightly.js   # bundle + upload + make live
+altengine automation deploy --parallel ./scrape.js        # browsers/HTTP only: may share a machine
+altengine automation scripts                              # every script, live version, mode
+altengine automation scripts nightly                      # one script's versions, * = live
+altengine automation activate --version 3 nightly         # `rollback` is the same command
+altengine automation delete nightly
+
+altengine automation agents [--q text]          # enrolled machines: online/offline/never/unchecked
+altengine automation run --param day=mon --label office nightly   # prints the run id
+altengine automation run --wait nightly         # follow the log; exit 1 if the run fails
+altengine automation runs [--status s] [--script n] [--cursor c]
+altengine automation logs <run-id>
+altengine automation get <run-id>               # run + artifacts with short-lived download links
+altengine automation cancel <run-id>
+
+echo 123456 | altengine automation send otp      # job.waitForData("otp"); exit 1 if no job got it
+altengine automation env                         # credential names (values are write-only)
+altengine automation env --set PORTAL_PASSWORD   # value from stdin
+altengine automation env --unset PORTAL_PASSWORD
+```
+
+Scripts are bundled like functions, so what `altengine-worker run` ran locally is what the machine
+runs. `--parallel`/`--exclusive` change the script's mode; a deploy with neither keeps it. `run`
+reports `queued` when no matching machine is connected — the run starts when one is.
 
 ## Why
 
@@ -459,16 +496,23 @@ go vet ./...
 Layout:
 
 ```
-cmd/altengine/main.go       CLI (dev subcommand)
-internal/common/            error envelope, JSON helpers, ids
+cmd/altengine/              CLI: dev, deploy, functions, static, automation, login
+internal/common/            error envelope, JSON helpers, ids, config checks
 internal/auth/              dev-open bearer API keys + grants
 internal/control/           instance & key registry (JSON-persisted)
 internal/datastore/         store + query/aggregate/transaction engine (SQLite json_extract)
 internal/search/            store + query lexer/parser/compiler + search (SQLite FTS5 + EAV)
 internal/channel/           in-memory rooms/connections + JWT + WebSocket
 internal/identity/          auth data plane: end-user store, identity tokens, row rules
+internal/functions/         function runtime, bindings, egress rules, scheduler
+internal/blob/              objects, signed URLs, multipart, public host
+internal/container/         jobs on the local Docker daemon
+internal/devsite/           `dev --static` site server
+internal/mcp/               the MCP endpoint
 internal/admin/             control-plane REST + embedded console (web/*)
-internal/server/            HTTP wiring
+internal/server/            HTTP wiring, rate limits
+internal/hosted/            the hosted-service client the deploy commands share
+internal/deploy|static|automation/   hosted-command clients
 ```
 
 ## Not emulated
