@@ -392,16 +392,15 @@ func KeepVersions(cfg map[string]any) int {
 	return DefaultKeepVersions
 }
 
-// ValidateConfig refuses a functions config whose `keepVersions` is not an integer in 1..50.
+// ValidateConfig refuses a functions config whose `keepVersions` is not an integer in 1..50, or
+// whose rate limit or region the hosted service would refuse.
 func ValidateConfig(cfg map[string]any) error {
-	raw, present := cfg["keepVersions"]
-	if !present || raw == nil {
-		return nil
+	if raw, present := cfg["keepVersions"]; present && raw != nil {
+		if _, ok := keepValue(raw); !ok {
+			return common.BadRequest(fmt.Sprintf("config.keepVersions must be an integer in 1..%d", MaxKeepVersions))
+		}
 	}
-	if _, ok := keepValue(raw); !ok {
-		return common.BadRequest(fmt.Sprintf("config.keepVersions must be an integer in 1..%d", MaxKeepVersions))
-	}
-	return nil
+	return common.FirstErr(common.CheckRateLimit(cfg, "rateLimit"), common.CheckRegion(cfg))
 }
 
 func keepValue(raw any) (int, bool) {

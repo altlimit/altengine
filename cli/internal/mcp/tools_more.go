@@ -437,7 +437,11 @@ func init() {
 				if !ok {
 					return nil, fmt.Errorf("access must be an object")
 				}
-				h.reg.SetConfig(in, map[string]any{"access": access})
+				// Through the validated write, so a rule its level cannot reach is refused here as
+				// it is hosted.
+				if err := h.reg.SaveConfig(in, map[string]any{"access": access}); err != nil {
+					return nil, err
+				}
 				return map[string]any{"instance": in.Name, "access": access}, nil
 			},
 		},

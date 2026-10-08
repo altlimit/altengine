@@ -140,6 +140,31 @@ func TestRegistryPersistsAcrossRestart(t *testing.T) {
 	}
 }
 
+// Older emulators stored 0 for "no rate limit"; hosted, and now here, that is null, and a 0
+// carried forward would make every later config write fail validation.
+func TestLegacyZeroRateLimitLoadsAsNull(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"instances":[{"id":"i1","service":"channel","name":"c","created_at":1,
+		"config":{"presence":false,"publishRateLimit":0,"connectRateLimit":30}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := reg.Get("channel", "c").Config()
+	if v, ok := cfg["publishRateLimit"]; !ok || v != nil {
+		t.Errorf("publishRateLimit = %v, want null", v)
+	}
+	if cfg["connectRateLimit"] != float64(30) {
+		t.Errorf("a real limit was changed: %v", cfg["connectRateLimit"])
+	}
+	if v := reg.GetOrCreate("search", "s").Config()["rateLimit"]; v != nil {
+		t.Errorf("a new instance's rateLimit = %v, want null", v)
+	}
+}
+
 // A save that fails must leave the previous file as it was.
 func TestFailedSaveKeepsPreviousFile(t *testing.T) {
 	dir := t.TempDir()

@@ -5,7 +5,6 @@ import (
 
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
-	"github.com/altlimit/altengine/cli/internal/identity"
 )
 
 func instanceJSON(in *control.Instance) map[string]any {
@@ -69,14 +68,8 @@ func (h *Handler) setConfig(w http.ResponseWriter, r *http.Request, service stri
 		}
 		cfg = m
 	}
-	// Auth `access` config: reject a row rule the entry's level can't reach (dead config that
-	// would silently 403 at runtime) — mirrors the hosted admin save-time guard.
-	if service == "auth" && cfg != nil {
-		if err := identity.ValidateAccessLevels(cfg["access"]); err != nil {
-			return err
-		}
-	}
-	// A full replace, as hosted: a key the body leaves out is removed.
+	// A full replace, as hosted: a key the body leaves out is removed. Each service's validator
+	// runs inside it, the same check MCP's patch gets.
 	if err := h.Reg.ReplaceConfig(in, cfg); err != nil {
 		return err
 	}

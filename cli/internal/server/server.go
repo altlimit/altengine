@@ -111,6 +111,16 @@ func New(opts Options) (*Server, error) {
 	// the console and for MCP's delete_instance — a delete that leaves a database behind is a
 	// local disk leak, and worse, an emulator that means something different by "deleted" than
 	// the hosted service does.
+	// Each service's config check, with the hosted rules: the console's PUT, MCP's patch and
+	// auth_set_rules all write through the registry, so a config refused hosted is refused here.
+	// (Functions registers its own in its handler.)
+	reg.OnValidateConfig("search", search.ValidateConfig)
+	reg.OnValidateConfig("datastore", datastore.ValidateConfig)
+	reg.OnValidateConfig("channel", channel.ValidateConfig)
+	reg.OnValidateConfig("auth", identity.ValidateConfig)
+	reg.OnValidateConfig("blob", blob.ValidateConfig)
+	reg.OnValidateConfig("container", container.ValidateConfig)
+
 	reg.OnDelete("datastore", dsMgr.DropInstance)
 	reg.OnDelete("search", srMgr.DropInstance)
 	reg.OnDelete("auth", idMgr.Drop)

@@ -147,6 +147,7 @@ func New(dir string) (*Registry, error) {
 		return nil, fmt.Errorf("%s is not a valid registry (%v); repair it or move it aside to start with an empty one", r.path, err)
 	}
 	for _, in := range p.Instances {
+		in.setConfig(migrateRateLimits(in.Config()))
 		r.insts[in.Service+"/"+in.Name] = in
 	}
 	for _, k := range p.Keys {
@@ -191,14 +192,33 @@ var Services = []string{"search", "datastore", "channel", "auth", "functions", "
 // subscriber tokens and auth end-user identity tokens.
 func needsSecret(service string) bool { return service == "channel" || service == "auth" }
 
+// rateLimitKeys are the per-instance rate-limit fields. Unset is null, as hosted: a limit is a
+// positive integer or absent.
+var rateLimitKeys = []string{"rateLimit", "publishRateLimit", "connectRateLimit"}
+
+// migrateRateLimits turns the 0 older emulators stored for "no limit" into null — how the hosted
+// service spells it, and the only "unset" the config validation accepts.
+func migrateRateLimits(cfg map[string]any) map[string]any {
+	out := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		out[k] = v
+	}
+	for _, k := range rateLimitKeys {
+		if n, ok := out[k].(float64); ok && n == 0 {
+			out[k] = nil
+		}
+	}
+	return out
+}
+
 func defaultConfig(service string) map[string]any {
 	switch service {
 	case "search":
-		return map[string]any{"rateLimit": 0, "stemming": true}
+		return map[string]any{"rateLimit": nil, "stemming": true}
 	case "datastore":
-		return map[string]any{"rateLimit": 0, "autoId": "uuid", "autoIndex": true}
+		return map[string]any{"rateLimit": nil, "autoId": "uuid", "autoIndex": true}
 	case "channel":
-		return map[string]any{"presence": false, "publishRateLimit": 0, "connectRateLimit": 0}
+		return map[string]any{"presence": false, "publishRateLimit": nil, "connectRateLimit": nil}
 	case "functions":
 		// Stored versions kept per function; the active one is always kept on top of this.
 		return map[string]any{"keepVersions": 3}
