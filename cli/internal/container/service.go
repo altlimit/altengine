@@ -532,6 +532,9 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platfor
 		logs:      newLogBuffer(),
 	}
 	s.jobs[instanceID] = append(s.jobs[instanceID], job)
+	// Cloned under the lock and before the job starts: a fast run can finish — and write the
+	// job — before this function returns.
+	out := job.clone()
 	s.mu.Unlock()
 
 	sz := Sizes[size]
@@ -539,7 +542,7 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platfor
 		JobID: id, Image: image, Cmd: req.Cmd, Env: env, MemoryMB: sz.MemoryMB, CPUs: sz.CPUs,
 		Stdout: job.logs.writer("stdout"), Stderr: job.logs.writer("stderr"),
 	})
-	return job.clone(), nil
+	return out, nil
 }
 
 func (s *Store) run(ctx context.Context, cancel context.CancelFunc, instanceID string, cfg Config, job *Job, spec RunSpec) {
