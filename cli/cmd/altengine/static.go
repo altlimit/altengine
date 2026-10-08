@@ -23,8 +23,8 @@ const staticUsage = `usage: altengine static <subcommand> [flags]
         Upload a built site (only files the site does not already have) and make it live.
   list
         Deployment history, newest first; * marks the live one.
-  rollback <deployment-id>
-        Serve an earlier deployment. Uploads nothing.
+  rollback <deployment-id>   (or activate)
+        Serve an earlier deployment, or one uploaded with --no-activate. Uploads nothing.
   info
         Where the site lives and which deployment is serving.
 
@@ -88,7 +88,8 @@ func staticCmd(args []string) {
 			fmt.Printf("\n(more deployments: altengine static list %s--cursor %s)\n", repeatFlags(fs, "cursor"), cursor)
 		}
 
-	case "rollback":
+	// `activate` is the same call under the verb automation uses for it.
+	case "rollback", "activate":
 		asJSON := jsonFlag(fs)
 		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 {

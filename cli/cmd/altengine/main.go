@@ -81,10 +81,10 @@ Usage:
   altengine dev [flags]              Start the emulator (data plane + admin console)
   altengine dev --static ./dist      ...and serve a built site on its own port
   altengine deploy [flags] <file>    Bundle a function and deploy it
-  altengine functions <subcommand>   list | versions | rollback | pull
+  altengine functions <subcommand>   list | versions | rollback | pull | delete
   altengine static <subcommand>      deploy | list | rollback | info
-  altengine automation <subcommand>  deploy | scripts | activate | agents | run | runs | logs |
-                                     get | cancel | send | env
+  altengine automation <subcommand>  deploy | scripts | activate | delete | agents | run | runs |
+                                     logs | get | cancel | send | env
   altengine login [--url u]          Save an API key for the hosted commands (read from stdin)
   altengine logout                   Forget the saved key
   altengine version                  Print version
@@ -165,6 +165,23 @@ func devCmd(args []string) {
 	}
 }
 
+// confirmed asks before something destructive. --yes answers for the caller; without it, a
+// terminal is asked and anything else (a script, CI) is refused, so a deletion is never the
+// unattended default.
+func confirmed(yes bool, what string) bool {
+	if yes {
+		return true
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintf(os.Stderr, "%s: pass --yes to confirm\n", what)
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "%s? [y/N] ", what)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	a := strings.ToLower(strings.TrimSpace(line))
+	return a == "y" || a == "yes"
+}
+
 // resetDataDir deletes an emulator data directory, and nothing that is not one.
 //
 // --data can point anywhere, and --reset used to RemoveAll it unasked: `--data . --reset` deleted
@@ -228,10 +245,12 @@ const functionsUsage = `usage: altengine functions <subcommand> [flags]
         List deployed functions, their live version, address and schedules.
   versions <name>
         A function's stored versions; * marks the live one.
-  rollback --version <n> <name>
+  rollback --version <n> <name>   (or activate)
         Serve an already-deployed version.
   pull [--version n] [--out file] <name>
         Print a deployed version's source (default: the live one).
+  delete [--version n] [--yes] <name>
+        Delete a function (it stops serving), or one stored version that is not live.
 
 Every subcommand takes --instance, --url and --key; 'altengine functions <subcommand> -h'
 lists its flags.`
@@ -503,11 +522,12 @@ func functionsCmd(args []string) {
 				time.UnixMilli(v.CreatedAt).Format(time.RFC3339), hosted.Short(v.SHA256, 12), v.URL)
 		}
 
-	case "rollback":
+	// `activate` is the same call under the verb automation uses for it.
+	case "rollback", "activate":
 		version := fs.Int("version", 0, "version to activate")
 		_ = fs.Parse(flagsFirst(fs, rest))
 		if fs.NArg() < 1 || *version < 1 {
-			fail(fmt.Errorf("usage: altengine functions rollback --version <n> <name>"))
+			fail(fmt.Errorf("usage: altengine functions %s --version <n> <name>", sub))
 		}
 		cfg, err := resolveConfig(fs, url, key, instance)
 		if err != nil {
@@ -557,6 +577,36 @@ func functionsCmd(args []string) {
 			fail(err)
 		}
 		fmt.Printf("wrote %s (v%d, %d bytes)\n", *out, v, len(code))
+
+	case "delete":
+		version := fs.Int("version", 0, "delete only this stored version (not the live one)")
+		yes := fs.Bool("yes", false, "do not ask")
+		_ = fs.Parse(flagsFirst(fs, rest))
+		if fs.NArg() < 1 {
+			fail(fmt.Errorf("usage: altengine functions delete [--version n] [--yes] <name>"))
+		}
+		cfg, err := resolveConfig(fs, url, key, instance)
+		if err != nil {
+			fail(err)
+		}
+		fnName := fs.Arg(0)
+		if *version > 0 {
+			if !confirmed(*yes, fmt.Sprintf("delete v%d of %s", *version, fnName)) {
+				fail(fmt.Errorf("not deleted"))
+			}
+			if err := cfg.DeleteVersion(fnName, *version); err != nil {
+				fail(err)
+			}
+			fmt.Printf("deleted %s v%d\n", fnName, *version)
+			return
+		}
+		if !confirmed(*yes, fmt.Sprintf("delete %s — it stops serving, its schedules stop, and every version is removed", fnName)) {
+			fail(fmt.Errorf("not deleted"))
+		}
+		if err := cfg.Delete(fnName); err != nil {
+			fail(err)
+		}
+		fmt.Printf("deleted %s\n", fnName)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", sub)

@@ -131,6 +131,11 @@ func (c Config) Activate(name string, version int) error {
 		map[string]any{"version": version}, nil)
 }
 
+// DeleteScript removes a script and its versions.
+func (c Config) DeleteScript(name string) error {
+	return c.do(http.MethodDelete, "/scripts/"+url.PathEscape(name), nil, nil)
+}
+
 // --- agents ---------------------------------------------------------------
 
 type Agent struct {

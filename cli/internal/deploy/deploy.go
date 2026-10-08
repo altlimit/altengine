@@ -172,6 +172,16 @@ func (c Config) Activate(fnName string, version int) error {
 		map[string]any{"version": version}, nil)
 }
 
+// Delete removes a function: it stops serving, its schedules stop, and every stored version goes.
+func (c Config) Delete(fnName string) error {
+	return c.do(http.MethodDelete, c.base()+"/"+hosted.Seg(fnName), nil, nil)
+}
+
+// DeleteVersion removes one stored version that is not being served.
+func (c Config) DeleteVersion(fnName string, version int) error {
+	return c.do(http.MethodDelete, fmt.Sprintf("%s/%s/versions/%d", c.base(), hosted.Seg(fnName), version), nil, nil)
+}
+
 // Pull reads a deployed version's source back.
 func (c Config) Pull(fnName string, version int) (string, error) {
 	var out struct {

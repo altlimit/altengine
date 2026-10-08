@@ -31,9 +31,12 @@ altengine deploy --minify --no-activate ./hello.js
 
 altengine functions list
 altengine functions versions hello
-altengine functions rollback --version 3 hello
+altengine functions rollback --version 3 hello   # `activate` is the same command
 altengine functions pull --out hello.js hello
+altengine functions delete --version 2 hello     # one stored version; without --version, the function
 ```
+
+`delete` asks first on a terminal; in a script it needs `--yes`.
 
 `altengine login` reads the key from stdin (without echo) and saves it, with the service URL, to
 `altengine/credentials.json` in your user config directory (`0600`; `ALTENGINE_CREDENTIALS`
@@ -97,8 +100,7 @@ having no local scheduler:
 `static` hosts your built front end. Point it at your build output DIRECTORY, not a file.
 
 ```bash
-export ALTENGINE_URL=https://api.altengine.net
-export ALTENGINE_API_KEY=ak_...
+altengine login                             # once; or export ALTENGINE_API_KEY=ae_...
 export ALTENGINE_INSTANCE=marketing
 
 npm run build

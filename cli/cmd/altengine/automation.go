@@ -28,13 +28,15 @@ const automationUsage = `usage: altengine automation <subcommand> [flags]
         Bundle a script and upload it as a new version.
   scripts [name]
         List deployed scripts, or one script's version history.
-  activate --version <n> <name>
+  activate --version <n> <name>   (or rollback)
         Point a script at an already-uploaded version.
+  delete [--yes] <name>
+        Delete a script and every version of it.
   agents
         List the enrolled machines and which are connected right now.
   run [--param k=v] [--agent id] [--label l] [--wait] <script>
         Start a run. --wait follows it to completion and prints its log.
-  runs [--status s] [--script n] [--limit n]
+  runs [--status s] [--script n] [--limit n] [--cursor c]
         List recent runs.
   logs <run-id>
         Print a run's log.
@@ -90,8 +92,11 @@ func automationCmd(args []string) {
 		automationDeploy(fs, rest, url, key, instance)
 	case "scripts":
 		automationScripts(fs, rest, url, key, instance)
-	case "activate":
+	// `rollback` is the same call under the verb functions and static use for it.
+	case "activate", "rollback":
 		automationActivate(fs, rest, url, key, instance)
+	case "delete":
+		automationDelete(fs, rest, url, key, instance)
 	case "agents":
 		automationAgents(fs, rest, url, key, instance)
 	case "run":
@@ -254,6 +259,25 @@ func automationActivate(fs *flag.FlagSet, rest []string, url, key, instance *str
 	fmt.Printf("%s is now running v%d\n", fs.Arg(0), *version)
 }
 
+func automationDelete(fs *flag.FlagSet, rest []string, url, key, instance *string) {
+	yes := fs.Bool("yes", false, "do not ask")
+	_ = fs.Parse(flagsFirst(fs, rest))
+	if fs.NArg() < 1 {
+		fail(fmt.Errorf("usage: altengine automation delete [--yes] <script>"))
+	}
+	cfg, err := resolveAutomation(url, key, instance)
+	if err != nil {
+		fail(err)
+	}
+	if !confirmed(*yes, fmt.Sprintf("delete script %s and every version of it", fs.Arg(0))) {
+		fail(fmt.Errorf("not deleted"))
+	}
+	if err := cfg.DeleteScript(fs.Arg(0)); err != nil {
+		fail(err)
+	}
+	fmt.Printf("deleted %s\n", fs.Arg(0))
+}
+
 func automationAgents(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 	q := fs.String("q", "", "match name, hostname or label")
 	asJSON := jsonFlag(fs)
@@ -356,6 +380,9 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 	}
 }
 
+// pollSleep is the wait between polls, replaced in tests.
+var pollSleep = time.Sleep
+
 // follow prints a run's log as it arrives and exits non-zero if the run failed.
 //
 // Polling rather than streaming: the log lives on the agent and the hosted service pulls it, so
@@ -363,9 +390,20 @@ func automationRun(fs *flag.FlagSet, rest []string, url, key, instance *string) 
 func follow(cfg automation.Config, runID string) error {
 	cursor := ""
 	seen := map[int64]bool{}
-	for {
-		page, err := cfg.Logs(runID, cursor)
-		if err == nil {
+	// A log read that fails is said, once per distinct error — it used to be dropped silently, so
+	// a run whose log could not be read looked like a run that printed nothing.
+	lastErr := ""
+	readLogs := func() {
+		for {
+			page, err := cfg.Logs(runID, cursor)
+			if err != nil {
+				if msg := err.Error(); msg != lastErr {
+					fmt.Fprintf(os.Stderr, "(could not read the log: %v)\n", err)
+					lastErr = msg
+				}
+				return
+			}
+			lastErr = ""
 			for _, l := range page.Lines {
 				// The tail ring re-serves recent lines on every poll; without this the same
 				// line prints once per second for as long as the run lasts.
@@ -383,15 +421,24 @@ func follow(cfg automation.Config, runID string) error {
 				cursor = page.Cursor
 				continue
 			}
+			return
 		}
+	}
+	for {
+		readLogs()
 		run, artifacts, err := cfg.Get(runID)
 		if err != nil {
 			return err
 		}
 		switch run.Status {
 		case "queued", "running":
-			time.Sleep(2 * time.Second)
+			pollSleep(2 * time.Second)
 			continue
+		}
+		// Once more after the end: lines written since the last read would otherwise be lost.
+		readLogs()
+		if lastErr != "" {
+			fmt.Fprintln(os.Stderr, "(the log above may be incomplete)")
 		}
 		for _, a := range artifacts {
 			fmt.Fprintf(os.Stderr, "%s (%d bytes)\n  %s\n", a.Name, a.SizeBytes, a.URL)
@@ -593,6 +640,15 @@ func automationSend(fs *flag.FlagSet, rest []string, url, key, instance *string)
 		// means the job holds a code the portal has just invalidated.
 		fmt.Printf("not confirmed by %s — the job may already have this value, so do not send a "+
 			"replacement; let the job's own timeout decide\n", strings.Join(out.Undetermined, ", "))
+		return
+	}
+	// Nothing reached a job, and nothing might have: a failure, and safe to retry. Exiting 0 here
+	// told a webhook relay the code was delivered when no job was waiting for it.
+	if out.Delivered == 0 {
+		if len(out.Unreachable) == 0 {
+			fmt.Fprintf(os.Stderr, "no job is waiting for %q\n", fs.Arg(0))
+		}
+		os.Exit(1)
 	}
 }
 
