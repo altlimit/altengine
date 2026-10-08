@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -62,9 +63,12 @@ type manifestEntry struct {
 // the kind of file whose absence is discovered weeks later by something else failing. If a file
 // is in the build output, it is part of the site.
 //
-// Symlinks are followed when they resolve inside the root and REFUSED when they do not. Following
-// one out of the tree would publish whatever it points at, which on a developer's machine is a
-// short walk from an SSH key; refusing names the file rather than silently dropping it.
+// Symlinks — to files AND to directories — are followed when they resolve inside the root and
+// REFUSED when they do not, which is exactly what `altengine dev --static` serves: a site that
+// works locally must not lose a directory on deploy. Following one out of the tree would publish
+// whatever it points at, which on a developer's machine is a short walk from an SSH key; refusing
+// names the file rather than silently dropping it. A directory link back into its own ancestry
+// is refused too, since it would make the site infinitely deep.
 func Walk(root string) ([]File, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -77,58 +81,102 @@ func Walk(root string) ([]File, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%s is a file; point this at your build OUTPUT DIRECTORY (e.g. ./dist)", root)
 	}
-
-	var out []File
-	err = filepath.WalkDir(absRoot, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(p)
-			if err != nil {
-				return fmt.Errorf("%s is a broken symlink", rel(absRoot, p))
-			}
-			if !within(absRoot, target) {
-				return fmt.Errorf(
-					"%s is a symlink pointing outside %s (to %s) — deploying it would publish a file that is not part of your site",
-					rel(absRoot, p), root, target)
-			}
-			ti, err := os.Stat(target)
-			if err != nil || ti.IsDir() {
-				return nil // a symlinked directory is walked through its own entries
-			}
-		}
-
-		f, err := os.Open(p)
-		if err != nil {
-			return fmt.Errorf("cannot read %s: %w", rel(absRoot, p), err)
-		}
-		defer f.Close()
-		h := sha256.New()
-		n, err := io.Copy(h, f)
-		if err != nil {
-			return fmt.Errorf("cannot read %s: %w", rel(absRoot, p), err)
-		}
-		out = append(out, File{
-			Path:  "/" + filepath.ToSlash(rel(absRoot, p)),
-			Local: p,
-			Size:  n,
-			Hash:  hex.EncodeToString(h.Sum(nil)),
-		})
-		return nil
-	})
+	// Containment is checked against the resolved root, like the dev server does: link targets
+	// come back resolved, so a root reached through a symlink would otherwise refuse every link.
+	realRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", root, err)
+	}
+
+	w := &walker{root: absRoot, realRoot: realRoot, display: root}
+	if err := w.dir(absRoot, []string{realRoot}); err != nil {
 		return nil, err
 	}
-	if len(out) == 0 {
+	if len(w.out) == 0 {
 		return nil, fmt.Errorf("%s is empty — nothing to deploy", root)
 	}
 	// Deterministic order, so two runs over the same tree print the same thing.
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
+	sort.Slice(w.out, func(i, j int) bool { return w.out[i].Path < w.out[j].Path })
+	return w.out, nil
+}
+
+type walker struct {
+	root     string // absolute, as given: served paths are relative to it
+	realRoot string // symlinks resolved: link targets must land inside it
+	display  string // as the user typed it, for errors
+	out      []File
+}
+
+// dir walks one directory. ancestors holds the resolved path of every directory from the root
+// down to this one, which is what a directory link must not point back into.
+func (w *walker) dir(local string, ancestors []string) error {
+	entries, err := os.ReadDir(local)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", rel(w.root, local), err)
+	}
+	real := ancestors[len(ancestors)-1]
+	for _, e := range entries {
+		p := filepath.Join(local, e.Name())
+		if e.Type()&fs.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return fmt.Errorf("%s is a broken symlink", rel(w.root, p))
+			}
+			if !within(w.realRoot, target) {
+				return fmt.Errorf(
+					"%s is a symlink pointing outside %s (to %s) — deploying it would publish a file that is not part of your site",
+					rel(w.root, p), w.display, target)
+			}
+			ti, err := os.Stat(target)
+			if err != nil {
+				return fmt.Errorf("cannot read %s: %w", rel(w.root, p), err)
+			}
+			if !ti.IsDir() {
+				if err := w.file(p); err != nil {
+					return err
+				}
+				continue
+			}
+			if slices.Contains(ancestors, target) {
+				return fmt.Errorf("%s is a symlink to a directory that contains it (%s) — the site would be infinitely deep",
+					rel(w.root, p), rel(w.realRoot, target))
+			}
+			if err := w.dir(p, append(slices.Clip(ancestors), target)); err != nil {
+				return err
+			}
+			continue
+		}
+		if e.IsDir() {
+			if err := w.dir(p, append(slices.Clip(ancestors), filepath.Join(real, e.Name()))); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.file(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *walker) file(p string) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", rel(w.root, p), err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", rel(w.root, p), err)
+	}
+	w.out = append(w.out, File{
+		Path:  "/" + filepath.ToSlash(rel(w.root, p)),
+		Local: p,
+		Size:  n,
+		Hash:  hex.EncodeToString(h.Sum(nil)),
+	})
+	return nil
 }
 
 func rel(root, p string) string {

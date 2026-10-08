@@ -133,6 +133,68 @@ func TestWalkFollowsASymlinkInsideTheTree(t *testing.T) {
 	}
 }
 
+// The dev server serves a symlinked directory inside the tree, so a deploy has to carry it — a
+// directory that works locally and 404s once deployed is the failure this exists to prevent.
+func TestWalkFollowsASymlinkedDirectoryInsideTheTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privilege on windows")
+	}
+	root := site(t)
+	write(t, filepath.Join(root, "shared", "img", "logo.svg"), "<svg/>")
+	if err := os.Symlink(filepath.Join(root, "shared"), filepath.Join(root, "media")); err != nil {
+		t.Skip(err)
+	}
+	// Reached through a symlinked root too, which must not make the in-tree link look external.
+	link := filepath.Join(t.TempDir(), "dist")
+	if err := os.Symlink(root, link); err != nil {
+		t.Skip(err)
+	}
+	for _, r := range []string{root, link} {
+		files, err := Walk(r)
+		if err != nil {
+			t.Fatalf("Walk(%s): %v", r, err)
+		}
+		got := map[string]bool{}
+		for _, f := range files {
+			got[f.Path] = true
+		}
+		for _, want := range []string{"/media/img/logo.svg", "/shared/img/logo.svg"} {
+			if !got[want] {
+				t.Errorf("Walk(%s) skipped %s (walked: %v)", r, want, got)
+			}
+		}
+	}
+}
+
+func TestWalkRefusesASymlinkedDirectoryOutOfTheTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privilege on windows")
+	}
+	root := site(t)
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, ".ssh", "id_rsa"), "key")
+	if err := os.Symlink(outside, filepath.Join(root, "home")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := Walk(root); err == nil || !strings.Contains(err.Error(), "home") {
+		t.Fatalf("Walk = %v, want a refusal naming the link", err)
+	}
+}
+
+func TestWalkRefusesASymlinkCycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privilege on windows")
+	}
+	root := site(t)
+	if err := os.Symlink(filepath.Join(root, "assets"), filepath.Join(root, "assets", "again")); err != nil {
+		t.Skip(err)
+	}
+	_, err := Walk(root)
+	if err == nil || !strings.Contains(err.Error(), filepath.Join("assets", "again")) {
+		t.Fatalf("Walk = %v, want a refusal naming assets/again", err)
+	}
+}
+
 func TestWalkRefusesAFileAndAnEmptyDirectory(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Walk(root); err == nil {
