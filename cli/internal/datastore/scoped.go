@@ -140,7 +140,7 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 				if field == "__created__" {
 					continue
 				}
-				if !valuesEqual(lookupField(existing, field), lookupField(doc, field)) {
+				if !jsonEqual(lookupField(existing, field), lookupField(doc, field)) {
 					return nil, nil, common.PermissionDenied("not permitted: field '" + field + "' is immutable")
 				}
 			}
@@ -440,6 +440,37 @@ func valuesEqual(a, b any) bool {
 		return ok2 && ab == bb
 	}
 	return false
+}
+
+// jsonEqual compares two decoded JSON values structurally, so an object or array resent
+// unchanged is equal to what is stored (valuesEqual compares scalars only).
+func jsonEqual(a, b any) bool {
+	switch at := a.(type) {
+	case map[string]any:
+		bt, ok := b.(map[string]any)
+		if !ok || len(at) != len(bt) {
+			return false
+		}
+		for k, av := range at {
+			bv, ok := bt[k]
+			if !ok || !jsonEqual(av, bv) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bt, ok := b.([]any)
+		if !ok || len(at) != len(bt) {
+			return false
+		}
+		for i := range at {
+			if !jsonEqual(at[i], bt[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return valuesEqual(a, b)
 }
 
 // compareValues orders two JSON scalars of the same kind. Cross-kind comparisons report

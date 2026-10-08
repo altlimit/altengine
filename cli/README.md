@@ -383,6 +383,8 @@ Enforcement matches the hosted service:
   forged; an optional `match` then validates the resulting document.
 - **update / delete** — the **existing** row must satisfy `match`, and `immutable` fields may not
   change. A put replaces the whole document, so an omitted immutable field counts as a change.
+  On update, a field `match` compares to an `$auth.*` placeholder is immutable too, unless the
+  update `stamp`s it or it has its own `fields.<name>.write` gate.
 - `$auth.*` resolves **only** from the verified token. A placeholder that can't be resolved is a
   hard 403 — a rule never silently degrades into an unconstrained match.
 - **Default-deny**: once `rules` is present, a collection or mode that isn't listed is refused.

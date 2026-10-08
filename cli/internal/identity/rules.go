@@ -700,7 +700,7 @@ func (u *EndUser) DatastoreWritePolicy(instance, namespace, collection, mode str
 		}
 	}
 	if mode == "update" {
-		pol.Immutable = spec.Immutable
+		pol.Immutable = updateImmutable(spec, cr.Fields)
 	}
 	// Per-field write gates apply to create + update (not delete). Substitute each field's write
 	// Match into OR-groups; the store checks a field is only set/changed when the doc satisfies them.
@@ -721,6 +721,54 @@ func (u *EndUser) DatastoreWritePolicy(instance, namespace, collection, mode str
 		}
 	}
 	return pol, nil
+}
+
+// updateImmutable is the update rule's explicit `immutable` list plus every field its `match`
+// binds to the caller — compared to an `$auth.*` placeholder, in any OR group. Without that, an
+// owner who may update a row could rewrite `owner` to someone else's uid and hand the row over
+// (or, by omitting it in a full replace, orphan it). Two kinds of bound field stay changeable,
+// because the rule already says who may set them: one the update stamps, and one with its own
+// per-field `write` gate. A field matched against a literal (`status = "draft"`) stays mutable.
+func updateImmutable(spec *WriteRule, fields map[string]FieldRule) []string {
+	out := append([]string{}, spec.Immutable...)
+	seen := map[string]bool{}
+	for _, f := range out {
+		seen[f] = true
+	}
+	for _, group := range spec.Match {
+		for _, rf := range group {
+			f := rf.Field
+			if seen[f] || f == "__key__" || f == "__created__" || f == "__updated__" || !bindsAuth(rf.Value) {
+				continue // a write cannot change a meta selector anyway
+			}
+			if _, stamped := spec.Stamp[f]; stamped {
+				continue
+			}
+			if fields[f].HasWrite {
+				continue
+			}
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// bindsAuth reports whether a rule value is, or is an array containing, an `$auth.*` placeholder.
+func bindsAuth(v any) bool {
+	isPlaceholder := func(v any) bool {
+		s, ok := v.(string)
+		return ok && strings.HasPrefix(s, "$auth")
+	}
+	if arr, ok := v.([]any); ok {
+		for _, e := range arr {
+			if isPlaceholder(e) {
+				return true
+			}
+		}
+		return false
+	}
+	return isPlaceholder(v)
 }
 
 // --- channel: identity-scoped channel patterns ---
