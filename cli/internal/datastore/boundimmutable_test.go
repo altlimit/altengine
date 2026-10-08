@@ -38,6 +38,7 @@ func boundFixture() map[string]any {
 						},
 						"fields": map[string]any{
 							"reviewer": map[string]any{"write": []any{eq("owner", "$auth.uid")}},
+							"tags":     map[string]any{"write": []any{eq("owner", "$auth.uid")}},
 						},
 					},
 				},
@@ -112,5 +113,26 @@ func TestUpdateBoundFieldsAreImmutable(t *testing.T) {
 	docs, _ := got["documents"].([]any)
 	if len(docs) != 1 || docs[0].(map[string]any)["data"].(map[string]any)["last_editor"] != "alice" {
 		t.Fatalf("stamped last_editor = %v, want alice", got)
+	}
+}
+
+// A field write gate guards CHANGING the field. A non-owner who may update the row (here as its
+// reviewer) resends the whole document in a full replace; an owner-gated array resent unchanged
+// is not a change, and must not trip the gate.
+func TestWriteGateComparesStructurally(t *testing.T) {
+	e := newBoundEnv(t)
+	alice, bob := e.token("alice", "Alice"), e.token("bob", "Bob")
+	body := func(tags string) string {
+		return `{"documents":[{"key":"t1","data":{"owner":"alice","last_editor":"alice","status":"open","title":"x",` +
+			`"reviewer":"bob","crew":{"lead":"bob"},"tags":` + tags + `}}]}`
+	}
+	if status, out := e.call(t, "/tasks/documents", body(`["a","b"]`), alice); status != 200 {
+		t.Fatalf("create -> %d: %v", status, out)
+	}
+	if status, out := e.call(t, "/tasks/documents", body(`["a","b"]`), bob); status != 200 {
+		t.Fatalf("reviewer resending unchanged tags -> %d (want 200): %v", status, out)
+	}
+	if status, out := e.call(t, "/tasks/documents", body(`["a","b","c"]`), bob); status != 403 {
+		t.Fatalf("reviewer changing owner-gated tags -> %d (want 403): %v", status, out)
 	}
 }

@@ -152,7 +152,7 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 				if _, stamped := update.Stamp[field]; stamped {
 					continue
 				}
-				if !valuesEqual(lookupField(existing, field), lookupField(doc, field)) &&
+				if !jsonEqual(lookupField(existing, field), lookupField(doc, field)) &&
 					!matchGroups(existing, key, created, updated, groups) {
 					return nil, nil, common.PermissionDenied("not permitted: change field '" + field + "' on '" + collection + "'")
 				}
