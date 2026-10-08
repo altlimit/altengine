@@ -122,12 +122,10 @@ These apply to the emulator and the hosted server alike; run them against both.
 - [ ] a batch answers with an array; a batch over 20 messages is refused
 - [ ] a missing `Authorization` header is refused (hosted: a key without MCP
       access is refused too, with a message saying how to fix it)
-- [ ] **tool names match hosted exactly**: whoami, list_instances,
-      create_instance, get_instance_config, patch_instance_config,
-      delete_instance, datastore_query, datastore_put,
-      datastore_list_collections, search_query, search_put_documents,
-      search_list_indexes, functions_list, functions_deploy, functions_errors,
-      usage_summary. No tool exists in one place and not the other.
+- [ ] **tool names match hosted exactly**: every tool the emulator serves is a hosted tool of
+      the same name. [`mcp-tools.json`](mcp-tools.json) lists all hosted tools and, under
+      `not_emulated`, the ones the emulator does not serve and why (automation, desktop and
+      static-deployment tools, and `auth_issue_signin_code`). No tool exists only locally.
 - [ ] **argument names match hosted exactly** — notably `datastore_query.where`
       (NOT `filters`) and `order[].dir` (NOT `desc`)
 - [ ] an unrecognised argument is **refused and names the valid ones**, never

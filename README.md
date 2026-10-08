@@ -101,8 +101,10 @@ behaves the same.
 ## Building with an AI agent
 
 The emulator speaks [MCP](https://modelcontextprotocol.io) at `POST /mcp`, with
-the same tools the hosted service exposes — create instances, configure them,
-read and write data, deploy functions. Point your agent at the local server and
+the hosted service's tools for everything it emulates — create instances, configure
+them, read and write data, deploy functions. The automation, desktop and
+static-deployment tools are hosted-only ([`conformance/mcp-tools.json`](conformance/mcp-tools.json)
+lists them). Point your agent at the local server and
 it can build against `altengine dev` rather than doing its experimenting in
 production:
 
@@ -117,9 +119,9 @@ production:
 }
 ```
 
-Any bearer token works locally; hosted needs a real key with MCP access. Tool
-and argument names are identical in both places, so a sequence of calls that
-works here works there — parity is checked by the MCP scenarios in
+Any bearer token works locally; hosted needs a real key with MCP access. Every
+tool served here has the hosted tool's name and arguments, so a sequence of calls
+that works here works there — parity is checked by the MCP scenarios in
 [`conformance/SCENARIOS.md`](conformance/SCENARIOS.md).
 
 The server also publishes `docs://` resources for the search and datastore query

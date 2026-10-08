@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Every MCP tool the hosted service exposes, by name. The emulator's tool registry is checked",
+    "against this list (cli/internal/mcp): a tool it serves must be here, and a tool here that it",
+    "does not serve must be listed under not_emulated with the reason. Update this file when the",
+    "hosted tool set changes."
+  ],
+  "tools": [
+    "auth_create_user", "auth_delete_user", "auth_disable_user", "auth_get_rules",
+    "auth_issue_signin_code", "auth_list_users", "auth_set_rules", "auth_set_user_claims",
+    "automation_exec", "automation_get_agent", "automation_get_run", "automation_list_agents",
+    "automation_run",
+    "blob_delete", "blob_get", "blob_list", "blob_put", "blob_set_public", "blob_upload_url",
+    "channel_list_rooms", "channel_presence", "channel_publish",
+    "container_cancel_job", "container_get_job", "container_job_logs", "container_list_jobs",
+    "container_run", "container_sizes",
+    "create_instance",
+    "datastore_aggregate", "datastore_create_index", "datastore_delete", "datastore_get",
+    "datastore_list_collections", "datastore_list_indexes", "datastore_put", "datastore_query",
+    "delete_instance",
+    "desktop_capture_screenshot", "desktop_end_session", "desktop_eval_js", "desktop_inspect_tree",
+    "desktop_list_windows", "desktop_machine_info", "desktop_save_script", "desktop_test_selector",
+    "functions_delete", "functions_delete_version", "functions_deploy", "functions_errors",
+    "functions_list", "functions_rollback", "functions_versions",
+    "get_instance_config", "list_instances", "patch_instance_config",
+    "search_delete_documents", "search_get_documents", "search_get_schema", "search_list_indexes",
+    "search_put_documents", "search_query",
+    "static_activate", "static_delete_deployment", "static_deploy", "static_list_deployments",
+    "static_list_files",
+    "usage_summary", "whoami"
+  ],
+  "not_emulated": {
+    "auth_issue_signin_code": "not implemented in the emulator yet",
+    "automation_exec": "automation runs on enrolled machines; the emulator has none",
+    "automation_get_agent": "automation runs on enrolled machines; the emulator has none",
+    "automation_get_run": "automation runs on enrolled machines; the emulator has none",
+    "automation_list_agents": "automation runs on enrolled machines; the emulator has none",
+    "automation_run": "automation runs on enrolled machines; the emulator has none",
+    "desktop_capture_screenshot": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_end_session": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_eval_js": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_inspect_tree": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_list_windows": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_machine_info": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_save_script": "drives an enrolled machine's desktop; the emulator has none",
+    "desktop_test_selector": "drives an enrolled machine's desktop; the emulator has none",
+    "static_activate": "the emulator serves a directory (dev --static) and stores no deployments",
+    "static_delete_deployment": "the emulator serves a directory (dev --static) and stores no deployments",
+    "static_deploy": "the emulator serves a directory (dev --static) and stores no deployments",
+    "static_list_deployments": "the emulator serves a directory (dev --static) and stores no deployments",
+    "static_list_files": "the emulator serves a directory (dev --static) and stores no deployments"
+  }
+}
