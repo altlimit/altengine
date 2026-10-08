@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -15,13 +16,27 @@ func staticConfig(fs *flag.FlagSet, url, key, instance *string) (static.Config, 
 	return static.Config{BaseURL: c.BaseURL, APIKey: c.APIKey, Instance: c.Instance}, err
 }
 
+const staticUsage = `usage: altengine static <subcommand> [flags]
+
+  deploy [--message m] [--no-activate] [--dry-run] <directory>
+        Upload a built site (only files the site does not already have) and make it live.
+  list
+        Deployment history, newest first; * marks the live one.
+  rollback <deployment-id>
+        Serve an earlier deployment. Uploads nothing.
+  info
+        Where the site lives and which deployment is serving.
+
+Every subcommand takes --instance (a static instance), --url and --key;
+'altengine static <subcommand> -h' lists its flags.`
+
 func staticCmd(args []string) {
-	if len(args) == 0 {
-		fail(fmt.Errorf("usage: altengine static <deploy|list|rollback|info> [flags]"))
+	if len(args) == 0 || isHelp(args[0]) {
+		subUsage(staticUsage, args)
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("static "+sub, flag.ExitOnError)
-	url, key, instance := hostedFlags(fs)
+	url, key, instance := hostedFlags(fs, "static")
 
 	switch sub {
 	case "deploy":
@@ -103,7 +118,8 @@ func staticCmd(args []string) {
 		fmt.Printf("%-14s %d (%s, deduplicated)\n", "files", s.Files, humanBytes(s.StoredBytes))
 
 	default:
-		fail(fmt.Errorf("unknown subcommand %q (want deploy, list, rollback or info)", sub))
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", sub)
+		subUsage(staticUsage, nil)
 	}
 }
 

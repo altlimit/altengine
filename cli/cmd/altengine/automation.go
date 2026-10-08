@@ -22,8 +22,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/hosted"
 )
 
-func automationUsage() error {
-	return fmt.Errorf(`usage: altengine automation <subcommand> [flags]
+const automationUsage = `usage: altengine automation <subcommand> [flags]
 
   deploy [--name n] [--parallel] [--no-activate] <entry.js>
         Bundle a script and upload it as a new version.
@@ -51,12 +50,10 @@ func automationUsage() error {
         List credential NAMES, or set one. Values are never readable back; a value not
         given as an argument is read from stdin.
 
-Needs an org API key with access to the automation instance:
+Needs an org API key with access to the automation instance (altengine login, or
+ALTENGINE_API_KEY):
 
-  export ALTENGINE_URL=https://api.altengine.net
-  export ALTENGINE_API_KEY=ak_...
-  altengine automation deploy --instance fleet --name nightly ./nightly.js`)
-}
+  altengine automation deploy --instance fleet --name nightly ./nightly.js`
 
 // resolveAutomation reads the instance from --instance, then ALTENGINE_AUTOMATION_INSTANCE, then
 // ALTENGINE_INSTANCE. Its own variable first because someone with both a functions instance and
@@ -80,13 +77,12 @@ func resolveAutomation(url, key, instance *string) (automation.Config, error) {
 }
 
 func automationCmd(args []string) {
-	if len(args) == 0 {
-		fail(automationUsage())
+	if len(args) == 0 || isHelp(args[0]) {
+		subUsage(automationUsage, args)
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("automation "+sub, flag.ExitOnError)
-	url := fs.String("url", "", "base URL of the altengine service (env ALTENGINE_URL)")
-	key := fs.String("key", "", "org API key (env ALTENGINE_API_KEY)")
+	url, key := connFlags(fs)
 	instance := fs.String("instance", "", "automation instance name (env ALTENGINE_AUTOMATION_INSTANCE)")
 
 	switch sub {
@@ -113,7 +109,8 @@ func automationCmd(args []string) {
 	case "env":
 		automationEnv(fs, rest, url, key, instance)
 	default:
-		fail(automationUsage())
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", sub)
+		subUsage(automationUsage, nil)
 	}
 }
 

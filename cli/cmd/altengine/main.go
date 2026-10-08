@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		usage(os.Stderr)
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -41,19 +42,35 @@ func main() {
 	case "version", "-v", "--version":
 		fmt.Println("altengine", version)
 	case "help", "-h", "--help":
-		usage()
+		usage(os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
-		usage()
+		usage(os.Stderr)
 		os.Exit(1)
 	}
+}
+
+// isHelp reports whether a subcommand position asks for help rather than naming a subcommand.
+func isHelp(arg string) bool {
+	return arg == "help" || arg == "-h" || arg == "--help" || arg == "-help"
+}
+
+// subUsage prints a command's usage: to stdout and exit 0 when it was asked for, to stderr and
+// exit 1 when the command line was wrong.
+func subUsage(text string, args []string) {
+	if len(args) > 0 && isHelp(args[0]) {
+		fmt.Fprintln(os.Stdout, text)
+		os.Exit(0)
+	}
+	fmt.Fprintln(os.Stderr, text)
+	os.Exit(1)
 }
 
 // version is stamped at release time via -ldflags "-X main.version=v0.2.0".
 var version = "dev"
 
-func usage() {
-	fmt.Print(`altengine — local emulator for altengine services
+func usage(w io.Writer) {
+	fmt.Fprint(w, `altengine — local emulator for altengine services
 
 Usage:
   altengine dev [flags]              Start the emulator (data plane + admin console)
@@ -61,7 +78,8 @@ Usage:
   altengine deploy [flags] <file>    Bundle a function and deploy it
   altengine functions <subcommand>   list | versions | rollback | pull
   altengine static <subcommand>      deploy | list | rollback | info
-  altengine automation <subcommand>  deploy | scripts | agents | run | runs | logs | get | cancel | send | env
+  altengine automation <subcommand>  deploy | scripts | activate | agents | run | runs | logs |
+                                     get | cancel | send | env
   altengine login [--url u]          Save an API key for the hosted commands (read from stdin)
   altengine logout                   Forget the saved key
   altengine version                  Print version
@@ -150,11 +168,32 @@ func resolveConfig(fs *flag.FlagSet, url, key, instance *string) (deploy.Config,
 	return cfg, nil
 }
 
-func hostedFlags(fs *flag.FlagSet) (url, key, instance *string) {
-	return fs.String("url", "", "base URL of the altengine service (env ALTENGINE_URL)"),
-		fs.String("key", "", "org API key with full access to the instance (env ALTENGINE_API_KEY)"),
-		fs.String("instance", "", "functions instance name (env ALTENGINE_INSTANCE)")
+// hostedFlags declares the flags every hosted command shares; service names the kind of instance
+// --instance takes.
+func hostedFlags(fs *flag.FlagSet, service string) (url, key, instance *string) {
+	url, key = connFlags(fs)
+	return url, key, fs.String("instance", "", service+" instance name (env ALTENGINE_INSTANCE)")
 }
+
+// connFlags declares --url and --key.
+func connFlags(fs *flag.FlagSet) (url, key *string) {
+	return fs.String("url", "", "base URL of the altengine service (env ALTENGINE_URL; default "+hosted.DefaultURL+")"),
+		fs.String("key", "", "org API key (env ALTENGINE_API_KEY, or saved by altengine login)")
+}
+
+const functionsUsage = `usage: altengine functions <subcommand> [flags]
+
+  list
+        List deployed functions, their live version, address and schedules.
+  versions <name>
+        A function's stored versions; * marks the live one.
+  rollback --version <n> <name>
+        Serve an already-deployed version.
+  pull [--version n] [--out file] <name>
+        Print a deployed version's source (default: the live one).
+
+Every subcommand takes --instance, --url and --key; 'altengine functions <subcommand> -h'
+lists its flags.`
 
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
@@ -209,7 +248,7 @@ func flagsFirst(fs *flag.FlagSet, args []string) []string {
 
 func deployCmd(args []string) {
 	fs := flag.NewFlagSet("deploy", flag.ExitOnError)
-	url, key, instance := hostedFlags(fs)
+	url, key, instance := hostedFlags(fs, "functions")
 	name := fs.String("name", "", "function name (defaults to the entry file's base name)")
 	minify := fs.Bool("minify", false, "minify the bundle before uploading")
 	noActivate := fs.Bool("no-activate", false, "upload the version but keep serving the current one")
@@ -323,12 +362,12 @@ func parseGrants(s string) (map[string]string, error) {
 }
 
 func functionsCmd(args []string) {
-	if len(args) == 0 {
-		fail(fmt.Errorf("usage: altengine functions <list|versions|rollback|pull> [flags]"))
+	if len(args) == 0 || isHelp(args[0]) {
+		subUsage(functionsUsage, args)
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("functions "+sub, flag.ExitOnError)
-	url, key, instance := hostedFlags(fs)
+	url, key, instance := hostedFlags(fs, "functions")
 
 	switch sub {
 	case "list":
@@ -430,7 +469,8 @@ func functionsCmd(args []string) {
 		fmt.Printf("wrote %s (v%d, %d bytes)\n", *out, v, len(code))
 
 	default:
-		fail(fmt.Errorf("unknown subcommand %q: expected list, versions, rollback or pull", sub))
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", sub)
+		subUsage(functionsUsage, nil)
 	}
 }
 
