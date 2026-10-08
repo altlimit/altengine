@@ -4,6 +4,9 @@ Official Python SDK for [altengine](https://www.altengine.net) — managed
 **datastore**, **search**, and realtime **channels** behind one API key.
 Built on `httpx` (sync + async); the WebSocket subscriber uses `websockets`.
 
+It covers those three services only. Auth, blob, containers and automation have clients in the
+JS SDK; from Python, call their REST API with the same API key.
+
 **Not published to PyPI yet** — `pip install altengine` 404s today. Install it from this
 repository until it is:
 

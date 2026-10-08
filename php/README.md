@@ -4,6 +4,10 @@ Official PHP SDK for [altengine](https://www.altengine.net) — managed
 **datastore**, **search**, and realtime **channels** behind one API key.
 PHP ≥ 8.1, Guzzle transport.
 
+It covers those three services only, and for channels it mints tokens and publishes (there is
+no socket subscriber). Auth, blob, containers and automation have clients in the JS SDK; from
+PHP, call their REST API with the same API key.
+
 **Not published to Packagist yet** — `composer require altlimit/altengine` 404s today. Use it
 from a clone of this repository until it is:
 

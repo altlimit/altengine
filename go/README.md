@@ -4,6 +4,9 @@ Official Go SDK for [altengine](https://www.altengine.net) — managed
 **datastore**, **search**, and realtime **channels** behind one API key.
 Stdlib-only HTTP; the WebSocket subscriber uses `github.com/coder/websocket`.
 
+It covers those three services only. Auth, blob, containers and automation have clients in the
+JS SDK; from Go, call their REST API with the same API key.
+
 ```bash
 go get github.com/altlimit/altengine/go
 ```

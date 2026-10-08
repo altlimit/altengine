@@ -13,6 +13,21 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 | [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | from this repo — see below |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
+What each SDK covers today (✓ = a client for that service; functions and static sites are
+deployed with the CLI and called over plain HTTP):
+
+| Service | JS | Go | Python | PHP |
+|---|---|---|---|---|
+| Datastore | ✓ | ✓ | ✓ | ✓ |
+| Search | ✓ | ✓ | ✓ | ✓ |
+| Channels | ✓ | ✓ | ✓ | tokens + publish (no socket) |
+| Auth | ✓ | — | — | — |
+| Blob | ✓ | — | — | — |
+| Containers | ✓ | — | — | — |
+| Automation | ✓ | — | — | — |
+
+For a service an SDK does not cover, call its REST API directly with the same API key.
+
 **The JavaScript, Python and PHP SDKs are not on npm, PyPI or Packagist yet** — `npm i
 @altengine/sdk`, `pip install altengine` and `composer require altlimit/altengine` all 404. Each
 SDK's README has the command that installs it from this repository instead.
