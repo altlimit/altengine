@@ -34,6 +34,10 @@ func main() {
 		staticCmd(os.Args[2:])
 	case "automation":
 		automationCmd(os.Args[2:])
+	case "login":
+		loginCmd(os.Args[2:])
+	case "logout":
+		logoutCmd(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("altengine", version)
 	case "help", "-h", "--help":
@@ -58,13 +62,14 @@ Usage:
   altengine functions <subcommand>   list | versions | rollback | pull
   altengine static <subcommand>      deploy | list | rollback | info
   altengine automation <subcommand>  deploy | scripts | agents | run | runs | logs | get | cancel | send | env
+  altengine login [--url u]          Save an API key for the hosted commands (read from stdin)
+  altengine logout                   Forget the saved key
   altengine version                  Print version
 
 Deploying talks to the hosted service and needs an org API key with 'full' access to the
-functions instance:
+functions instance — saved with 'altengine login', or in ALTENGINE_API_KEY:
 
-  export ALTENGINE_URL=https://api.altengine.net
-  export ALTENGINE_API_KEY=ak_...
+  altengine login
   altengine deploy --instance prod --name hello ./hello.js
 
 Run 'altengine <command> --help' for flags.

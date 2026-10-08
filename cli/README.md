@@ -22,8 +22,7 @@ Point your SDK/base URL at `http://127.0.0.1:9191` and use **any** `Authorizatio
 everything it imports into a single ES module (the server resolves no imports) and uploads it.
 
 ```bash
-export ALTENGINE_URL=https://api.altengine.net
-export ALTENGINE_API_KEY=ak_...      # org API key, 'full' access to the instance
+altengine login                      # paste an org API key ('full' access to the instance)
 export ALTENGINE_INSTANCE=prod
 
 altengine deploy --name hello ./hello.js       # bundle + deploy + activate
@@ -36,8 +35,12 @@ altengine functions rollback --version 3 hello
 altengine functions pull --out hello.js hello
 ```
 
-`ALTENGINE_URL` must be `https://`; plain `http://` is accepted only for `localhost`, so the key is
-never sent unencrypted.
+`altengine login` reads the key from stdin (without echo) and saves it, with the service URL, to
+`altengine/credentials.json` in your user config directory (`0600`; `ALTENGINE_CREDENTIALS`
+overrides the path). `altengine logout` removes it. The hosted commands take the key from
+`--key`, then `ALTENGINE_API_KEY`, then the saved file; the URL from `--url`, then
+`ALTENGINE_URL`, then the saved file, then `https://api.altengine.net`. A URL must be `https://`;
+plain `http://` is accepted only for `localhost`, so the key is never sent unencrypted.
 
 Every stored version has its own address, printed by `functions versions`: `{slug}--v{n}-fn`
 hosted, `/fn/{instance}--v{n}/{function}` against `altengine dev`. It runs that version's code

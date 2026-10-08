@@ -9,6 +9,7 @@ require (
 	github.com/evanw/esbuild v0.28.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	golang.org/x/term v0.41.0
 	modernc.org/sqlite v1.53.0
 )
 
