@@ -54,7 +54,7 @@ func automationUsage() error {
 Needs an org API key with access to the automation instance:
 
   export ALTENGINE_URL=https://api.altengine.net
-  export ALTENGINE_KEY=ak_...
+  export ALTENGINE_API_KEY=ak_...
   altengine automation deploy --instance fleet --name nightly ./nightly.js`)
 }
 
@@ -62,27 +62,16 @@ Needs an org API key with access to the automation instance:
 // ALTENGINE_INSTANCE. Its own variable first because someone with both a functions instance and
 // an automation instance in one shell should not have to unset one to use the other.
 func resolveAutomation(url, key, instance *string) (automation.Config, error) {
-	cfg := automation.Config{BaseURL: *url, APIKey: *key, Instance: *instance}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = os.Getenv("ALTENGINE_URL")
-	}
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("ALTENGINE_KEY")
+	cfg := automation.Config{Instance: *instance}
+	var err error
+	if cfg.BaseURL, cfg.APIKey, err = hostedCreds(*url, *key); err != nil {
+		return cfg, err
 	}
 	if cfg.Instance == "" {
 		cfg.Instance = os.Getenv("ALTENGINE_AUTOMATION_INSTANCE")
 	}
 	if cfg.Instance == "" {
 		cfg.Instance = os.Getenv("ALTENGINE_INSTANCE")
-	}
-	if cfg.BaseURL == "" {
-		return cfg, fmt.Errorf("no service URL: pass --url or set ALTENGINE_URL")
-	}
-	if err := hosted.CheckURL(cfg.BaseURL); err != nil {
-		return cfg, err
-	}
-	if cfg.APIKey == "" {
-		return cfg, fmt.Errorf("no API key: pass --key or set ALTENGINE_KEY")
 	}
 	if cfg.Instance == "" {
 		return cfg, fmt.Errorf("no instance: pass --instance or set ALTENGINE_AUTOMATION_INSTANCE")
@@ -97,7 +86,7 @@ func automationCmd(args []string) {
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("automation "+sub, flag.ExitOnError)
 	url := fs.String("url", "", "base URL of the altengine service (env ALTENGINE_URL)")
-	key := fs.String("key", "", "org API key (env ALTENGINE_KEY)")
+	key := fs.String("key", "", "org API key (env ALTENGINE_API_KEY)")
 	instance := fs.String("instance", "", "automation instance name (env ALTENGINE_AUTOMATION_INSTANCE)")
 
 	switch sub {

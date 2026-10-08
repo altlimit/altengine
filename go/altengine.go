@@ -95,5 +95,9 @@ func New(opts ...Option) *Client {
 	if cfg.apiKey == "" {
 		cfg.apiKey = os.Getenv("ALTENGINE_API_KEY")
 	}
+	if cfg.apiKey == "" {
+		// What older CLI releases read; accepted so one shell setup serves both.
+		cfg.apiKey = os.Getenv("ALTENGINE_KEY")
+	}
 	return &Client{http: newTransport(cfg)}
 }

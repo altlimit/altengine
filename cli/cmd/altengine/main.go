@@ -64,7 +64,7 @@ Deploying talks to the hosted service and needs an org API key with 'full' acces
 functions instance:
 
   export ALTENGINE_URL=https://api.altengine.net
-  export ALTENGINE_KEY=ak_...
+  export ALTENGINE_API_KEY=ak_...
   altengine deploy --instance prod --name hello ./hello.js
 
 Run 'altengine <command> --help' for flags.
@@ -131,24 +131,13 @@ func devCmd(args []string) {
 // resolveConfig builds the hosted-service config from flags, falling back to the
 // environment. Flags win, so a scripted deploy can override an ambient key.
 func resolveConfig(fs *flag.FlagSet, url, key, instance *string) (deploy.Config, error) {
-	cfg := deploy.Config{BaseURL: *url, APIKey: *key, Instance: *instance}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = os.Getenv("ALTENGINE_URL")
-	}
-	if cfg.APIKey == "" {
-		cfg.APIKey = os.Getenv("ALTENGINE_KEY")
+	cfg := deploy.Config{Instance: *instance}
+	var err error
+	if cfg.BaseURL, cfg.APIKey, err = hostedCreds(*url, *key); err != nil {
+		return cfg, err
 	}
 	if cfg.Instance == "" {
 		cfg.Instance = os.Getenv("ALTENGINE_INSTANCE")
-	}
-	if cfg.BaseURL == "" {
-		return cfg, fmt.Errorf("no service URL: pass --url or set ALTENGINE_URL")
-	}
-	if err := hosted.CheckURL(cfg.BaseURL); err != nil {
-		return cfg, err
-	}
-	if cfg.APIKey == "" {
-		return cfg, fmt.Errorf("no API key: pass --key or set ALTENGINE_KEY")
 	}
 	if cfg.Instance == "" {
 		return cfg, fmt.Errorf("no instance: pass --instance or set ALTENGINE_INSTANCE")
@@ -158,7 +147,7 @@ func resolveConfig(fs *flag.FlagSet, url, key, instance *string) (deploy.Config,
 
 func hostedFlags(fs *flag.FlagSet) (url, key, instance *string) {
 	return fs.String("url", "", "base URL of the altengine service (env ALTENGINE_URL)"),
-		fs.String("key", "", "org API key with full access to the instance (env ALTENGINE_KEY)"),
+		fs.String("key", "", "org API key with full access to the instance (env ALTENGINE_API_KEY)"),
 		fs.String("instance", "", "functions instance name (env ALTENGINE_INSTANCE)")
 }
 

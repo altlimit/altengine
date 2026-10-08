@@ -164,6 +164,24 @@ describe("base URL resolution", () => {
       delete process.env.ALTENGINE_API_KEY;
     }
   });
+
+  it("apiKey also accepts the CLI's older ALTENGINE_KEY, after ALTENGINE_API_KEY", async () => {
+    process.env.ALTENGINE_KEY = "old-key";
+    try {
+      const seen: string[] = [];
+      const fetchMock = vi.fn(async (_url: any, init: any) => {
+        seen.push(init.headers.authorization);
+        return json(200, { namespaces: [], has_more: false });
+      });
+      await new AltEngine({ dev: true, fetch: fetchMock as any }).datastore("app").namespaces.list();
+      process.env.ALTENGINE_API_KEY = "new-key";
+      await new AltEngine({ dev: true, fetch: fetchMock as any }).datastore("app").namespaces.list();
+      expect(seen).toEqual(["Bearer old-key", "Bearer new-key"]);
+    } finally {
+      delete process.env.ALTENGINE_KEY;
+      delete process.env.ALTENGINE_API_KEY;
+    }
+  });
 });
 
 describe("search namespace routing", () => {

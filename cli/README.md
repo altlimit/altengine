@@ -23,7 +23,7 @@ everything it imports into a single ES module (the server resolves no imports) a
 
 ```bash
 export ALTENGINE_URL=https://api.altengine.net
-export ALTENGINE_KEY=ak_...          # org API key, 'full' access to the instance
+export ALTENGINE_API_KEY=ak_...      # org API key, 'full' access to the instance
 export ALTENGINE_INSTANCE=prod
 
 altengine deploy --name hello ./hello.js       # bundle + deploy + activate
@@ -95,7 +95,7 @@ having no local scheduler:
 
 ```bash
 export ALTENGINE_URL=https://api.altengine.net
-export ALTENGINE_KEY=ak_...
+export ALTENGINE_API_KEY=ak_...
 export ALTENGINE_INSTANCE=marketing
 
 npm run build

@@ -31,6 +31,11 @@ def resolve_base_url(base_url: Optional[str], dev: bool) -> str:
     return (os.environ.get("ALTENGINE_URL") or DEFAULT_BASE_URL).rstrip("/")
 
 
+def env_api_key() -> Optional[str]:
+    """``ALTENGINE_API_KEY``, or ``ALTENGINE_KEY`` (what older CLI releases read)."""
+    return os.environ.get("ALTENGINE_API_KEY") or os.environ.get("ALTENGINE_KEY")
+
+
 def _clean_query(query: Optional[Mapping[str, Any]]) -> Optional[Dict[str, str]]:
     if not query:
         return None
@@ -80,7 +85,7 @@ class Http:
         client: Optional[httpx.Client] = None,
     ) -> None:
         self.base_url = resolve_base_url(base_url, dev)
-        self.api_key = api_key if api_key is not None else os.environ.get("ALTENGINE_API_KEY")
+        self.api_key = api_key if api_key is not None else env_api_key()
         self.max_attempts = max_attempts
         self._client = client or httpx.Client(timeout=timeout)
 
@@ -146,7 +151,7 @@ class AsyncHttp:
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         self.base_url = resolve_base_url(base_url, dev)
-        self.api_key = api_key if api_key is not None else os.environ.get("ALTENGINE_API_KEY")
+        self.api_key = api_key if api_key is not None else env_api_key()
         self.max_attempts = max_attempts
         self._client = client or httpx.AsyncClient(timeout=timeout)
 

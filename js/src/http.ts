@@ -76,7 +76,8 @@ export class Http {
 
   constructor(opts: ClientOptions = {}) {
     this.baseUrl = resolveBaseUrl(opts).replace(/\/+$/, "");
-    this.apiKey = opts.apiKey ?? env("ALTENGINE_API_KEY");
+    // ALTENGINE_KEY is what older CLI releases read; accepted so one shell setup serves both.
+    this.apiKey = opts.apiKey ?? env("ALTENGINE_API_KEY") ?? env("ALTENGINE_KEY");
     this.auth = opts.auth;
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
     if (!this.fetchImpl) throw new Error("no fetch implementation available; pass { fetch }");

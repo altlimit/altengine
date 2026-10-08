@@ -39,7 +39,10 @@ final class Http
             ?? (getenv('ALTENGINE_URL') ?: null)
             ?? self::DEFAULT_BASE_URL;
         $this->baseUrl = rtrim($baseUrl, '/');
-        $this->apiKey = $options['api_key'] ?? (getenv('ALTENGINE_API_KEY') ?: null);
+        // ALTENGINE_KEY is what older CLI releases read; accepted so one shell setup serves both.
+        $this->apiKey = $options['api_key']
+            ?? (getenv('ALTENGINE_API_KEY') ?: null)
+            ?? (getenv('ALTENGINE_KEY') ?: null);
         $this->maxAttempts = $options['max_attempts'] ?? self::MAX_ATTEMPTS;
         $this->client = $options['client'] ?? new GuzzleClient([
             'timeout' => $options['timeout'] ?? 30.0,
