@@ -108,6 +108,8 @@ type invocation struct {
 	// bindings dispatches env.<service>.<method>(...) calls.
 	bindings *bindings
 	logf     func(level, msg string)
+	// subRequests counts this invocation's outbound fetches against fn.SubRequests.
+	subRequests int
 }
 
 // run executes one request against the function and returns its Response.

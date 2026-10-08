@@ -361,6 +361,12 @@ func installFetch(vm *goja.Runtime, in *invocation) error {
 	secrets := in.cfg.EgressSecrets()
 
 	_ = vm.Set("__fetch", func(call goja.FunctionCall) goja.Value {
+		// The deployed subRequests cap, counted per invocation as hosted. Only fetch() is
+		// counted here; env.* calls are not.
+		in.subRequests++
+		if in.subRequests > in.fn.SubRequests {
+			panic(vm.NewGoError(fmt.Errorf("Too many subrequests: this function may make %d per invocation (subRequests, set at deploy)", in.fn.SubRequests)))
+		}
 		raw := call.Argument(0)
 		url := ""
 		var initObj *goja.Object

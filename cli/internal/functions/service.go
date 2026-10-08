@@ -53,7 +53,9 @@ const (
 	MaxSecrets          = 32
 	MaxSecretSize       = 4096
 	DefaultCPUMs        = 50
+	MaxCPUMs            = 30000
 	DefaultSubReq       = 50
+	MaxSubReq           = 1000
 )
 
 var (
@@ -232,11 +234,13 @@ func (c *Config) pick(egress bool) map[string]string {
 
 // DeployRequest is the body of POST /v1/functions/{instance}/deploy.
 type DeployRequest struct {
-	Name        string            `json:"name"`
-	Code        string            `json:"code"`
-	Grants      map[string]string `json:"grants"`
-	CPUMs       int               `json:"cpuMs"`
-	SubRequests int               `json:"subRequests"`
+	Name   string            `json:"name"`
+	Code   string            `json:"code"`
+	Grants map[string]string `json:"grants"`
+	// Pointers, so an omitted field inherits while an explicit 0 subrequests is kept: a
+	// function may be allowed no outbound calls at all.
+	CPUMs       *int `json:"cpuMs"`
+	SubRequests *int `json:"subRequests"`
 	// json.RawMessage, not []string: an ABSENT field must inherit the deployed schedules
 	// while an explicit null clears them, and both decode to a nil slice. Only the raw
 	// bytes tell the two apart. Accepts a list or one newline-separated string.
@@ -271,6 +275,12 @@ func (s *Store) Deploy(instanceID string, req DeployRequest, keep int) (map[stri
 		if strings.TrimSpace(strings.SplitN(k, ":", 2)[0]) == "" {
 			return nil, common.BadRequest("grant key must name a service")
 		}
+	}
+	if req.CPUMs != nil && (*req.CPUMs < 1 || *req.CPUMs > MaxCPUMs) {
+		return nil, common.BadRequest(fmt.Sprintf("function.cpuMs must be an integer in 1..%d", MaxCPUMs))
+	}
+	if req.SubRequests != nil && (*req.SubRequests < 0 || *req.SubRequests > MaxSubReq) {
+		return nil, common.BadRequest(fmt.Sprintf("function.subRequests must be an integer in 0..%d", MaxSubReq))
 	}
 	// Validated BEFORE anything is written, so a bad expression never stores a version.
 	schedules, err := decodeSchedules(req.Schedules, req.Schedule)
@@ -313,11 +323,11 @@ func (s *Store) Deploy(instanceID string, req DeployRequest, keep int) (map[stri
 	if req.Grants != nil {
 		fn.Grants = req.Grants
 	}
-	if req.CPUMs > 0 {
-		fn.CPUMs = req.CPUMs
+	if req.CPUMs != nil {
+		fn.CPUMs = *req.CPUMs
 	}
-	if req.SubRequests > 0 {
-		fn.SubRequests = req.SubRequests
+	if req.SubRequests != nil {
+		fn.SubRequests = *req.SubRequests
 	}
 	if schedules != nil {
 		fn.Schedules = *schedules
