@@ -55,6 +55,51 @@ func TestExistingSimpleNamespaceOpensItsOldFile(t *testing.T) {
 	}
 }
 
+// Mixed-case names are escaped now (so `Orders` and `orders` are two files on a case-insensitive
+// filesystem), but a mixed-case namespace an older emulator stored verbatim still opens its data.
+func TestLegacyMixedCaseNamespaceStillOpens(t *testing.T) {
+	dir := t.TempDir()
+	instDir := filepath.Join(dir, "datastore", "inst")
+	m := NewManager(dir)
+	s, err := m.Open("inst", "probe", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Put("things", []PutDoc{{Key: "k", Data: []byte(`{"v":1}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	// Where an older emulator would have put namespace "Orders".
+	if err := os.Rename(filepath.Join(instDir, "probe.db"), filepath.Join(instDir, "Orders.db")); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := NewManager(dir)
+	if got := m2.Namespaces("inst"); len(got) != 1 || got[0] != "Orders" {
+		t.Errorf("namespaces = %q, want [Orders]", got)
+	}
+	s2, err := m2.Open("inst", "Orders", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err := s2.Get("things", "k"); err != nil || doc == nil {
+		t.Fatalf("legacy Orders data did not open: %v %v", doc, err)
+	}
+	// A namespace differing only in case is a separate, empty one.
+	s3, err := m2.Open("inst", "orders", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, _ := s3.Get("things", "k"); doc != nil {
+		t.Error("orders read Orders' document")
+	}
+	if existed, err := m2.Drop("inst", "Orders"); err != nil || !existed {
+		t.Errorf("Drop(Orders) = %v, %v", existed, err)
+	}
+	if _, err := os.Stat(filepath.Join(instDir, "Orders.db")); !os.IsNotExist(err) {
+		t.Errorf("Drop left the legacy file: %v", err)
+	}
+}
+
 func TestInvalidNamespaceIsRefused(t *testing.T) {
 	m := NewManager(t.TempDir())
 	for _, ns := range []string{"_default", "a\x00b", strings.Repeat("x", 101), "café", "tab\there"} {

@@ -141,7 +141,7 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 		if err := os.MkdirAll(instDir, 0o755); err != nil {
 			return nil, err
 		}
-		dsn = "file:" + filepath.Join(instDir, nsFileName(namespace)+".db")
+		dsn = "file:" + common.NamespaceFile(instDir, namespace, nsFileName(namespace))
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

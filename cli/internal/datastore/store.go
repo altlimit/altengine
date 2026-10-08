@@ -132,7 +132,8 @@ func (m *Manager) Drop(instanceID, namespace string) (bool, error) {
 	delete(m.seen[instanceID], namespace)
 	m.mu.Unlock()
 	if !m.memory {
-		path := filepath.Join(m.dir, "datastore", sanitize(instanceID), common.NamespaceFileName(namespace)+".db")
+		instDir := filepath.Join(m.dir, "datastore", sanitize(instanceID))
+		path := common.NamespaceFile(instDir, namespace, common.NamespaceFileName(namespace))
 		if _, err := os.Stat(path); err == nil {
 			existed = true
 			if err := os.Remove(path); err != nil {
@@ -182,7 +183,7 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 		if err := os.MkdirAll(instDir, 0o755); err != nil {
 			return nil, err
 		}
-		dsn = "file:" + filepath.Join(instDir, common.NamespaceFileName(namespace)+".db")
+		dsn = "file:" + common.NamespaceFile(instDir, namespace, common.NamespaceFileName(namespace))
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
