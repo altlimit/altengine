@@ -93,12 +93,20 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	_ = enc.Encode(v)
 }
 
-// ReadJSON decodes the request body into v, returning a 400 on malformed JSON.
-// An empty body decodes to the zero value (the hosted API is tolerant the same way).
+// MaxJSONBody is the largest JSON request body the emulator reads.
+const MaxJSONBody = 8 << 20
+
+// ReadJSON decodes the request body into v, returning a 400 on malformed JSON and a 413 on a body
+// over MaxJSONBody. An empty body decodes to the zero value (the hosted API is tolerant the same
+// way).
 func ReadJSON(r *http.Request, v any) error {
-	data, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxJSONBody+1))
 	if err != nil {
 		return BadRequest("could not read request body")
+	}
+	// Said as what it is: a body cut at the cap used to fail as "invalid JSON".
+	if len(data) > MaxJSONBody {
+		return NewError(http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d bytes", MaxJSONBody), "INVALID_ARGUMENT")
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return nil

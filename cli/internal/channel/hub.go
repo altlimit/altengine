@@ -13,6 +13,9 @@ import (
 const (
 	maxMessageBytes    = 32 * 1024
 	maxPresenceMembers = 1000
+	// maxClientFrameBytes bounds one inbound WebSocket frame: a publish of a full message plus
+	// its envelope, with room for a long subscribe list.
+	maxClientFrameBytes = 2 * maxMessageBytes
 )
 
 // conn is one client WebSocket connection (many channels per connection).

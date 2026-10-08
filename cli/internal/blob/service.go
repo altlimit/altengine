@@ -19,10 +19,12 @@
 package blob
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -218,6 +220,18 @@ func (s *Store) PutPart(instanceID, id, uploadID string, n int, body []byte) (st
 	if !ok {
 		return "", common.NotFound("no such upload — it was completed, aborted, or never created")
 	}
+	// Parts are held in memory, so they are bounded by the size the upload was reserved for: a
+	// client cannot park more bytes here than the object it said it was sending.
+	held := int64(len(body))
+	for k, p := range parts {
+		if k != n {
+			held += int64(len(p))
+		}
+	}
+	if rec := s.index(instanceID)[id]; rec != nil && held > rec.Size {
+		return "", common.NewError(http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"parts total %d bytes, more than the %d this upload was reserved for", held, rec.Size), "INVALID_ARGUMENT")
+	}
 	parts[n] = body
 	return hex.EncodeToString(sum[:]), nil
 }
@@ -252,6 +266,58 @@ func (s *Store) AbortUpload(instanceID, id, uploadID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.mpu, mpuKey(instanceID, id, uploadID))
+}
+
+// PendingGrace is how long a reserved upload may sit unfinished before Reap removes it, as hosted.
+const PendingGrace = 6 * time.Hour
+
+// Reap removes pending rows reserved before cutoff, with any multipart parts held for them — an
+// upload a client abandoned (or that a closed tab never finished) would otherwise hold its row and
+// its parts for as long as the emulator runs. Returns how many rows went.
+func (s *Store) Reap(cutoff time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := cutoff.UnixMilli()
+	reaped := 0
+	for instanceID := range s.recs {
+		idx := s.index(instanceID)
+		dropped := false
+		for id, rec := range idx {
+			if rec.Status != "pending" || rec.Created >= limit {
+				continue
+			}
+			delete(idx, id)
+			delete(s.data, instanceID+"/"+id)
+			prefix := instanceID + "/" + id + "/"
+			for k := range s.mpu {
+				if strings.HasPrefix(k, prefix) {
+					delete(s.mpu, k)
+				}
+			}
+			dropped = true
+			reaped++
+		}
+		if dropped {
+			s.save(instanceID)
+		}
+	}
+	return reaped
+}
+
+// StartReaper runs Reap hourly until ctx is done.
+func (s *Store) StartReaper(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				s.Reap(now.Add(-PendingGrace))
+			}
+		}
+	}()
 }
 
 func (s *Store) memory() bool { return s.dir == "" }

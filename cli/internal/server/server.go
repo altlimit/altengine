@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/altlimit/altengine/cli/internal/admin"
 	"github.com/altlimit/altengine/cli/internal/auth"
@@ -56,6 +57,7 @@ type Server struct {
 	mux  *http.ServeMux
 	reg  *control.Registry
 	lim  *limiter
+	blob *blob.Store
 
 	site   *devsite.Server
 	siteLn net.Listener
@@ -154,7 +156,7 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/v1/static", staticStub)
 	mux.HandleFunc("/v1/static/", staticStub)
 
-	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter()}
+	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore}
 
 	if opts.StaticDir != "" {
 		site, err := devsite.New(devsite.Options{
@@ -206,6 +208,7 @@ func (s *Server) Handler() http.Handler {
 // does not spawn a ticker goroutine that outlives the test.
 func (s *Server) ListenAndServe() error {
 	s.fn.StartScheduler(context.Background())
+	s.blob.StartReaper(context.Background())
 	log.Printf("altengine listening on http://%s", s.opts.Addr)
 	log.Printf("  admin console:  http://%s/", s.opts.Addr)
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
@@ -217,7 +220,20 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
 	s.serveSite()
-	return http.ListenAndServe(s.opts.Addr, s.Handler())
+	return newHTTPServer(s.opts.Addr, s.Handler()).ListenAndServe()
+}
+
+// newHTTPServer bounds what a client can hold open without sending anything: a request's headers
+// must arrive within ReadHeaderTimeout and an idle keep-alive connection is closed. There is no
+// ReadTimeout or WriteTimeout — a channel WebSocket and a large upload legitimately stay open.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
 }
 
 // serveSite starts the static site listener, if one was configured.
@@ -237,7 +253,7 @@ func (s *Server) serveSite() {
 	log.Printf("                  read from disk on every request — rebuild and reload, no deploy step")
 	log.Printf("                  served no-cache locally; deployed, fingerprinted files get a year")
 	go func() {
-		if err := http.Serve(s.siteLn, siteLogMW(s.site)); err != nil {
+		if err := newHTTPServer("", siteLogMW(s.site)).Serve(s.siteLn); err != nil {
 			log.Printf("static site server stopped: %v", err)
 		}
 	}()

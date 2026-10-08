@@ -53,6 +53,18 @@ func TestConfiguredRateLimitIsEnforced(t *testing.T) {
 	}
 }
 
+// A client that opens a connection and sends nothing is dropped; the default server waited for
+// ever.
+func TestHTTPServerBoundsSlowClients(t *testing.T) {
+	s := newHTTPServer("127.0.0.1:0", http.NotFoundHandler())
+	if s.ReadHeaderTimeout <= 0 || s.IdleTimeout <= 0 {
+		t.Fatalf("timeouts unset: %+v", s)
+	}
+	if s.ReadTimeout != 0 || s.WriteTimeout != 0 {
+		t.Fatal("a whole-request timeout would cut channel sockets and large uploads")
+	}
+}
+
 func TestRateTargets(t *testing.T) {
 	cases := []struct {
 		method, path      string

@@ -369,6 +369,27 @@ func sortedKeys(m map[string]string) []string {
 	return out
 }
 
+// MaxKeptJobs is how many jobs an instance's history holds in memory, with their logs. The
+// oldest FINISHED ones go first; a running job is never dropped.
+var MaxKeptJobs = 500
+
+// pruneFinished drops the oldest finished jobs until at most max remain (oldest first in jobs).
+func pruneFinished(jobs []*Job, max int) []*Job {
+	excess := len(jobs) - max
+	if excess <= 0 {
+		return jobs
+	}
+	out := make([]*Job, 0, len(jobs)-excess)
+	for _, j := range jobs {
+		if excess > 0 && j.Status != "running" {
+			excess--
+			continue
+		}
+		out = append(out, j)
+	}
+	return out
+}
+
 // Store holds every instance's jobs and runs them.
 type Store struct {
 	mu     sync.Mutex
@@ -520,6 +541,13 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platfor
 			"RESOURCE_EXHAUSTED")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
+	// started_at is the list cursor, so it is kept unique per instance: two launches in the same
+	// millisecond would otherwise share a cursor value, and the page boundary between them would
+	// skip one.
+	started := time.Now().UnixMilli()
+	if prev := s.jobs[instanceID]; len(prev) > 0 && started <= prev[len(prev)-1].StartedAt {
+		started = prev[len(prev)-1].StartedAt + 1
+	}
 	job := &Job{
 		ID:        id,
 		Instance:  instanceID,
@@ -527,12 +555,12 @@ func (s *Store) Launch(instanceID string, cfg Config, req LaunchRequest, platfor
 		Image:     image,
 		Size:      size,
 		TimeoutMS: timeout,
-		StartedAt: time.Now().UnixMilli(),
+		StartedAt: started,
 		holdUSD:   hold,
 		cancel:    cancel,
 		logs:      newLogBuffer(),
 	}
-	s.jobs[instanceID] = append(s.jobs[instanceID], job)
+	s.jobs[instanceID] = pruneFinished(append(s.jobs[instanceID], job), MaxKeptJobs)
 	// Cloned under the lock and before the job starts: a fast run can finish — and write the
 	// job — before this function returns.
 	out := job.clone()

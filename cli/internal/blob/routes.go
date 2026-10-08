@@ -20,6 +20,7 @@ package blob
 import (
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -427,9 +428,18 @@ func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request, instanceID,
 	if err != nil {
 		return common.BadRequest("partNumber must be a number")
 	}
-	body, err := io.ReadAll(r.Body)
+	rec, ok := h.store.Pending(instanceID, id)
+	if !ok {
+		return common.NotFound("this upload URL has already been used, or its reservation is gone")
+	}
+	// Read no more than the whole object could be: a part is held in memory until Complete.
+	body, err := io.ReadAll(io.LimitReader(r.Body, rec.Size+1))
 	if err != nil {
 		return common.BadRequest("could not read the request body")
+	}
+	if int64(len(body)) > rec.Size {
+		return common.NewError(http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"a part may not exceed the %d bytes this upload was reserved for", rec.Size), "INVALID_ARGUMENT")
 	}
 	etag, err := h.store.PutPart(instanceID, id, q.Get("uploadId"), n, body)
 	if err != nil {

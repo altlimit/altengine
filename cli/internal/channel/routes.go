@@ -335,6 +335,9 @@ func (h *Handler) runConn(inst *control.Instance, c *conn, initial []string) {
 	c.send(subscribedFrame(c))
 	defer h.cleanup(inst, c)
 
+	// A client frame is a small command; one far past the message cap is closed (1009) rather
+	// than buffered whole.
+	c.ws.SetReadLimit(maxClientFrameBytes)
 	// Force-close at token expiry.
 	if c.exp > 0 {
 		c.ws.SetReadDeadline(time.Unix(c.exp, 0))
