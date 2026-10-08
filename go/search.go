@@ -113,7 +113,8 @@ type FacetRefinement struct {
 
 // SnippetRequest asks for highlighted extracts of matching fields.
 type SnippetRequest struct {
-	// Fields lists text/html fields to snippet; defaults to the query's fields.
+	// Fields lists text/html fields to snippet (at most 20): one snippet per listed field that
+	// matched. Omitted, each result gets one snippet, from its best-matching text/html field.
 	Fields []string `json:"fields,omitempty"`
 	// MaxTokens is a token count (not chars), clamped 1..64.
 	MaxTokens int    `json:"max_tokens,omitempty"`

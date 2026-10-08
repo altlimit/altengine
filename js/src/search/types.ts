@@ -61,7 +61,8 @@ export interface FacetRefinement {
 }
 
 export interface SnippetRequest {
-  /** Text/html fields to snippet; defaults to the query's fields. */
+  /** Text/html fields to snippet (at most 20): one snippet per listed field that matched.
+   * Omitted, each result gets one snippet, from its best-matching text/html field. */
   fields?: string[];
   /** Token count (not chars), clamped 1..64. */
   max_tokens?: number;
