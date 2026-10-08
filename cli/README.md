@@ -192,6 +192,14 @@ altengine dev [flags]
 Data persists to `--data` by default and survives restarts. Instances **auto-create on first use**,
 so no setup is needed — just start issuing requests.
 
+### Local data
+
+Each datastore and search namespace has its own database file. Older emulators stored namespaces
+containing characters other than `A-Z a-z 0-9 _ . -` under one shared name (`org:1`, `org/1` and
+`org 1` all in `org_1.db`). Such a namespace now starts empty; its old data is still on disk and is
+listed as the namespace `org_1`. The emulator logs the file on that namespace's first use; copy the
+data across if you need it.
+
 > **Keep it on localhost.** The emulator has no authentication by design: any bearer token gets
 > full access, `/mcp` is served unauthenticated, functions run whatever JavaScript you deploy to
 > them, and containers start jobs on your local Docker daemon. `--host 0.0.0.0` therefore puts a

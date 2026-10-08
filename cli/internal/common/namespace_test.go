@@ -1,6 +1,8 @@
 package common
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +51,35 @@ func TestNamespaceFileNameIsOneToOne(t *testing.T) {
 		if ns, ok := NamespaceFromFileName(stem); ok {
 			t.Errorf("NamespaceFromFileName(%q) = %q, want not ok", stem, ns)
 		}
+	}
+}
+
+// `org:1` used to be stored as org_1.db. That cannot be mapped back, so the namespace starts in its
+// own file and the first open says where the old data is.
+func TestNamespaceFileWarnsAboutASanitizedLegacyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "org_1.db"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	got := NamespaceFile(dir, "org:1", NamespaceFileName("org:1"))
+	if filepath.Base(got) != NamespaceFileName("org:1")+".db" {
+		t.Errorf("NamespaceFile(org:1) = %s, want its own file", filepath.Base(got))
+	}
+	msg := buf.String()
+	if !strings.Contains(msg, `"org:1"`) || !strings.Contains(msg, filepath.Join(dir, "org_1.db")) || !strings.Contains(msg, `"org_1"`) {
+		t.Errorf("warning does not name the namespace, the old file and its new label: %q", msg)
+	}
+
+	// Nothing to say when there is no such file, or for the namespace actually named org_1.
+	buf.Reset()
+	NamespaceFile(dir, "a b", NamespaceFileName("a b"))
+	NamespaceFile(dir, "org_1", NamespaceFileName("org_1"))
+	if buf.Len() != 0 {
+		t.Errorf("unexpected warning: %q", buf.String())
 	}
 }
 

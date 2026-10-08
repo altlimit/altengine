@@ -2,6 +2,7 @@ package common
 
 import (
 	"encoding/hex"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,10 +93,15 @@ func NamespaceFromFileName(stem string) (ns string, ok bool) {
 }
 
 // NamespaceFile is the path of a namespace's database in dir, given the stem the store encodes
-// it to. A namespace an older emulator stored verbatim and that is escaped now (mixed case, a
-// device name) keeps using its old file when that is the one on disk, so its data still opens.
-// The match is on the exact name, so on a case-insensitive filesystem `orders.db` is not taken
-// for `Orders`.
+// it to. Two upgrades meet here:
+//
+//   - A namespace an older emulator stored verbatim and that is escaped now (mixed case, a device
+//     name) keeps using its old file when that is the one on disk, so its data still opens. The
+//     match is on the exact name, so on a case-insensitive filesystem `orders.db` is not taken
+//     for `Orders`.
+//   - A namespace with characters older emulators replaced with "_" (`org:1` was `org_1.db`)
+//     cannot be mapped back — that file may as well belong to `org_1` itself — so it starts
+//     empty, and its first open logs where the old data is and the name it is listed under now.
 func NamespaceFile(dir, ns, stem string) string {
 	p := filepath.Join(dir, stem+".db")
 	if ns == "" || stem == ns {
@@ -104,10 +110,29 @@ func NamespaceFile(dir, ns, stem string) string {
 	if _, err := os.Stat(p); err == nil {
 		return p
 	}
-	if allBytes(ns, legacySafe) && exactFileExists(dir, ns+".db") {
-		return filepath.Join(dir, ns+".db")
+	if allBytes(ns, legacySafe) {
+		if exactFileExists(dir, ns+".db") {
+			return filepath.Join(dir, ns+".db")
+		}
+		return p
+	}
+	if old := legacySanitize(ns); exactFileExists(dir, old+".db") {
+		log.Printf("namespace %q now has its own file and starts empty: an older emulator stored it in %s, "+
+			"which it may have shared with other names, and which is now listed as namespace %q. "+
+			"If that data is %q's, copy it across.", ns, filepath.Join(dir, old+".db"), old, ns)
 	}
 	return p
+}
+
+// legacySanitize is the file stem older emulators gave a namespace.
+func legacySanitize(ns string) string {
+	b := []byte(ns)
+	for i, c := range b {
+		if !legacySafe(c) {
+			b[i] = '_'
+		}
+	}
+	return string(b)
 }
 
 // exactFileExists matches a name exactly, whatever the filesystem's case rules.
