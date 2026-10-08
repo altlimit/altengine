@@ -62,7 +62,7 @@ func (m *Manager) Open(instanceID string) (*Store, error) {
 		dsn = "file:auth_" + sanitize(instanceID) + "?mode=memory&cache=shared"
 	} else {
 		dir := filepath.Join(m.dir, "auth")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, common.DataDirPerm); err != nil {
 			return nil, err
 		}
 		dsn = "file:" + filepath.Join(dir, sanitize(instanceID)+".db")

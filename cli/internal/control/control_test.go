@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -214,3 +215,55 @@ var errBad = &testErr{}
 type testErr struct{}
 
 func (*testErr) Error() string { return "bad" }
+
+// control.json holds every channel and auth instance's signing secret, so the data directory and
+// it are owner-only, and the directory carries a .gitignore so a `git add -A` does not commit it.
+func TestDataDirIsPrivateAndIgnored(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "data")
+	r, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Create("channel", "app"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+		t.Errorf("data dir is %v, want 0700", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, "control.json")); fi.Mode().Perm() != 0o600 {
+		t.Errorf("control.json is %v, want 0600", fi.Mode().Perm())
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, ".gitignore")); err != nil || !strings.Contains(string(b), "*") {
+		t.Errorf(".gitignore missing or wrong: %q %v", b, err)
+	}
+
+	// A file an older version wrote world-readable is tightened on load.
+	_ = os.Chmod(filepath.Join(dir, "control.json"), 0o644)
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, "control.json")); fi.Mode().Perm() != 0o600 {
+		t.Errorf("control.json not tightened on load: %v", fi.Mode().Perm())
+	}
+}
+
+// A --data pointed at a folder the developer already had is not ignored wholesale or chmodded.
+func TestExistingForeignDataDirIsLeftAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions")
+	}
+	dir := t.TempDir()
+	_ = os.Chmod(dir, 0o755)
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err == nil {
+		t.Error("wrote a .gitignore into a directory it did not create")
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Errorf("changed the mode of a directory it did not create: %v", fi.Mode().Perm())
+	}
+}

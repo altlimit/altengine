@@ -115,7 +115,7 @@ type Store struct {
 func NewStore(dataDir string) (*Store, error) {
 	s := &Store{dataDir: dataDir, configs: map[string]*Config{}, code: map[string]map[string]string{}}
 	if dataDir != "" {
-		if err := os.MkdirAll(s.dir(), 0o755); err != nil {
+		if err := os.MkdirAll(s.dir(), common.DataDirPerm); err != nil {
 			return nil, err
 		}
 		if err := s.load(); err != nil {

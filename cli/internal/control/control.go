@@ -125,7 +125,7 @@ func New(dir string) (*Registry, error) {
 	if dir == "" {
 		return r, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := common.PrepareDataDir(dir); err != nil {
 		return nil, err
 	}
 	r.path = filepath.Join(dir, "control.json")
@@ -136,6 +136,9 @@ func New(dir string) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", r.path, err)
 	}
+	// It holds signing secrets; a file an older version wrote world-readable is tightened now
+	// rather than at the next save.
+	_ = os.Chmod(r.path, common.DataFilePerm)
 	// A file that does not parse is refused, never treated as empty: the next save would write
 	// an empty registry over it, and every instance's data on disk would lose the only record
 	// of which instance it belongs to.
@@ -168,7 +171,7 @@ func (r *Registry) save() error {
 	}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err == nil {
-		err = common.WriteFileAtomic(r.path, data, 0o644)
+		err = common.WriteFileAtomic(r.path, data, common.DataFilePerm)
 	}
 	if err != nil {
 		log.Printf("control: saving %s: %v", r.path, err)

@@ -304,7 +304,7 @@ func (s *Store) save(instanceID string) {
 		return
 	}
 	dir := s.instDir(instanceID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, common.DataDirPerm); err != nil {
 		return
 	}
 	rows := make([]*Record, 0, len(s.recs[instanceID]))
@@ -317,7 +317,7 @@ func (s *Store) save(instanceID string) {
 		return
 	}
 	tmp := filepath.Join(dir, "index.json.tmp")
-	if os.WriteFile(tmp, data, 0o644) == nil {
+	if os.WriteFile(tmp, data, common.DataFilePerm) == nil {
 		_ = os.Rename(tmp, filepath.Join(dir, "index.json"))
 	}
 }
@@ -454,10 +454,10 @@ func (s *Store) Commit(instanceID, id string, body []byte) (*Record, error) {
 		return nil, common.NotFound("blob not found")
 	}
 	if !s.memory() {
-		if err := os.MkdirAll(s.instDir(instanceID), 0o755); err != nil {
+		if err := os.MkdirAll(s.instDir(instanceID), common.DataDirPerm); err != nil {
 			return nil, common.NewError(500, "could not write the object to disk", "INTERNAL")
 		}
-		if err := os.WriteFile(s.objectPath(instanceID, id), body, 0o644); err != nil {
+		if err := os.WriteFile(s.objectPath(instanceID, id), body, common.DataFilePerm); err != nil {
 			return nil, common.NewError(500, "could not write the object to disk", "INTERNAL")
 		}
 	} else {

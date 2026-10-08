@@ -180,7 +180,7 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 		dsn = "file:ds_" + hex.EncodeToString([]byte(key)) + "?mode=memory&cache=shared"
 	} else {
 		instDir := filepath.Join(m.dir, "datastore", sanitize(instanceID))
-		if err := os.MkdirAll(instDir, 0o755); err != nil {
+		if err := os.MkdirAll(instDir, common.DataDirPerm); err != nil {
 			return nil, err
 		}
 		dsn = "file:" + common.NamespaceFile(instDir, namespace, common.NamespaceFileName(namespace))

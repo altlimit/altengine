@@ -138,7 +138,7 @@ func (m *Manager) handle(instanceID, namespace string) (*sql.DB, error) {
 		dsn = "file:s_" + hex.EncodeToString([]byte(key)) + "?mode=memory&cache=shared"
 	} else {
 		instDir := filepath.Join(m.dir, "search", sanitize(instanceID))
-		if err := os.MkdirAll(instDir, 0o755); err != nil {
+		if err := os.MkdirAll(instDir, common.DataDirPerm); err != nil {
 			return nil, err
 		}
 		dsn = "file:" + common.NamespaceFile(instDir, namespace, nsFileName(namespace))

@@ -194,6 +194,10 @@ so no setup is needed — just start issuing requests.
 
 ### Local data
 
+The data directory is owner-only (`0700`, files `0600`): `control.json` holds every channel and
+auth instance's signing secret. A data directory the emulator creates, or one named `.altengine*`,
+gets a `.gitignore` that ignores everything in it.
+
 Each datastore and search namespace has its own database file. Older emulators stored namespaces
 containing characters other than `A-Z a-z 0-9 _ . -` under one shared name (`org:1`, `org/1` and
 `org 1` all in `org_1.db`). Such a namespace now starts empty; its old data is still on disk and is
