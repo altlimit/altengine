@@ -54,6 +54,8 @@ type Server struct {
 	opts Options
 	fn   *functions.Handler
 	mux  *http.ServeMux
+	reg  *control.Registry
+	lim  *limiter
 
 	site   *devsite.Server
 	siteLn net.Listener
@@ -152,7 +154,7 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/v1/static", staticStub)
 	mux.HandleFunc("/v1/static/", staticStub)
 
-	srv := &Server{opts: opts, mux: mux, fn: fnHandler}
+	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter()}
 
 	if opts.StaticDir != "" {
 		site, err := devsite.New(devsite.Options{
@@ -192,9 +194,10 @@ func (s *Server) staticAddr() string {
 	return net.JoinHostPort(host, strconv.Itoa(n+1))
 }
 
-// Handler returns the root http.Handler (host guard, CSRF-ish origin guard, CORS, request log).
+// Handler returns the root http.Handler (host guard, CSRF-ish origin guard, CORS, per-instance
+// rate limits, request log).
 func (s *Server) Handler() http.Handler {
-	return logMW(hostMW(originMW(corsMW(s.mux, s.opts.DevOpen, s.opts.AllowOrigins))))
+	return logMW(hostMW(originMW(corsMW(rateMW(s.reg, s.lim, s.mux), s.opts.DevOpen, s.opts.AllowOrigins))))
 }
 
 // ListenAndServe starts the HTTP server.

@@ -469,7 +469,8 @@ internal/server/            HTTP wiring
 
 Intentionally out of scope for a local dev tool (documented so the parity gap is explicit):
 metering/billing, the hosted console's own admin sessions & OAuth (the emulator's `/admin` is open
-on localhost), CSRF, rate limiting, usage archival, datastore PITR/backups, and multi-node channel
+on localhost), CSRF, the plan-level rate-limit ceilings (an instance's own `rateLimit`,
+`publishRateLimit` and `connectRateLimit` *are* enforced, with a 429 `RATE_LIMITED`), usage archival, datastore PITR/backups, and multi-node channel
 fan-out (single-process hub). The index-served guard matches the hosted service on field coverage
 but is lenient on sort *direction*.
 

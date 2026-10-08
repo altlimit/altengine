@@ -95,9 +95,8 @@ func PlanParts(size int64) (int64, int) {
 
 // Config is the per-instance settings blob, matching the hosted service's `settings` key.
 //
-// `rateLimit` and `region` are accepted and ignored: one is meaningless against a local process
-// and the other places a database in a data centre. Rejecting them would make a config that works
-// hosted fail locally, which is the opposite of the point.
+// `region` is accepted and ignored: it places storage in a data centre. `rateLimit` is enforced by
+// the server's rate-limit middleware, not read here.
 type Config struct {
 	MaxObjectBytes int64
 	DefaultPublic  bool
