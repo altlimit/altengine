@@ -11,8 +11,11 @@ package functions
 //	ONE AT A TIME  A run still in flight excludes its own function from the due-set, so a
 //	               job slower than its interval never overlaps itself. The occurrences it
 //	               runs through are SKIPPED, not queued.
-//	BOUNDED        A run is waited on for 30s, then recorded as "timeout" and released; a
-//	               tick starts at most 25 due jobs, claiming each only as it starts.
+//	BOUNDED        A tick starts at most 25 due jobs, claiming each only as it starts, and
+//	               only if it is still due and its lease still free. A run past 30s is no
+//	               longer waited on, but nothing cancels it: it KEEPS its lease until it
+//	               actually ends, then records its real status and releases — freeing the
+//	               row early would let the next occurrence start a second copy beside it.
 //
 // Ticking on the minute boundary (not every 60s from process start) is deliberate: `0 3 *
 // * *` should fire at 03:00:00, and a drifting ticker would fire it at whatever offset the
@@ -35,8 +38,8 @@ import (
 
 // Hosted bounds, mirrored so a schedule that misbehaves there misbehaves here too.
 const (
-	// How long the scheduler waits on one scheduled run. Past it the run is recorded as
-	// "timeout" and its lease is released, so the next occurrence may start.
+	// How long the scheduler waits on one scheduled run. Past it the run keeps going and
+	// keeps its lease; it records its status and releases when it ends.
 	scheduledRunTimeout = 30 * time.Second
 	// How many of one organization's due jobs one tick starts. The emulator is one
 	// organization, so this is the whole tick. What is not started stays due — not
@@ -48,7 +51,7 @@ type schedState struct {
 	mu         sync.Mutex
 	next       map[string]time.Time // fn key -> next due time
 	running    map[string]bool      // fn key -> a run is in flight
-	lastStatus map[string]string    // fn key -> "http:200", "timeout", "error:..."
+	lastStatus map[string]string    // fn key -> "http:200", "error:..."
 	runTimeout time.Duration
 }
 
@@ -120,19 +123,10 @@ func (h *Handler) runDue(ctx context.Context, now time.Time) {
 	}
 
 	for _, d := range due {
-		h.sched.mu.Lock()
-		// Claim only when the run is about to start: advance and mark running in one
-		// critical section, so a slow run cannot be started twice, and a row this tick
-		// does not reach is never advanced past an occurrence that did not run.
-		if h.sched.running[d.key] {
-			h.sched.mu.Unlock()
+		timeout, ok := h.sched.claim(d.key, d.fn.Schedules, now)
+		if !ok {
 			continue
 		}
-		h.sched.next[d.key] = Soonest(d.fn.Schedules, now)
-		h.sched.running[d.key] = true
-		timeout := h.sched.runTimeout
-		h.sched.mu.Unlock()
-
 		go func(d dueRun) {
 			status := h.runScheduledWithTimeout(ctx, d.in, d.fn, now, timeout)
 			h.sched.mu.Lock()
@@ -143,9 +137,26 @@ func (h *Handler) runDue(ctx context.Context, now time.Time) {
 	}
 }
 
-// runScheduledWithTimeout waits on one scheduled run for at most timeout. A run past it is
-// no longer waited for and is recorded as "timeout", releasing its lease; the invocation's
-// own wall-clock interrupt ends it.
+// claim takes the row for a run about to start: advance and mark running in one critical
+// section, so a slow run cannot be started twice, and a row a tick does not reach is never
+// advanced past an occurrence that did not run. It is CONDITIONAL — still due and lease
+// still free — because the due-set was read before any claim, and a row claimed and
+// finished in between must not run again for the same occurrence.
+func (s *schedState) claim(key string, schedules []string, now time.Time) (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cur := s.next[key]; s.running[key] || cur.IsZero() || now.Before(cur) {
+		return 0, false
+	}
+	s.next[key] = Soonest(schedules, now)
+	s.running[key] = true
+	return s.runTimeout, true
+}
+
+// runScheduledWithTimeout runs one scheduled function and returns its real final status.
+// Past timeout the scheduler stops waiting on it — which it notes — but the run is not
+// cancelled and its caller keeps the lease until this returns; the invocation's own
+// wall-clock interrupt is what ends a runaway.
 func (h *Handler) runScheduledWithTimeout(ctx context.Context, in *control.Instance, fn *Function, now time.Time, timeout time.Duration) string {
 	done := make(chan string, 1)
 	go func() { done <- h.invokeScheduled(ctx, in, fn, now) }()
@@ -155,8 +166,8 @@ func (h *Handler) runScheduledWithTimeout(ctx context.Context, in *control.Insta
 	case s := <-done:
 		return s
 	case <-timer.C:
-		log.Printf("[%s/%s] scheduled run timed out after %s", in.Name, fn.Name, timeout)
-		return "timeout"
+		log.Printf("[%s/%s] scheduled run still going after %s; it keeps its lease until it ends", in.Name, fn.Name, timeout)
+		return <-done
 	}
 }
 

@@ -155,8 +155,9 @@ func TestSchedulerIgnoresUnscheduledFunctions(t *testing.T) {
 	}
 }
 
-// A scheduled run that outlives its timeout is recorded as "timeout" and its lease is
-// released, so one slow function cannot hold its schedule indefinitely.
+// A scheduled run that outlives its timeout is no longer waited on, but it KEEPS its lease
+// until it actually ends — so the next occurrence cannot start a second copy beside it — and
+// then records its real status and releases.
 func TestSchedulerRunTimeout(t *testing.T) {
 	h, in := schedHandler(t)
 	deploySched(t, h, in, `export default { async fetch() {
@@ -166,16 +167,57 @@ func TestSchedulerRunTimeout(t *testing.T) {
 	h.sched.mu.Lock()
 	h.sched.runTimeout = 20 * time.Millisecond
 	h.sched.mu.Unlock()
+	key := fnKey(in.ID, "job")
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	h.runDue(t.Context(), t0)
 	h.runDue(t.Context(), t0.Add(time.Minute))
 	time.Sleep(150 * time.Millisecond) // well past the timeout, well short of the run
 	h.sched.mu.Lock()
-	status := h.sched.lastStatus[fnKey(in.ID, "job")]
-	running := h.sched.running[fnKey(in.ID, "job")]
+	status, running, next := h.sched.lastStatus[key], h.sched.running[key], h.sched.next[key]
 	h.sched.mu.Unlock()
-	if status != "timeout" || running {
-		t.Fatalf("lastStatus = %q, running = %v; want timeout and the lease released", status, running)
+	if status != "" || !running {
+		t.Fatalf("past the timeout: lastStatus = %q, running = %v; want no status and the lease held", status, running)
+	}
+
+	// The next occurrence comes due while it is still going: not claimed.
+	h.runDue(t.Context(), t0.Add(2*time.Minute))
+	h.sched.mu.Lock()
+	after := h.sched.next[key]
+	h.sched.mu.Unlock()
+	if !after.Equal(next) {
+		t.Fatalf("a run past its timeout let the next occurrence claim the row: next %s -> %s", next, after)
+	}
+
+	settle(t, h)
+	h.sched.mu.Lock()
+	status, running = h.sched.lastStatus[key], h.sched.running[key]
+	h.sched.mu.Unlock()
+	if status != "http:200" || running {
+		t.Fatalf("after it ends: lastStatus = %q, running = %v; want its real status and the lease released", status, running)
+	}
+}
+
+// A claim re-checks that the row is still due and its lease free: a row read as due, then
+// claimed and finished by someone else before this claim, is not run again.
+func TestSchedulerClaimIsConditional(t *testing.T) {
+	s := newSchedState()
+	sched := []string{"* * * * *"}
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.next["k"] = t0
+	if _, ok := s.claim("k", sched, t0); !ok {
+		t.Fatal("a due, free row was not claimed")
+	}
+	if _, ok := s.claim("k", sched, t0); ok {
+		t.Fatal("a leased row was claimed twice")
+	}
+	// The first run finishes and releases; a claim from the same stale due-set must not
+	// start the same occurrence again.
+	delete(s.running, "k")
+	if _, ok := s.claim("k", sched, t0); ok {
+		t.Fatal("a row no longer due was claimed")
+	}
+	if _, ok := s.claim("k", sched, t0.Add(time.Minute)); !ok {
+		t.Fatal("the next occurrence was not claimed")
 	}
 }
 
