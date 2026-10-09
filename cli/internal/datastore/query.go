@@ -50,12 +50,17 @@ type QueryRequest struct {
 }
 
 type QueryResult struct {
-	Documents   []StoredDoc    `json:"documents,omitempty"`
-	Keys        []string       `json:"keys,omitempty"`
-	Cursor      *string        `json:"cursor"`
-	RowsRead    int            `json:"rowsRead"`
+	Documents []StoredDoc `json:"documents,omitempty"`
+	Keys      []string    `json:"keys,omitempty"`
+	Cursor    *string     `json:"cursor"`
+	// Metering plumbing — the rows the query read, behind its billed reads. Never part of a
+	// response, as hosted.
+	RowsRead    int            `json:"-"`
 	AutoIndexed *AutoIndexInfo `json:"auto_indexed,omitempty"`
 }
+
+// Reads is the billed read count behind RowsRead, which the console is shown.
+func (r *QueryResult) Reads() int { return billableReads(r.RowsRead) }
 
 type AutoIndexInfo struct {
 	Fields      []string `json:"fields"`

@@ -203,7 +203,11 @@ func (h *Handler) dsQuery(w http.ResponseWriter, r *http.Request) error {
 	if res.Documents == nil && !req.KeysOnly {
 		res.Documents = []datastore.StoredDoc{}
 	}
-	common.WriteJSON(w, 200, res)
+	// The console gets the billed `reads`, as hosted; the raw row count behind it is not sent.
+	common.WriteJSON(w, 200, struct {
+		*datastore.QueryResult
+		Reads int `json:"reads"`
+	}{res, res.Reads()})
 	return nil
 }
 
