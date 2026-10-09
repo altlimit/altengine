@@ -113,6 +113,12 @@ func ensureSchema(db *sql.DB) error {
 			claims     TEXT NOT NULL DEFAULT '{}',
 			disabled       INTEGER NOT NULL DEFAULT 0,
 			email_verified INTEGER NOT NULL DEFAULT 0,
+			-- 1 = signed up while the instance required verification. Turning the gate on
+			-- grandfathers every other unverified account; never these.
+			verify_pending INTEGER NOT NULL DEFAULT 0,
+			-- Bumped when the account is disabled, deleted or reset. An identity token carries
+			-- the epoch it was minted in (its ce claim); one from an earlier epoch is refused.
+			cred_epoch     INTEGER NOT NULL DEFAULT 0,
 			created        INTEGER NOT NULL,
 			updated        INTEGER NOT NULL
 		)`,
@@ -139,6 +145,15 @@ func ensureSchema(db *sql.DB) error {
 			created   INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS email_codes_by_uid ON email_codes(uid, purpose)`,
+		// Identity tokens revoked before they expire: an account disabled, deleted or reset.
+		// `epoch` is the account's credential epoch after the revocation — a token minted under
+		// an earlier one is dead. A row only matters while a token from before it could still
+		// be alive, so `at` (unix ms) bounds it.
+		`CREATE TABLE IF NOT EXISTS revocations (
+			uid   TEXT PRIMARY KEY,
+			epoch INTEGER NOT NULL,
+			at    INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -171,6 +186,19 @@ func ensureSchema(db *sql.DB) error {
 	if !hasEV {
 		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
+		}
+	}
+	// verify_pending is 0 on existing rows (nobody can tell which signed up gated, so they are
+	// grandfathered as before); cred_epoch starts every existing account in epoch 0.
+	for _, col := range []string{"verify_pending", "cred_epoch"} {
+		has, err := hasColumn(db, "users", col)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(`ALTER TABLE users ADD COLUMN ` + col + ` INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -210,6 +238,7 @@ type UserRow struct {
 	Claims        map[string]any
 	Disabled      bool
 	EmailVerified bool
+	CredEpoch     int64
 	Created       int64
 	Updated       int64
 }
@@ -315,12 +344,19 @@ func parseJSONObject(raw string) map[string]any {
 // CreateUser inserts an end-user. The signup-collected fields go to `profile` (self-asserted);
 // new accounts have NO authoritative `claims` (admin-set only), so it starts empty. Returns
 // 409 ALREADY_EXISTS when the handle is taken.
-func (s *Store) CreateUser(identifier, pwHash string, profile map[string]any, now int64) (*UserRow, error) {
+//
+// verifyPending marks an account that signs up under the email-verification gate, so turning
+// the gate off and on again never grandfathers it in unverified.
+func (s *Store) CreateUser(identifier, pwHash string, profile map[string]any, now int64, verifyPending bool) (*UserRow, error) {
 	uid := common.UUID()
 	profileJSON := mustJSON(profile)
+	pending := 0
+	if verifyPending {
+		pending = 1
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO users (uid, identifier, pw_hash, profile, claims, disabled, created, updated) VALUES (?,?,?,?,'{}',0,?,?)`,
-		uid, identifier, pwHash, profileJSON, now, now)
+		`INSERT INTO users (uid, identifier, pw_hash, profile, claims, disabled, verify_pending, created, updated) VALUES (?,?,?,?,'{}',0,?,?,?)`,
+		uid, identifier, pwHash, profileJSON, pending, now, now)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "unique") || strings.Contains(msg, "constraint") {
@@ -335,7 +371,7 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 	var r UserRow
 	var profile, claims string
 	var disabled, emailVerified int
-	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &emailVerified, &r.Created, &r.Updated)
+	err := row.Scan(&r.UID, &r.Identifier, &r.PwHash, &profile, &claims, &disabled, &emailVerified, &r.CredEpoch, &r.Created, &r.Updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -352,13 +388,13 @@ func (s *Store) scanUser(row *sql.Row) (*UserRow, error) {
 // ByIdentifier looks a user up by their unique login handle (nil when absent).
 func (s *Store) ByIdentifier(identifier string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated FROM users WHERE identifier = ?`, identifier))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, cred_epoch, created, updated FROM users WHERE identifier = ?`, identifier))
 }
 
 // ByUID looks a user up by uid (nil when absent).
 func (s *Store) ByUID(uid string) (*UserRow, error) {
 	return s.scanUser(s.db.QueryRow(
-		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, created, updated FROM users WHERE uid = ?`, uid))
+		`SELECT uid, identifier, pw_hash, profile, claims, disabled, email_verified, cred_epoch, created, updated FROM users WHERE uid = ?`, uid))
 }
 
 // ListUsers returns end users newest-first, for the local console's browser. The password
@@ -418,17 +454,65 @@ func (s *Store) SetClaims(uid string, claims map[string]any, now int64) (bool, e
 // SetDisabled locks or unlocks an account. The column has been in the schema since the start;
 // nothing could write it, so a user could be created and deleted locally but never suspended —
 // the one moderation action an app actually reaches for first.
+//
+// Disabling also revokes the account's refresh tokens and starts a new credential epoch, so
+// the identity tokens already issued are refused too — and re-enabling does not revive them.
 func (s *Store) SetDisabled(uid string, disabled bool, now int64) (bool, error) {
-	v := 0
+	q := `UPDATE users SET disabled = 0, updated = ? WHERE uid = ?`
 	if disabled {
-		v = 1
+		q = `UPDATE users SET disabled = 1, cred_epoch = cred_epoch + 1, updated = ? WHERE uid = ?`
 	}
-	res, err := s.db.Exec(`UPDATE users SET disabled = ?, updated = ? WHERE uid = ?`, v, now, uid)
+	res, err := s.db.Exec(q, now, uid)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil || n == 0 {
+		return false, err
+	}
+	if disabled {
+		if _, err := s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE uid = ?`, uid); err != nil {
+			return false, err
+		}
+		if err := s.recordRevocation(uid, now); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// revocationWindowMS is how long a revocation is remembered: the longest an identity token
+// can live, plus slack for one minted in the instant before the revocation landed.
+const revocationWindowMS = (24*60*60 + 5*60) * 1000
+
+// recordRevocation records that every identity token of uid minted before its CURRENT epoch
+// is revoked. The caller has already moved the epoch. No-op for a uid with no row.
+func (s *Store) recordRevocation(uid string, now int64) error {
+	_, err := s.db.Exec(`INSERT INTO revocations (uid, epoch, at) SELECT uid, cred_epoch, ? FROM users WHERE uid = ?
+		ON CONFLICT(uid) DO UPDATE SET epoch = excluded.epoch, at = excluded.at`, now, uid)
+	return err
+}
+
+// RevokedEpoch is the epoch a token for uid must be minted in to still be good, when the
+// account has a live revocation (ok false otherwise — nothing is revoked).
+func (s *Store) RevokedEpoch(uid string, now int64) (int64, bool, error) {
+	var epoch int64
+	err := s.db.QueryRow(`SELECT epoch FROM revocations WHERE uid = ? AND at >= ?`, uid, now-revocationWindowMS).Scan(&epoch)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return epoch, err == nil, err
+}
+
+// GrandfatherVerified marks every unverified account verified — run when an instance first
+// turns on the email-verification gate, so accounts that predate it are not locked out. Never
+// one that signed up under the gate (verify_pending): it has never been let in unverified.
+func (s *Store) GrandfatherVerified(now int64) (int64, error) {
+	res, err := s.db.Exec(`UPDATE users SET email_verified = 1, updated = ? WHERE email_verified = 0 AND verify_pending = 0`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // MergeClaimsAllUsers merges a claims patch into EVERY user in one statement (backfill). It
@@ -473,7 +557,16 @@ func (s *Store) SetProfile(uid string, profile map[string]any, now int64) (bool,
 
 // DeleteUser removes an end user along with their outstanding refresh tokens. Reports
 // whether a user was actually removed.
+//
+// Recorded as a revocation BEFORE the row goes: a deleted user's identity tokens are as
+// alive as a disabled one's until that says otherwise.
 func (s *Store) DeleteUser(uid string) (bool, error) {
+	if _, err := s.db.Exec(`UPDATE users SET cred_epoch = cred_epoch + 1 WHERE uid = ?`, uid); err != nil {
+		return false, err
+	}
+	if err := s.recordRevocation(uid, time.Now().UnixMilli()); err != nil {
+		return false, err
+	}
 	if _, err := s.db.Exec(`DELETE FROM refresh_tokens WHERE uid = ?`, uid); err != nil {
 		return false, err
 	}
@@ -485,15 +578,29 @@ func (s *Store) DeleteUser(uid string) (bool, error) {
 	return n > 0, err
 }
 
-// SetPassword replaces a user's password hash and revokes every outstanding refresh
-// token (a reset must invalidate sessions minted with the old credential).
-func (s *Store) SetPassword(uid, pwHash string, now int64) error {
+// SetPassword replaces a user's password hash, starts a new credential epoch and revokes every
+// outstanding refresh token (a reset must invalidate sessions minted with the old credential).
+//
+// A DISABLED account is not reset — it would come out with a new password and an address
+// marked verified, re-enabled in all but name. The flag is in the UPDATE itself, and a
+// refused reset (false) revokes nothing.
+func (s *Store) SetPassword(uid, pwHash string, now int64) (bool, error) {
 	// A completed reset also marks the email verified — the user proved control by consuming the code.
-	if _, err := s.db.Exec(`UPDATE users SET pw_hash = ?, email_verified = 1, updated = ? WHERE uid = ?`, pwHash, now, uid); err != nil {
-		return err
+	res, err := s.db.Exec(`UPDATE users SET pw_hash = ?, email_verified = 1, cred_epoch = cred_epoch + 1, updated = ?
+		WHERE uid = ? AND disabled = 0`, pwHash, now, uid)
+	if err != nil {
+		return false, err
 	}
-	_, err := s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE uid = ?`, uid)
-	return err
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return false, err
+	}
+	if _, err = s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE uid = ?`, uid); err != nil {
+		return false, err
+	}
+	if err := s.recordRevocation(uid, now); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SetEmailVerified marks a user's email verified (they consumed a verify/passwordless code).

@@ -31,10 +31,27 @@ type IdentityClaims struct {
 	Profile    map[string]any `json:"profile,omitempty"` // user-supplied signup fields — $auth.profile.X, NEVER authoritative
 	Claims     map[string]any `json:"claims,omitempty"`  // server/admin-set — $auth.claims.X, authoritative
 	Exp        int64          `json:"exp"`               // unix seconds
+	// The credential epoch the token was minted in (omitted for epoch 0). A token from an
+	// earlier epoch than the account's current one — disabled, deleted or reset since — is
+	// refused wherever it is presented.
+	Ce int64 `json:"ce,omitempty"`
+	// The token type: "id" for an identity token. The per-instance secret signs other kinds
+	// of token hosted (an MFA challenge, passkey ceremony state); each verifier accepts only
+	// its own type.
+	Typ string `json:"typ,omitempty"`
+	// Carried by the other token kinds, never by an identity token; read only to refuse one.
+	Purpose string `json:"purpose,omitempty"`
 }
 
-// SignIdentity mints an identity token.
+// untypedTokensExpireBy is the cutoff for identity tokens minted before `typ` existed: an
+// untyped token is accepted only if it expires by this moment (2026-11-01T00:00:00Z), as
+// hosted. After it, every identity token must carry typ "id".
+var untypedTokensExpireBy = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Unix()
+
+// SignIdentity mints an identity token, typed "id".
 func SignIdentity(c IdentityClaims, secret string) string {
+	c.Typ = "id"
+	c.Purpose = ""
 	payload, _ := json.Marshal(c)
 	return common.SignJWTPayload(payload, secret)
 }
@@ -62,6 +79,14 @@ func VerifyIdentity(token, secret string) *IdentityClaims {
 	}
 	var c IdentityClaims
 	if json.Unmarshal(raw, &c) != nil {
+		return nil
+	}
+	// Only an identity token: typ "id" and no purpose, or — minted before typ existed — no
+	// purpose and an expiry no later than the cutoff.
+	if c.Purpose != "" {
+		return nil
+	}
+	if c.Typ != "id" && (c.Typ != "" || c.Exp == 0 || c.Exp > untypedTokensExpireBy) {
 		return nil
 	}
 	if c.Iss == "" || c.Sub == "" || c.Identifier == "" {

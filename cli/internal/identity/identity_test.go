@@ -370,7 +370,7 @@ func TestSetClaimsBackfillsAnOlderAccount(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	// A user created while the form collected only an identifier has no claims.
-	u, err := s.CreateUser("old@example.com", "pw", nil, 1)
+	u, err := s.CreateUser("old@example.com", "pw", nil, 1, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -402,8 +402,8 @@ func TestMergeClaimsAllUsersBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	a, _ := s.CreateUser("a@example.com", "pw", nil, 1)
-	b, _ := s.CreateUser("b@example.com", "pw", nil, 1)
+	a, _ := s.CreateUser("a@example.com", "pw", nil, 1, false)
+	b, _ := s.CreateUser("b@example.com", "pw", nil, 1, false)
 	if _, err := s.SetClaims(a.UID, map[string]any{"role": "admin", "team": "x"}, 1); err != nil {
 		t.Fatalf("seed a: %v", err)
 	}

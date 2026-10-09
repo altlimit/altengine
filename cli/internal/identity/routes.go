@@ -25,7 +25,12 @@ import (
 //	POST /passwordless/start · /passwordless/verify
 //	POST /password/reset/start · /password/reset/verify
 
-const minPasswordLen = 8
+const (
+	minPasswordLen = 8
+	maxPasswordLen = 256
+	// The cap on every /v1/auth request body, as hosted: 413 past it.
+	maxAuthBodyBytes = 64 * 1024
+)
 
 // Handler serves the auth data plane.
 type Handler struct {
@@ -137,7 +142,7 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {
 		return common.PermissionDenied("public signup is disabled for this instance")
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	identifier, profile, err := collectSignup(cfg.Signup, body)
@@ -154,7 +159,9 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {
 	}
 	// Signup-collected fields go to `profile` (self-asserted); `claims` (authoritative,
 	// admin-set) starts empty — a user can never write it.
-	user, err := store.CreateUser(identifier, pwHash, profile, nowMS())
+	// Signing up under the verify gate marks the account, so re-enabling the gate later does
+	// not grandfather it in unverified.
+	user, err := store.CreateUser(identifier, pwHash, profile, nowMS(), cfg.RequireEmailVerification)
 	if err != nil {
 		return err
 	}
@@ -189,7 +196,7 @@ func (h *Handler) signin(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	identifier, idErr := normalizeBodyIdentifier(cfg, body)
@@ -242,7 +249,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	if body.RefreshToken == "" {
@@ -286,7 +293,7 @@ func (h *Handler) signout(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	if body.RefreshToken != "" {
@@ -305,7 +312,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	claims, err := requireIdentity(r, inst)
+	claims, err := requireIdentity(r, inst, store)
 	if err != nil {
 		return err
 	}
@@ -328,14 +335,14 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 // return 401` behaves the same in both places. Answering 401 here would surface as a
 // thrown binding error and send that code down its failure path instead.
 func (h *Handler) verifyToken(w http.ResponseWriter, r *http.Request) error {
-	inst, _, _, err := h.instance(r)
+	inst, _, store, err := h.instance(r)
 	if err != nil {
 		return err
 	}
 	var body struct {
 		Token string `json:"token"`
 	}
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	claims := VerifyIdentity(strings.TrimSpace(body.Token), inst.Secret)
@@ -343,10 +350,18 @@ func (h *Handler) verifyToken(w http.ResponseWriter, r *http.Request) error {
 		common.WriteJSON(w, 200, nil)
 		return nil
 	}
+	// The same answer the data plane gives: a disabled, deleted or reset account's token is
+	// not one a function should act on.
+	if dead, err := revoked(store, claims); err != nil {
+		return err
+	} else if dead {
+		common.WriteJSON(w, 200, nil)
+		return nil
+	}
 	// `uid` alongside `sub`: the token is signed with `sub` (it is the JWT subject), but
 	// every other auth binding takes a `uid`, so the one call that produces the value
 	// spelling it differently is a trap worth closing on both sides.
-	common.WriteJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"iss":        claims.Iss,
 		"sub":        claims.Sub,
 		"uid":        claims.Sub,
@@ -355,18 +370,29 @@ func (h *Handler) verifyToken(w http.ResponseWriter, r *http.Request) error {
 		"profile":    claims.Profile,
 		"claims":     claims.Claims,
 		"exp":        claims.Exp,
-	})
+		"typ":        claims.Typ,
+	}
+	if claims.Ce > 0 {
+		out["ce"] = claims.Ce
+	}
+	common.WriteJSON(w, 200, out)
 	return nil
 }
 
-// requireIdentity verifies the Bearer id_token against the addressed instance.
-func requireIdentity(r *http.Request, inst *control.Instance) (*IdentityClaims, error) {
+// requireIdentity verifies the Bearer id_token against the addressed instance, refusing one
+// whose account has since been disabled, deleted or reset.
+func requireIdentity(r *http.Request, inst *control.Instance, store *Store) (*IdentityClaims, error) {
 	h := strings.TrimSpace(r.Header.Get("Authorization"))
 	if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
 		return nil, common.Unauthenticated("missing bearer token")
 	}
 	claims := VerifyIdentity(strings.TrimSpace(h[7:]), inst.Secret)
 	if claims == nil || claims.Iss != inst.ID {
+		return nil, common.Unauthenticated("invalid or expired token")
+	}
+	if dead, err := revoked(store, claims); err != nil {
+		return nil, err
+	} else if dead {
 		return nil, common.Unauthenticated("invalid or expired token")
 	}
 	return claims, nil
@@ -440,7 +466,7 @@ func (h *Handler) passwordlessStart(w http.ResponseWriter, r *http.Request) erro
 		return common.PermissionDenied("passwordless sign-in is disabled")
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code := ""
@@ -462,7 +488,7 @@ func (h *Handler) passwordlessVerify(w http.ResponseWriter, r *http.Request) err
 		return common.PermissionDenied("passwordless sign-in is disabled")
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code, _ := body["code"].(string)
@@ -513,7 +539,7 @@ func (h *Handler) resetStart(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code := ""
@@ -532,14 +558,14 @@ func (h *Handler) resetVerify(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code, _ := body["code"].(string)
 	if strings.TrimSpace(code) == "" {
 		return common.BadRequest("code is required")
 	}
-	newPassword, err := validateNewPassword(body["new_password"]) // validate BEFORE burning the code
+	newPassword, err := validatePassword(body["new_password"]) // validate BEFORE burning the code
 	if err != nil {
 		return err
 	}
@@ -561,13 +587,23 @@ func (h *Handler) resetVerify(w http.ResponseWriter, r *http.Request) error {
 	if !ok {
 		return common.Unauthenticated("invalid or expired code")
 	}
+	// A disabled account cannot reset its way back in — the same answer the other verify
+	// routes give once the code is right. SetPassword refuses it too.
+	if user.Disabled {
+		return common.PermissionDenied("this account is disabled")
+	}
 	pwHash, err := HashPassword(newPassword)
 	if err != nil {
 		return err
 	}
-	// SetPassword also revokes every outstanding refresh token — the user re-authenticates.
-	if err := store.SetPassword(user.UID, pwHash, nowMS()); err != nil {
+	// SetPassword also starts a new credential epoch and revokes every outstanding refresh
+	// token — the user re-authenticates, and identity tokens already issued stop working.
+	changed, err := store.SetPassword(user.UID, pwHash, nowMS())
+	if err != nil {
 		return err
+	}
+	if !changed {
+		return common.PermissionDenied("this account is disabled")
 	}
 	common.WriteJSON(w, 200, map[string]any{"ok": true})
 	return nil
@@ -584,7 +620,7 @@ func (h *Handler) verifyStart(w http.ResponseWriter, r *http.Request) error {
 		return common.PermissionDenied("email verification is not enabled")
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code := ""
@@ -606,7 +642,7 @@ func (h *Handler) verifyConfirm(w http.ResponseWriter, r *http.Request) error {
 		return common.PermissionDenied("email verification is not enabled")
 	}
 	var body map[string]any
-	if err := common.ReadJSON(r, &body); err != nil {
+	if err := readAuthJSON(r, &body); err != nil {
 		return err
 	}
 	code, _ := body["code"].(string)
@@ -657,6 +693,7 @@ func (h *Handler) mintIDToken(inst *control.Instance, cfg Config, user *UserRow,
 		Identifier: user.Identifier,
 		Email:      cfg.Signup.DeriveEmail(user.Identifier, user.Profile),
 		Exp:        exp,
+		Ce:         user.CredEpoch,
 	}
 	// The token carries BOTH bags: profile (user-supplied, $auth.profile.X) and claims
 	// (server/admin-set, $auth.claims.X). The target data plane keeps them apart.
@@ -774,18 +811,36 @@ func normalizeBodyIdentifier(cfg Config, body map[string]any) (string, error) {
 	return NormalizeIdentifier(raw, cfg.Signup.IdentityType())
 }
 
+// validatePassword is the one rule for every path that sets a NEW password (signup, reset,
+// an agent-created account). Sign-in does not apply the maximum: an account made with a
+// longer password before it existed must still be able to sign in. Lengths are counted in
+// UTF-16 code units, as hosted.
 func validatePassword(v any) (string, error) {
 	s, ok := v.(string)
-	if !ok || len(s) < minPasswordLen {
+	n := utf16Len(s)
+	if !ok || n < minPasswordLen {
 		return "", common.BadRequest(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
+	}
+	if n > maxPasswordLen {
+		return "", common.BadRequest(fmt.Sprintf("password must be at most %d characters", maxPasswordLen))
 	}
 	return s, nil
 }
 
-func validateNewPassword(v any) (string, error) {
-	s, ok := v.(string)
-	if !ok || len(s) < minPasswordLen {
-		return "", common.BadRequest(fmt.Sprintf("new_password must be at least %d characters", minPasswordLen))
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2
+		} else {
+			n++
+		}
 	}
-	return s, nil
+	return n
+}
+
+// readAuthJSON reads an auth request body under the auth plane's cap. Every route here is
+// public and pre-auth, and the largest legitimate body is a few KB.
+func readAuthJSON(r *http.Request, v any) error {
+	return common.ReadJSONLimited(r, v, maxAuthBodyBytes)
 }

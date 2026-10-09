@@ -1,7 +1,9 @@
 package identity
 
 import (
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -62,6 +64,21 @@ type Service struct {
 
 // NewService builds the identity service.
 func NewService(reg *control.Registry, mgr *Manager, devOpen bool) *Service {
+	// Turning the email-verification gate on grandfathers the accounts that predate it, as
+	// hosted — only on the off→on transition, and never an account that signed up gated.
+	reg.OnConfigSaved("auth", func(in *control.Instance, before map[string]any) {
+		if !ParseConfig(in.Config()).RequireEmailVerification || ParseConfig(before).RequireEmailVerification {
+			return
+		}
+		store, err := mgr.Open(in.ID)
+		if err != nil {
+			log.Printf("[auth] grandfathering %s: %v", in.Name, err)
+			return
+		}
+		if _, err := store.GrandfatherVerified(time.Now().UnixMilli()); err != nil {
+			log.Printf("[auth] grandfathering %s: %v", in.Name, err)
+		}
+	})
 	return &Service{Reg: reg, Mgr: mgr, DevOpen: devOpen}
 }
 
@@ -81,6 +98,17 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 	}
 	claims := VerifyIdentity(token, inst.Secret)
 	if claims == nil || claims.Iss != inst.ID {
+		return nil, common.Unauthenticated("invalid or expired token")
+	}
+	// A valid signature is not a live account: one disabled, deleted or reset since this
+	// token was minted is refused here rather than for the rest of the token's TTL.
+	store, err := s.Mgr.Open(inst.ID)
+	if err != nil {
+		return nil, err
+	}
+	if dead, err := revoked(store, claims); err != nil {
+		return nil, err
+	} else if dead {
 		return nil, common.Unauthenticated("invalid or expired token")
 	}
 	cfg := ParseConfig(inst.Config())
@@ -103,6 +131,16 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 		Claims:         c,
 		Access:         cfg.Access,
 	}, nil
+}
+
+// revoked reports whether verified identity claims were revoked since they were minted: the
+// account was disabled, deleted or reset, moving it to a later credential epoch.
+func revoked(store *Store, c *IdentityClaims) (bool, error) {
+	epoch, ok, err := store.RevokedEpoch(c.Sub, time.Now().UnixMilli())
+	if err != nil || !ok {
+		return false, err
+	}
+	return c.Ce < epoch, nil
 }
 
 // ResolveRequest resolves a data-plane request to a caller. When the bearer credential is
