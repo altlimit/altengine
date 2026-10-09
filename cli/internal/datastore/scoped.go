@@ -371,9 +371,42 @@ func lookupField(doc map[string]any, field string) any {
 	return cur
 }
 
+// metaTypeMismatch reports whether f compares a meta selector with a value (or, for `in`, any
+// element) of a type other than its column's. SQL converts a filter value to the column's
+// affinity — `key` is TEXT, `created`/`updated` INTEGER, so `__key__ > 5` compares as text —
+// and the in-Go matcher does not, so such a filter could admit a row here that a query
+// refuses. It is denied instead.
+func metaTypeMismatch(f Filter) bool {
+	wantString := false
+	switch f.Field {
+	case "__key__":
+		wantString = true
+	case "__created__", "__updated__":
+	default:
+		return false
+	}
+	vals := []any{f.Value}
+	if arr, ok := f.Value.([]any); ok && f.Op == "in" {
+		vals = arr
+	}
+	for _, v := range vals {
+		if wantString {
+			if _, ok := v.(string); !ok {
+				return true
+			}
+		} else if _, ok := toNumber(v); !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // matchDoc reports whether a decoded document satisfies every filter.
 func matchDoc(doc map[string]any, key string, created, updated int64, filters []Filter) bool {
 	for _, f := range filters {
+		if metaTypeMismatch(f) {
+			return false
+		}
 		var actual any
 		switch f.Field {
 		case "__key__":
