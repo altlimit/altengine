@@ -392,40 +392,99 @@ func matchDoc(doc map[string]any, key string, created, updated int64, filters []
 	return true
 }
 
+// matchOne evaluates one filter as the SQL compiler's query would, so a rule admits the same
+// rows on a write or point read as on a query. Values are seen as SQLite sees them (booleans
+// are 1/0, an object or array is its JSON text, a missing value is NULL); two values of
+// different storage classes order by class — numbers before text — and text compares by
+// byte (UTF-8 code point) order. The one deliberate difference from SQL: `!=` admits a
+// missing field, where SQL's `<>` is NULL for it.
 func matchOne(actual any, op string, want any) bool {
+	eq := func(c int) bool { return c == 0 }
 	switch op {
 	case "=":
-		return valuesEqual(actual, want)
+		if want == nil {
+			return actual == nil
+		}
+		return sqlHolds(actual, want, eq)
 	case "!=":
-		return !valuesEqual(actual, want)
+		if want == nil {
+			return actual != nil
+		}
+		return !(actual != nil && sqlHolds(actual, want, eq))
 	case "in":
 		arr, ok := want.([]any)
 		if !ok {
 			return false
 		}
 		for _, v := range arr {
-			if valuesEqual(actual, v) {
+			if sqlHolds(actual, v, eq) {
 				return true
 			}
 		}
 		return false
-	case "<", "<=", ">", ">=":
-		c, ok := compareValues(actual, want)
-		if !ok {
-			return false
-		}
-		switch op {
-		case "<":
-			return c < 0
-		case "<=":
-			return c <= 0
-		case ">":
-			return c > 0
-		default:
-			return c >= 0
-		}
+	case "<":
+		return sqlHolds(actual, want, func(c int) bool { return c < 0 })
+	case "<=":
+		return sqlHolds(actual, want, func(c int) bool { return c <= 0 })
+	case ">":
+		return sqlHolds(actual, want, func(c int) bool { return c > 0 })
+	case ">=":
+		return sqlHolds(actual, want, func(c int) bool { return c >= 0 })
 	}
 	return false
+}
+
+// sqlValue is a value as SQLite sees it: a number (float64), text (string), or NULL (nil).
+func sqlValue(v any) any {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case bool:
+		if t {
+			return float64(1)
+		}
+		return float64(0)
+	case string:
+		return t
+	case map[string]any, []any:
+		b, err := encodeFaithful(map[string]any{"v": t})
+		if err != nil {
+			return nil
+		}
+		// encodeFaithful wraps in an object to share its no-HTML-escape encoder; unwrap.
+		return string(b[len(`{"v":`) : len(b)-1])
+	}
+	if n, ok := toNumber(v); ok {
+		return n
+	}
+	return nil
+}
+
+// sqlCompare is SQLite's comparison of two non-NULL values with no column affinity.
+func sqlCompare(a, b any) int {
+	an, aNum := a.(float64)
+	bn, bNum := b.(float64)
+	switch {
+	case aNum && bNum:
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		}
+		return 0
+	case aNum:
+		return -1 // numbers order before text
+	case bNum:
+		return 1
+	}
+	return strings.Compare(a.(string), b.(string)) // BINARY collation: UTF-8 byte order
+}
+
+// sqlHolds is `actual <op> want` as SQL evaluates it: false when either side is NULL.
+func sqlHolds(actual, want any, test func(int) bool) bool {
+	a, b := sqlValue(actual), sqlValue(want)
+	return a != nil && b != nil && test(sqlCompare(a, b))
 }
 
 func valuesEqual(a, b any) bool {
