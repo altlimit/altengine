@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/identity"
+	"github.com/gorilla/websocket"
 )
 
 // End-user identity tokens minting channel tokens: the mint is confined to the auth
@@ -211,5 +213,77 @@ func TestPerEndUserSocketCap(t *testing.T) {
 		if !c.subscribed["ch"] {
 			t.Fatal("an org-key socket was capped")
 		}
+	}
+}
+
+// A channel asked for and not admitted is named in the ack's `refused` — at open (a cap) and
+// on a subscribe frame (a cap, or not in the token) — instead of vanishing without a word.
+func TestSubscribedAckNamesRefused(t *testing.T) {
+	srv, authInst := newIdentityEnv(t)
+	alice := identityToken(authInst, "alice")
+	status, out := mint(t, srv, `{"channels":["posts.general","posts.other"]}`, alice)
+	if status != 200 {
+		t.Fatalf("mint -> %d: %v", status, out)
+	}
+	wsURL := strings.Replace(out["ws_url"].(string), "http://", "ws://", 1)
+	type ack struct {
+		Type     string   `json:"type"`
+		Channels []string `json:"channels"`
+		Refused  []string `json:"refused"`
+	}
+	read := func(ws *websocket.Conn) ack {
+		t.Helper()
+		var raw map[string]any
+		ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := ws.ReadJSON(&raw); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		b, _ := json.Marshal(raw)
+		var a ack
+		_ = json.Unmarshal(b, &a)
+		if a.Type != "subscribed" {
+			t.Fatalf("frame = %s", b)
+		}
+		if _, has := raw["refused"]; has && len(a.Refused) == 0 {
+			t.Fatalf("an empty refused list was sent: %s", b)
+		}
+		return a
+	}
+	dial := func(query string) *websocket.Conn {
+		t.Helper()
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL+query, nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		t.Cleanup(func() { ws.Close() })
+		return ws
+	}
+
+	// Fill alice's per-channel socket cap on posts.general.
+	for i := 0; i < maxConnectionsPerIdentity; i++ {
+		if a := read(dial("&channel=posts.general")); len(a.Refused) != 0 || len(a.Channels) != 1 {
+			t.Fatalf("socket %d under the cap: %+v", i+1, a)
+		}
+	}
+
+	// At open: the capped channel is refused, the other admitted.
+	ws := dial("")
+	a := read(ws)
+	if len(a.Channels) != 1 || a.Channels[0] != "posts.other" || len(a.Refused) != 1 || a.Refused[0] != "posts.general" {
+		t.Fatalf("open ack = %+v", a)
+	}
+
+	// On subscribe: a capped channel and one the token does not carry are refused; the
+	// already-subscribed one is not.
+	ws.WriteJSON(map[string]any{"type": "subscribe", "channels": []string{"posts.general", "posts.secret", "posts.other", "posts.secret"}})
+	a = read(ws)
+	if len(a.Channels) != 1 || len(a.Refused) != 2 || a.Refused[0] != "posts.general" || a.Refused[1] != "posts.secret" {
+		t.Fatalf("subscribe ack = %+v", a)
+	}
+
+	// An unsubscribe never carries refused.
+	ws.WriteJSON(map[string]any{"type": "unsubscribe", "channels": []string{"posts.other"}})
+	if a = read(ws); len(a.Channels) != 0 || len(a.Refused) != 0 {
+		t.Fatalf("unsubscribe ack = %+v", a)
 	}
 }

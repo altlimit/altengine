@@ -356,7 +356,9 @@ func (h *Handler) runConn(inst *control.Instance, c *conn, initial []string) {
 			h.Hub.broadcastPresence(inst.ID, ch, "join", c.presenceID, c)
 		}
 	}
-	c.send(subscribedFrame(c))
+	// A channel refused at open (a cap) would otherwise vanish without a word — the socket
+	// opens and simply never delivers. The ack names it in `refused`.
+	c.send(subscribedFrame(c, refusedOf(c, initial)))
 	defer h.cleanup(inst, c)
 
 	// A client frame is a small command; one far past the message cap is closed (1009) rather
@@ -409,7 +411,8 @@ func (h *Handler) handleFrame(inst *control.Instance, c *conn, msg []byte) {
 				}
 			}
 		}
-		c.send(subscribedFrame(c))
+		// `refused`: what this subscribe asked for and did not get (not authorized, or a cap).
+		c.send(subscribedFrame(c, refusedOf(c, cmd.Channels)))
 	case "unsubscribe":
 		for _, ch := range cmd.Channels {
 			if c.subscribed[ch] {
@@ -418,7 +421,7 @@ func (h *Handler) handleFrame(inst *control.Instance, c *conn, msg []byte) {
 				}
 			}
 		}
-		c.send(subscribedFrame(c))
+		c.send(subscribedFrame(c, nil))
 	}
 }
 
@@ -432,12 +435,32 @@ func (h *Handler) cleanup(inst *control.Instance, c *conn) {
 
 // --- helpers ---
 
-func subscribedFrame(c *conn) []byte {
+// subscribedFrame is the ack: the channels now subscribed, and — only when non-empty — the
+// ones asked for and refused.
+func subscribedFrame(c *conn, refused []string) []byte {
 	chans := make([]string, 0, len(c.subscribed))
 	for ch := range c.subscribed {
 		chans = append(chans, ch)
 	}
-	return mustJSON(map[string]any{"type": "subscribed", "channels": chans})
+	frame := map[string]any{"type": "subscribed", "channels": chans}
+	if len(refused) > 0 {
+		frame["refused"] = refused
+	}
+	return mustJSON(frame)
+}
+
+// refusedOf is each channel in asked (once, in order) that c is not subscribed to.
+func refusedOf(c *conn, asked []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, ch := range asked {
+		if seen[ch] || c.subscribed[ch] {
+			continue
+		}
+		seen[ch] = true
+		out = append(out, ch)
+	}
+	return out
 }
 
 func errorFrame(msg string) []byte {
