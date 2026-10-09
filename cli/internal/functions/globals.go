@@ -405,6 +405,12 @@ func installFetch(vm *goja.Runtime, in *invocation) error {
 		}
 
 		status, respHeader, respBody, err := doEgress(url, method, header, []byte(body), allowed, secrets)
+		if err != nil && len(allowed) > 0 && strings.HasPrefix(err.Error(), "outbound fetch blocked:") {
+			// As hosted: once the instance has an allowlist, a refusal does not throw — it
+			// resolves to a 403 the function can tell from the remote API's own by its code.
+			b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "EGRESS_BLOCKED", "message": err.Error()}})
+			return vm.ToValue(map[string]any{"status": 403, "headers": map[string]any{"content-type": "application/json"}, "body": string(b)})
+		}
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}

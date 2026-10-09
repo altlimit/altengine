@@ -64,7 +64,20 @@ func checkEgress(rawURL string, allowed []string) error {
 		strings.HasSuffix(host, ".internal") || strings.HasSuffix(host, ".local") {
 		return fmt.Errorf("outbound fetch blocked: '%s' is not a public hostname", host)
 	}
-	for _, entry := range allowed {
+	if hostInPatterns(host, allowed) {
+		return nil
+	}
+	if len(allowed) == 0 {
+		return fmt.Errorf("outbound fetch blocked: no outbound allowlist is configured for this instance")
+	}
+	return fmt.Errorf("outbound fetch blocked: '%s' is not in this instance's outbound allowlist", host)
+}
+
+// hostInPatterns reports whether host (lowercased, no trailing dot) matches one of patterns
+// in allowlist syntax. Shared by the allowlist and by a secret's host binding, so the two
+// can never disagree.
+func hostInPatterns(host string, patterns []string) bool {
+	for _, entry := range patterns {
 		e := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
 		if e == "" {
 			continue
@@ -74,40 +87,72 @@ func checkEgress(rawURL string, allowed []string) error {
 			// so a wildcard cannot quietly widen to the parent.
 			base := e[2:]
 			if host != base && strings.HasSuffix(host, "."+base) {
-				return nil
+				return true
 			}
 			continue
 		}
 		if host == e {
-			return nil
+			return true
 		}
 	}
-	if len(allowed) == 0 {
-		return fmt.Errorf("outbound fetch blocked: no outbound allowlist is configured for this instance")
-	}
-	return fmt.Errorf("outbound fetch blocked: '%s' is not in this instance's outbound allowlist", host)
+	return false
 }
 
-// expandSecrets substitutes {{NAME}} in headers and query VALUES.
+// errEgressRefused is a request that names a known secret somewhere it may not go. Its
+// message carries the secret's NAME and the rule, never the value.
+type errEgressRefused struct{ msg string }
+
+func (e *errEgressRefused) Error() string { return "outbound fetch blocked: " + e.msg }
+
+// expandSecrets substitutes {{NAME}} in headers, and in the one query parameter a secret
+// names for itself.
 //
-// Never the host, scheme or path, so an expansion cannot move the request to a different
-// origin than the one just approved. Single pass, so a secret whose value contains
-// {{OTHER}} is not re-expanded. Returns the header names written to and the values used,
-// both needed once a redirect appears.
-func expandSecrets(rawURL string, header http.Header, secrets map[string]string) (string, []string, []string) {
+// Where a value may go:
+//   - only to the secret's own Hosts (a secret stored before binding has none and keeps
+//     expanding into headers toward any allowlisted host until it is bound);
+//   - headers;
+//   - the query string ONLY in the parameter named by QueryParam — a query value is what an
+//     API quotes back in its error, and that error body goes to function code;
+//   - never the host, scheme, path or body.
+//
+// A placeholder for a known secret placed anywhere else refuses the whole request
+// (*errEgressRefused). Unknown placeholders are left alone. Single pass, so a secret whose
+// value contains {{OTHER}} is not re-expanded. Returns the header names written to and the
+// values used, both needed once a redirect appears.
+func expandSecrets(rawURL string, header http.Header, secrets map[string]Secret) (string, []string, []string, error) {
 	if len(secrets) == 0 {
-		return rawURL, nil, nil
+		return rawURL, nil, nil, nil
 	}
+	host := ""
+	u, perr := url.Parse(rawURL)
+	if perr == nil {
+		host = strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	}
+	toHost := func(name string, s Secret) error {
+		if s.Hosts != nil && !hostInPatterns(host, s.Hosts) {
+			return &errEgressRefused{fmt.Sprintf("secret '%s' may only be sent to %s, not '%s'", name, strings.Join(s.Hosts, ", "), host)}
+		}
+		return nil
+	}
+
 	used := map[string]bool{}
-	sub := func(s string) string {
+	var refusal error
+	sub := func(s string, permit func(string, Secret) error) string {
 		return placeholderRe.ReplaceAllStringFunc(s, func(m string) string {
 			name := placeholderRe.FindStringSubmatch(m)[1]
-			v, ok := secrets[name]
+			sec, ok := secrets[name]
 			if !ok {
 				return m // unknown placeholders are left alone, not an error
 			}
-			used[v] = true
-			return v
+			if refusal != nil {
+				return m
+			}
+			if err := permit(name, sec); err != nil {
+				refusal = err
+				return m
+			}
+			used[sec.Value] = true
+			return sec.Value
 		})
 	}
 
@@ -117,15 +162,18 @@ func expandSecrets(rawURL string, header http.Header, secrets map[string]string)
 			if !strings.Contains(v, "{{") {
 				continue
 			}
-			if n := sub(v); n != v {
+			if n := sub(v, toHost); n != v {
 				header[k][i] = n
 				touched = append(touched, strings.ToLower(k))
 			}
 		}
 	}
+	if refusal != nil {
+		return rawURL, nil, nil, refusal
+	}
 
 	out := rawURL
-	if u, err := url.Parse(rawURL); err == nil {
+	if perr == nil {
 		q := u.Query()
 		changed := false
 		for k, vals := range q {
@@ -133,11 +181,24 @@ func expandSecrets(rawURL string, header http.Header, secrets map[string]string)
 				if !strings.Contains(v, "{{") {
 					continue
 				}
-				if n := sub(v); n != v {
+				key := k
+				n := sub(v, func(name string, s Secret) error {
+					if s.QueryParam != key {
+						if s.QueryParam != "" {
+							return &errEgressRefused{fmt.Sprintf("secret '%s' may only be sent in a request header or the '%s' query parameter, not '%s'", name, s.QueryParam, key)}
+						}
+						return &errEgressRefused{fmt.Sprintf("secret '%s' may only be sent in a request header; to send it in a query parameter, name that parameter on the secret (queryParam)", name)}
+					}
+					return toHost(name, s)
+				})
+				if n != v {
 					q[k][i] = n
 					changed = true
 				}
 			}
+		}
+		if refusal != nil {
+			return rawURL, nil, nil, refusal
 		}
 		// Only rebuild when something changed: re-encoding normalizes the whole query,
 		// which breaks signature-sensitive APIs on requests that had no placeholder.
@@ -153,17 +214,20 @@ func expandSecrets(rawURL string, header http.Header, secrets map[string]string)
 			values = append(values, v)
 		}
 	}
-	return out, touched, values
+	return out, touched, values, nil
 }
 
 // doEgress performs the checked, expanded request, following redirects manually.
-func doEgress(rawURL, method string, header http.Header, body []byte, allowed []string, secrets map[string]string) (int, http.Header, []byte, error) {
+func doEgress(rawURL, method string, header http.Header, body []byte, allowed []string, secrets map[string]Secret) (int, http.Header, []byte, error) {
 	// Check BEFORE expanding: a blocked destination must never see a substituted value,
 	// not even in a request we then refuse to send.
 	if err := checkEgress(rawURL, allowed); err != nil {
 		return 0, nil, nil, err
 	}
-	current, secretHeaders, secretValues := expandSecrets(rawURL, header, secrets)
+	current, secretHeaders, secretValues, err := expandSecrets(rawURL, header, secrets)
+	if err != nil {
+		return 0, nil, nil, err
+	}
 	if err := checkEgress(current, allowed); err != nil {
 		return 0, nil, nil, err
 	}

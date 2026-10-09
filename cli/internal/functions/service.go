@@ -89,10 +89,21 @@ type Version struct {
 // Secret carries its exposure. Hosted, an `egress` secret exists ONLY inside the outbound
 // proxy and never enters the sandbox; the same split is enforced here so a function that
 // works locally is not relying on a value it will not be given in production.
+//
+// An egress secret also says where it may go: Hosts (allowlist syntax) and, optionally, the
+// one QueryParam it may be placed in. Hosts is nil only on a secret stored before binding
+// existed, which keeps expanding into headers toward any allowlisted host until it is bound.
 type Secret struct {
-	Value  string `json:"value"`
-	Egress bool   `json:"egress"`
+	Value      string   `json:"value"`
+	Egress     bool     `json:"egress"`
+	Hosts      []string `json:"hosts,omitempty"`
+	QueryParam string   `json:"queryParam,omitempty"`
 }
+
+// MaxSecretHosts caps the hosts one egress secret may name, as hosted.
+const MaxSecretHosts = 10
+
+var queryParamRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]{1,64}$`)
 
 // Config is the per-instance settings blob, mirroring the hosted `instance_config` rows.
 type Config struct {
@@ -217,19 +228,65 @@ func (c *Config) Find(name string) *Function {
 }
 
 // EnvSecrets are the values the sandbox may read as env.NAME.
-func (c *Config) EnvSecrets() map[string]string { return c.pick(false) }
-
-// EgressSecrets are the values only the outbound proxy may see, for {{NAME}} expansion.
-func (c *Config) EgressSecrets() map[string]string { return c.pick(true) }
-
-func (c *Config) pick(egress bool) map[string]string {
+func (c *Config) EnvSecrets() map[string]string {
 	out := map[string]string{}
 	for k, v := range c.Secrets {
-		if v.Egress == egress {
+		if !v.Egress {
 			out[k] = v.Value
 		}
 	}
 	return out
+}
+
+// EgressSecrets are the secrets only the outbound proxy may see, for {{NAME}} expansion,
+// with where each may be sent.
+func (c *Config) EgressSecrets() map[string]Secret {
+	out := map[string]Secret{}
+	for k, v := range c.Secrets {
+		if v.Egress {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// validateSecretHosts checks one secret's submitted hosts, in allowlist syntax.
+func validateSecretHosts(name string, raw json.RawMessage) ([]string, error) {
+	var in []any
+	if json.Unmarshal(raw, &in) != nil {
+		return nil, common.BadRequest(fmt.Sprintf("secret '%s' hosts: must be an array of hostnames", name))
+	}
+	out := []string{}
+	for _, e := range in {
+		s, ok := e.(string)
+		if !ok {
+			return nil, common.BadRequest(fmt.Sprintf("secret '%s' hosts: entries must be strings", name))
+		}
+		h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+		if h == "" {
+			continue
+		}
+		if strings.ContainsAny(h, "/:") {
+			return nil, common.BadRequest(fmt.Sprintf("secret '%s' hosts: entry '%s' must be a bare hostname, with no scheme, port or path", name, s))
+		}
+		if !hostRe.MatchString(h) {
+			return nil, common.BadRequest(fmt.Sprintf("secret '%s' hosts: entry '%s' is not a valid hostname", name, s))
+		}
+		dup := false
+		for _, o := range out {
+			dup = dup || o == h
+		}
+		if !dup {
+			out = append(out, h)
+		}
+	}
+	if len(out) == 0 {
+		return nil, common.BadRequest(fmt.Sprintf("secret '%s' hosts must name at least one host", name))
+	}
+	if len(out) > MaxSecretHosts {
+		return nil, common.BadRequest(fmt.Sprintf("secret '%s' may name at most %d hosts", name, MaxSecretHosts))
+	}
+	return out, nil
 }
 
 // DeployRequest is the body of POST /v1/functions/{instance}/deploy.
@@ -562,32 +619,70 @@ func (s *Store) SetSecrets(instanceID string, in map[string]json.RawMessage) (ma
 			continue
 		}
 		var obj struct {
-			Value  *string `json:"value"`
-			Egress *bool   `json:"egress"`
+			Value      *string         `json:"value"`
+			Egress     *bool           `json:"egress"`
+			Hosts      json.RawMessage `json:"hosts"`
+			QueryParam json.RawMessage `json:"queryParam"`
 		}
 		if json.Unmarshal(raw, &obj) != nil {
-			return nil, common.BadRequest(fmt.Sprintf("secret '%s' must be a string, or { value, egress }", name))
+			return nil, common.BadRequest(fmt.Sprintf("secret '%s' must be a string, or { value, egress, hosts }", name))
 		}
 		prev, had := cfg.Secrets[name]
+		var entry Secret
 		switch {
 		case obj.Value != nil:
-			eg := false
-			if obj.Egress != nil {
-				eg = *obj.Egress
-			}
-			out[name] = Secret{Value: *obj.Value, Egress: eg}
+			entry = Secret{Value: *obj.Value, Egress: obj.Egress != nil && *obj.Egress}
 		case had:
 			eg := prev.Egress
 			if obj.Egress != nil {
 				eg = *obj.Egress
 			}
-			out[name] = Secret{Value: prev.Value, Egress: eg}
+			entry = Secret{Value: prev.Value, Egress: eg}
 		default:
 			return nil, common.BadRequest(fmt.Sprintf("secret '%s' has no value and does not exist", name))
 		}
-		if len(out[name].Value) > MaxSecretSize {
+		if len(entry.Value) > MaxSecretSize {
 			return nil, common.BadRequest(fmt.Sprintf("secret '%s' exceeds %d bytes", name, MaxSecretSize))
 		}
+		hostsGiven := len(obj.Hosts) > 0
+		qpGiven := len(obj.QueryParam) > 0
+		if !entry.Egress {
+			if hostsGiven || qpGiven {
+				return nil, common.BadRequest(fmt.Sprintf("secret '%s' is exposed in env; hosts and queryParam apply only to egress secrets", name))
+			}
+		} else {
+			// Binding carries over like the value does: omitted means "as stored". Only a
+			// secret that was already egress-only before binding existed may stay unbound — a
+			// NEW egress secret (or one switching over from env) has to say where it may go.
+			wasEgress := had && prev.Egress
+			switch {
+			case hostsGiven:
+				hosts, err := validateSecretHosts(name, obj.Hosts)
+				if err != nil {
+					return nil, err
+				}
+				entry.Hosts = hosts
+			case wasEgress && prev.Hosts != nil:
+				entry.Hosts = prev.Hosts
+			case !wasEgress:
+				return nil, common.BadRequest(fmt.Sprintf(`secret '%s' is egress-only, so it must name the hosts it may be sent to, e.g. { value, egress: true, hosts: ["api.example.com"] }`, name))
+			}
+			if qpGiven {
+				if string(obj.QueryParam) != "null" {
+					var qp string
+					if json.Unmarshal(obj.QueryParam, &qp) != nil || !queryParamRe.MatchString(qp) {
+						return nil, common.BadRequest(fmt.Sprintf("secret '%s' queryParam must be a query parameter name like 'key', or null", name))
+					}
+					entry.QueryParam = qp
+				}
+			} else if wasEgress {
+				entry.QueryParam = prev.QueryParam
+			}
+			if entry.QueryParam != "" && entry.Hosts == nil {
+				return nil, common.BadRequest(fmt.Sprintf("secret '%s' must name its hosts before it can be sent in a query parameter", name))
+			}
+		}
+		out[name] = entry
 	}
 	cfg.Secrets = out
 	s.save()
@@ -625,7 +720,20 @@ func (c *Config) SecretNames() []map[string]any {
 	sort.Strings(names)
 	out := make([]map[string]any, 0, len(names))
 	for _, n := range names {
-		out = append(out, map[string]any{"name": n, "egress": c.Secrets[n].Egress})
+		s := c.Secrets[n]
+		if !s.Egress {
+			out = append(out, map[string]any{"name": n, "egress": false})
+			continue
+		}
+		// Egress only: where it may be sent, or null for a secret stored before binding.
+		var hosts, qp any
+		if s.Hosts != nil {
+			hosts = s.Hosts
+		}
+		if s.QueryParam != "" {
+			qp = s.QueryParam
+		}
+		out = append(out, map[string]any{"name": n, "egress": true, "hosts": hosts, "queryParam": qp})
 	}
 	return out
 }

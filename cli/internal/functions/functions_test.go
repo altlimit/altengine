@@ -3,6 +3,7 @@ package functions
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -199,7 +200,7 @@ func TestSecretExposureSplit(t *testing.T) {
 	mux := newTestServer(t)
 	body, _ := json.Marshal(map[string]any{"secrets": map[string]any{
 		"IN_ENV":    "visible",
-		"VIA_PROXY": map[string]any{"value": "hidden-value", "egress": true},
+		"VIA_PROXY": map[string]any{"value": "hidden-value", "egress": true, "hosts": []string{"api.example.com"}},
 	}})
 	req := httptest.NewRequest("PUT", "/v1/functions/main/secrets", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer dev")
@@ -386,12 +387,15 @@ func TestEgressChecks(t *testing.T) {
 }
 
 func TestExpandSecrets(t *testing.T) {
-	secrets := map[string]string{"TOKEN": "t0ken-value-long"}
+	secrets := map[string]Secret{"TOKEN": {Value: "t0ken-value-long", Egress: true, Hosts: []string{"api.example.com"}, QueryParam: "key"}}
 	h := http.Header{}
 	h.Set("Authorization", "Bearer {{TOKEN}}")
 	h.Set("X-Other", "{{UNKNOWN}}")
 
-	u, touched, values := expandSecrets("https://api.example.com/x?key={{TOKEN}}&q=1", h, secrets)
+	u, touched, values, err := expandSecrets("https://api.example.com/x?key={{TOKEN}}&q=1", h, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if h.Get("Authorization") != "Bearer t0ken-value-long" {
 		t.Fatalf("header not expanded: %q", h.Get("Authorization"))
 	}
@@ -411,7 +415,7 @@ func TestExpandSecrets(t *testing.T) {
 
 	// The host is never touched, so an expansion cannot move the request off the allowlist.
 	h2 := http.Header{}
-	u2, _, _ := expandSecrets("https://api.example.com/{{TOKEN}}", h2, secrets)
+	u2, _, _, _ := expandSecrets("https://api.example.com/{{TOKEN}}", h2, secrets)
 	if !strings.Contains(u2, "api.example.com") || strings.Contains(u2, "t0ken") {
 		t.Fatalf("path or host was expanded: %s", u2)
 	}
@@ -419,8 +423,129 @@ func TestExpandSecrets(t *testing.T) {
 	// No placeholder anywhere: the URL must come back byte-identical, since re-encoding
 	// would break a signature-sensitive API.
 	raw := "https://api.example.com/x?b=2&a=1&sig=%2Fx%2By"
-	if got, _, _ := expandSecrets(raw, http.Header{}, secrets); got != raw {
+	if got, _, _, _ := expandSecrets(raw, http.Header{}, secrets); got != raw {
 		t.Fatalf("URL rewritten with no placeholder:\n got %s\nwant %s", got, raw)
+	}
+}
+
+// An egress secret goes only to its own hosts, in headers, and in the query string only in
+// the parameter it names. Anywhere else the request is refused, naming the secret and never
+// its value.
+func TestExpandSecretsBinding(t *testing.T) {
+	const val = "sk_live_secret_value"
+	secrets := map[string]Secret{
+		"BOUND":   {Value: val, Egress: true, Hosts: []string{"api.stripe.com"}},
+		"QP":      {Value: val, Egress: true, Hosts: []string{"*.maps.example.com"}, QueryParam: "key"},
+		"UNBOUND": {Value: val, Egress: true}, // stored before binding existed
+	}
+	refused := func(rawURL, header string) string {
+		t.Helper()
+		h := http.Header{}
+		if header != "" {
+			h.Set("Authorization", header)
+		}
+		_, _, _, err := expandSecrets(rawURL, h, secrets)
+		if err == nil {
+			t.Fatalf("%s %q: expected a refusal", rawURL, header)
+		}
+		var re *errEgressRefused
+		if !errors.As(err, &re) || strings.Contains(err.Error(), val) {
+			t.Fatalf("refusal = %v", err)
+		}
+		if h.Get("Authorization") != header {
+			t.Fatalf("a refused request was still expanded: %q", h.Get("Authorization"))
+		}
+		return err.Error()
+	}
+	ok := func(rawURL, header string) string {
+		t.Helper()
+		h := http.Header{}
+		h.Set("Authorization", header)
+		u, _, _, err := expandSecrets(rawURL, h, secrets)
+		if err != nil {
+			t.Fatalf("%s %q: %v", rawURL, header, err)
+		}
+		return u + " " + h.Get("Authorization")
+	}
+
+	if got := ok("https://api.stripe.com/v1", "Bearer {{BOUND}}"); !strings.Contains(got, val) {
+		t.Fatalf("bound header not expanded: %s", got)
+	}
+	if msg := refused("https://evil.example.org/x", "Bearer {{BOUND}}"); !strings.Contains(msg, "secret 'BOUND' may only be sent to api.stripe.com, not 'evil.example.org'") {
+		t.Fatalf("msg = %s", msg)
+	}
+	// Query: never without queryParam, never in another parameter.
+	if msg := refused("https://api.stripe.com/v1?limit={{BOUND}}", ""); !strings.Contains(msg, "name that parameter on the secret (queryParam)") {
+		t.Fatalf("msg = %s", msg)
+	}
+	if msg := refused("https://a.maps.example.com/x?limit={{QP}}", ""); !strings.Contains(msg, "the 'key' query parameter, not 'limit'") {
+		t.Fatalf("msg = %s", msg)
+	}
+	// The named parameter, toward a host matching the wildcard (but not its apex).
+	if got := ok("https://a.maps.example.com/x?key={{QP}}", ""); !strings.Contains(got, "key="+val) {
+		t.Fatalf("query param not expanded: %s", got)
+	}
+	refused("https://maps.example.com/x?key={{QP}}", "")
+	// Unbound: headers toward any host, never the query string.
+	if got := ok("https://anything.example.net/", "Bearer {{UNBOUND}}"); !strings.Contains(got, val) {
+		t.Fatalf("unbound header not expanded: %s", got)
+	}
+	refused("https://anything.example.net/?key={{UNBOUND}}", "")
+}
+
+// Hosted, a refusal with an allowlist in place resolves to a 403 EGRESS_BLOCKED the
+// function can read, instead of throwing.
+func TestEgressSecretRefusalIs403(t *testing.T) {
+	mux := newTestServer(t)
+	for path, body := range map[string]string{
+		"/v1/functions/main/settings": `{"allowedHosts":["api.example.com"]}`,
+		"/v1/functions/main/secrets":  `{"secrets":{"TOKEN":{"value":"supersecretvalue","egress":true,"hosts":["api.example.com"]}}}`,
+	} {
+		req := httptest.NewRequest("PUT", path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer dev")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	deployFn(t, mux, "caller", `export default { async fetch() {
+		const r = await fetch("https://api.example.com/x?limit={{TOKEN}}");
+		return new Response(r.status + " " + await r.text());
+	} };`, nil)
+	body := invoke(t, mux, "/fn/main/caller").Body.String()
+	if !strings.HasPrefix(body, "403 ") || !strings.Contains(body, `"EGRESS_BLOCKED"`) ||
+		!strings.Contains(body, "secret 'TOKEN'") || strings.Contains(body, "supersecretvalue") {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestSecretBindingValidation(t *testing.T) {
+	s := memStore()
+	bad := map[string]string{
+		`{"value":"v","egress":true}`:                                              "must name the hosts",
+		`{"value":"v","egress":true,"hosts":[]}`:                                   "at least one host",
+		`{"value":"v","egress":true,"hosts":["https://a.com/x"]}`:                  "bare hostname",
+		`{"value":"v","hosts":["a.example.com"]}`:                                  "apply only to egress secrets",
+		`{"value":"v","egress":true,"hosts":["a.example.com"],"queryParam":"a b"}`: "queryParam must be",
+	}
+	for body, want := range bad {
+		_, err := s.SetSecrets("i1", raw(map[string]string{"K": body}))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err = %v, want %q", body, err, want)
+		}
+	}
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"value":"v","egress":true,"hosts":["A.example.com"],"queryParam":"key"}`})); err != nil {
+		t.Fatal(err)
+	}
+	// Omitting hosts/queryParam keeps them; the list reports them, never the value.
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"egress":true}`})); err != nil {
+		t.Fatal(err)
+	}
+	names := s.Config("i1").SecretNames()
+	b, _ := json.Marshal(names)
+	if string(b) != `[{"egress":true,"hosts":["a.example.com"],"name":"K","queryParam":"key"}]` {
+		t.Fatalf("names = %s", b)
 	}
 }
 
@@ -430,8 +555,8 @@ func TestSecretKeepExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Omitting the value keeps the stored one, so exposure can change without re-typing
-	// every credential — values are write-only.
-	if _, err := s.SetSecrets("i1", raw(map[string]string{"A": `{"egress":true}`})); err != nil {
+	// every credential — values are write-only. Switching to egress must name hosts.
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"A": `{"egress":true,"hosts":["api.example.com"]}`})); err != nil {
 		t.Fatal(err)
 	}
 	cfg := s.Config("i1")
