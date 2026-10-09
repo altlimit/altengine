@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -70,6 +72,62 @@ type LiveDoc struct {
 	Data json.RawMessage
 }
 
+// serialIDRetries is how many times a scoped put re-draws a serial id that landed on a taken
+// key before giving up.
+const serialIDRetries = 4
+
+// freeAutoKeyTx draws the key for a keyless scoped put. A `serial` id can land on a key
+// somebody wrote by hand, or one named elsewhere in the batch; a doc sent without a key is a
+// create, so it must neither overwrite that row nor be judged by its owner's update rule. It
+// takes the next id instead, up to serialIDRetries times, then *serialExhausted.
+func (s *Store) freeAutoKeyTx(tx *sql.Tx, collection string, named map[string]bool) (string, error) {
+	for round := 0; ; round++ {
+		key, err := s.genKeyTx(tx, collection)
+		if err != nil || (s.autoID != "serial" && s.autoID != "incrementing") {
+			return key, err
+		}
+		taken := named[key]
+		if !taken {
+			var one int
+			switch err := tx.QueryRow(`SELECT 1 FROM docs WHERE collection=? AND key=?`, collection, key).Scan(&one); err {
+			case nil:
+				taken = true
+			case sql.ErrNoRows:
+			default:
+				return "", err
+			}
+		}
+		if !taken {
+			return key, nil
+		}
+		if round == serialIDRetries {
+			last, _ := strconv.ParseInt(key, 10, 64)
+			return "", &serialExhausted{collection: collection, last: last}
+		}
+	}
+}
+
+// serialExhausted is a keyless scoped put whose serial draws all landed on taken keys. last is
+// the highest id drawn: the draws are spent even though the write is not, so the next put
+// starts past them instead of re-drawing the same taken run forever.
+type serialExhausted struct {
+	collection string
+	last       int64
+}
+
+func (e *serialExhausted) Error() string {
+	return "could not allocate a free document id in '" + e.collection + "' — retry, or supply keys"
+}
+
+// spendSerial persists a sequence advance a rolled-back write drew, outside that write.
+func (s *Store) spendSerial(e *serialExhausted) error {
+	_, err := s.db.Exec(
+		`INSERT INTO _dsseq(collection, next) VALUES(?, ?)
+		 ON CONFLICT(collection) DO UPDATE SET next = max(next, excluded.next)`,
+		e.collection, e.last)
+	return err
+}
+
 // PutScoped inserts or replaces documents under a create/update rule policy, returning the
 // committed keys and their final (post-stamp) bodies.
 func (s *Store) PutScoped(collection string, docs []PutDoc, create, update identity.WritePolicy) ([]string, []LiveDoc, error) {
@@ -89,6 +147,14 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 		return nil, nil, err
 	}
 	defer tx.Rollback()
+
+	// Keys this batch names itself: a serial id must not land on one, wherever it sits.
+	named := map[string]bool{}
+	for _, d := range docs {
+		if k, err := coerceKey(d.Key); err == nil && k != "" {
+			named[k] = true
+		}
+	}
 
 	keys := make([]string, 0, len(docs))
 	live := make([]LiveDoc, 0, len(docs))
@@ -164,7 +230,15 @@ func (s *Store) PutScoped(collection string, docs []PutDoc, create, update ident
 			}
 			applyStamp(doc, create.Stamp)
 			if key == "" {
-				if key, err = s.genKeyTx(tx, collection); err != nil {
+				if key, err = s.freeAutoKeyTx(tx, collection, named); err != nil {
+					var ex *serialExhausted
+					if errors.As(err, &ex) {
+						_ = tx.Rollback()
+						if err := s.spendSerial(ex); err != nil {
+							return nil, nil, err
+						}
+						return nil, nil, common.AlreadyExists(ex.Error())
+					}
 					return nil, nil, err
 				}
 			}

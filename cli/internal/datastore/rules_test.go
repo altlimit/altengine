@@ -377,3 +377,46 @@ func TestIdentityWithoutAccessToInstanceIsDenied(t *testing.T) {
 		t.Fatalf("no access entry -> %d: %v", status, out)
 	}
 }
+
+// A keyless put is a create. Under `serial` auto-id the drawn id can land on a key somebody
+// wrote by hand (or one named elsewhere in the batch); it must neither overwrite that row nor
+// be judged by its owner's update rule. The next id is taken instead, up to 4 re-draws.
+func TestScopedSerialIdSkipsTakenKeys(t *testing.T) {
+	e := newRuleEnv(t)
+	e.reg.SetConfig(e.reg.GetOrCreate("datastore", "appdb"), map[string]any{"autoId": "serial"})
+	alice, bob := e.token("alice", "Alice"), e.token("bob", "Bob")
+
+	if status, out := e.call(t, "/posts/documents", `{"documents":[{"key":"1","data":{"t":"a1"}},{"key":"2","data":{"t":"a2"}}]}`, alice); status != 200 {
+		t.Fatalf("alice put -> %d: %v", status, out)
+	}
+	status, out := e.call(t, "/posts/documents", `{"documents":[{"data":{"t":"b"}}]}`, bob)
+	if status != 200 || firstKey(t, out) != "3" {
+		t.Fatalf("bob keyless put -> %d: %v (want key 3)", status, out)
+	}
+	_, got := e.call(t, "/posts/documents/get", `{"keys":["1","2"]}`, alice)
+	for _, d := range got["documents"].([]any) {
+		if data := d.(map[string]any)["data"].(map[string]any); data["author_uid"] != "alice" {
+			t.Fatalf("a keyless put overwrote a hand-written row: %v", got)
+		}
+	}
+
+	// A key named LATER in the same batch is taken too.
+	status, out = e.call(t, "/posts/documents", `{"documents":[{"data":{"t":"k"}},{"key":"4","data":{"t":"n"}}]}`, bob)
+	if keys, _ := out["keys"].([]any); status != 200 || len(keys) != 2 || keys[0] != "5" || keys[1] != "4" {
+		t.Fatalf("batch -> %d: %v (want keys [5 4])", status, out)
+	}
+
+	// Five taken ids in a row exhaust the re-draws: 409, and nothing is written.
+	if status, out := e.call(t, "/posts/documents", `{"documents":[{"key":"6","data":{}},{"key":"7","data":{}},{"key":"8","data":{}},{"key":"9","data":{}},{"key":"10","data":{}}]}`, alice); status != 200 {
+		t.Fatalf("alice put -> %d: %v", status, out)
+	}
+	status, out = e.call(t, "/posts/documents", `{"documents":[{"data":{"t":"x"}}]}`, bob)
+	if apiErr, _ := out["error"].(map[string]any); status != 409 || apiErr["code"] != "ALREADY_EXISTS" {
+		t.Fatalf("exhausted keyless put -> %d: %v (want 409 ALREADY_EXISTS)", status, out)
+	}
+	// The next one draws past them.
+	status, out = e.call(t, "/posts/documents", `{"documents":[{"data":{"t":"y"}}]}`, bob)
+	if status != 200 || firstKey(t, out) != "11" {
+		t.Fatalf("keyless put after exhaustion -> %d: %v (want key 11)", status, out)
+	}
+}
