@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/common"
@@ -453,6 +455,48 @@ func (ix *Index) discoverFacets(s *Store, matchedSQL string, matchedArgs []any, 
 			fr.Values = append(fr.Values, FacetValue{Value: val, Count: c})
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Number facets: one [min, max) range + count per name, as hosted.
+	nq := fmt.Sprintf(`SELECT name, MIN(num_val), MAX(num_val), count(*) c FROM %s_facets
+		WHERE kind=2 AND doc_id IN (%s)`, ix.prefix, base)
+	nargs := append([]any{}, matchedArgs...)
+	if !discover && len(names) > 0 {
+		ph := make([]string, 0, len(names))
+		for n := range names {
+			ph = append(ph, "?")
+			nargs = append(nargs, n)
+		}
+		nq += " AND name IN (" + strings.Join(ph, ",") + ")"
+	}
+	nq += " GROUP BY name ORDER BY name"
+	nrows, err := s.db.Query(nq, nargs...)
+	if err != nil {
+		return nil, err
+	}
+	defer nrows.Close()
+	for nrows.Next() {
+		var name string
+		var lo, hi float64
+		var c int
+		if err := nrows.Scan(&name, &lo, &hi, &c); err != nil {
+			return nil, err
+		}
+		if byName[name] != nil {
+			continue
+		}
+		max := numberFacetMax(hi)
+		byName[name] = &FacetResult{Name: name, Type: "number", Values: []FacetValue{{
+			Value: jsNumber(lo) + "-" + jsNumber(hi), Count: c, Min: &lo, Max: &max,
+		}}}
+		orderNames = append(orderNames, name)
+	}
+	if err := nrows.Err(); err != nil {
+		return nil, err
+	}
+
 	var out []FacetResult
 	discoverLimit := req.FacetDiscover
 	for _, name := range orderNames {
@@ -465,6 +509,26 @@ func (ix *Index) discoverFacets(s *Store, matchedSQL string, matchedArgs []any, 
 		out = append(out, *byName[name])
 	}
 	return out, nil
+}
+
+// numberFacetMax is the `max` of a number facet's range: one past the top value. A
+// refinement is half-open [min, max), so max must sit strictly above the top value or
+// refining on the range drops every document AT it; hi+1 admits nothing the count did not.
+// Past 2^53 hi+1 == hi, so the next double is taken instead.
+func numberFacetMax(hi float64) float64 {
+	if hi+1 > hi {
+		return hi + 1
+	}
+	return math.Nextafter(hi, math.Inf(1))
+}
+
+// jsNumber formats a number the way the hosted service's runtime prints one.
+func jsNumber(f float64) string {
+	if a := math.Abs(f); a != 0 && (a >= 1e21 || a < 1e-6) {
+		s := strconv.FormatFloat(f, 'e', -1, 64)
+		return strings.Replace(strings.Replace(s, "e+0", "e+", 1), "e-0", "e-", 1)
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 func encodeSearchCursor(offset int) string {
