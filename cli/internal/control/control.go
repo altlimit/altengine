@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -319,6 +320,67 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 	return in, nil
 }
 
+// placedRegion names the services whose region is chosen when the instance is created and
+// cannot be changed afterwards — hosted, each such instance's data lives in one place, put
+// there at creation — and the config field that holds it. Locally a region changes nothing;
+// the rule is kept so a config that saves here saves there.
+var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region"}
+
+// RegionAtCreate reports whether service takes its region at creation (and only then).
+func RegionAtCreate(service string) bool { return placedRegion[service] != "" }
+
+// regionIn reads the region a service's config holds, "auto" when it holds none. Auth settings
+// may sit under `settings` or at the top level, read in that order.
+func regionIn(service string, cfg map[string]any) string {
+	v := cfg["region"]
+	if service == "auth" {
+		if s, ok := cfg["settings"].(map[string]any); ok {
+			if sv, ok := s["region"]; ok {
+				v = sv
+			}
+		}
+	}
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return "auto"
+}
+
+// CreatePlaced is Create with a region. Only a service that takes its region at creation
+// accepts one other than "auto"; every other service sets region through its config.
+func (r *Registry) CreatePlaced(service, name string, region any) (*Instance, error) {
+	reg := "auto"
+	if region != nil {
+		if err := common.CheckRegion(map[string]any{"region": region}); err != nil {
+			return nil, common.BadRequest("region must be one of: " + strings.Join(common.Regions, ", "))
+		}
+		reg = region.(string)
+	}
+	if reg != "auto" && !RegionAtCreate(service) {
+		return nil, common.BadRequest(fmt.Sprintf("region is not set at creation for %s — set it afterwards with patch_instance_config", service))
+	}
+	in, err := r.Create(service, name)
+	if err != nil || reg == "auto" {
+		return in, err
+	}
+	cfg := r.ConfigSnapshot(in)
+	if s, ok := cfg["settings"].(map[string]any); ok && service == "auth" {
+		ns := make(map[string]any, len(s)+1)
+		for k, v := range s {
+			ns[k] = v
+		}
+		ns["region"] = reg
+		cfg["settings"] = ns
+	} else {
+		cfg["region"] = reg
+	}
+	r.mu.Lock()
+	in.setConfig(cfg)
+	r.save()
+	r.mu.Unlock()
+	return in, nil
+}
+
 // SetConfig replaces an instance's config (shallow merge of provided keys). The merge is built
 // in a new map and swapped in: readers holding the old one keep a consistent snapshot.
 func (r *Registry) SetConfig(in *Instance, cfg map[string]any) {
@@ -405,6 +467,11 @@ func (r *Registry) ReplaceConfig(in *Instance, cfg map[string]any) error {
 	for _, check := range checks {
 		if err := check(next); err != nil {
 			return err
+		}
+	}
+	if field := placedRegion[in.Service]; field != "" {
+		if was := regionIn(in.Service, before); regionIn(in.Service, next) != was {
+			return common.BadRequest(fmt.Sprintf("%s is chosen when the instance is created and cannot be changed (it is '%s')", field, was))
 		}
 	}
 	r.mu.Lock()

@@ -107,6 +107,65 @@ func TestSaveConfigValidatesThenRunsHooks(t *testing.T) {
 	}
 }
 
+// An auth or blob instance's region is chosen at creation; any config write that would change
+// it — including a full replace that leaves it out — is refused.
+func TestRegionFixedAtCreate(t *testing.T) {
+	reg, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := reg.CreatePlaced("blob", "files", "weur")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.ReplaceConfig(b, map[string]any{"defaultPublic": true}); err == nil || !strings.Contains(err.Error(), "config.region") {
+		t.Fatalf("a replace dropping the region = %v", err)
+	}
+	if err := reg.ReplaceConfig(b, map[string]any{"region": "weur", "defaultPublic": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Auth: the region may sit under `settings` or at the top level.
+	a, err := reg.CreatePlaced("auth", "users", "apac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := reg.ConfigSnapshot(a)
+	delete(cfg, "region")
+	cfg["settings"] = map[string]any{"region": "apac"}
+	if err := reg.ReplaceConfig(a, cfg); err != nil {
+		t.Fatalf("moving the same region under settings: %v", err)
+	}
+	cfg["settings"] = map[string]any{"region": "enam"}
+	if err := reg.ReplaceConfig(a, cfg); err == nil || !strings.Contains(err.Error(), "settings.region") || !strings.Contains(err.Error(), "'apac'") {
+		t.Fatalf("an auth region change = %v", err)
+	}
+
+	// An instance created without one is "auto", and stays so.
+	plain := reg.GetOrCreate("auth", "plain")
+	if err := reg.SaveConfig(plain, map[string]any{"region": "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SaveConfig(plain, map[string]any{"region": "weur"}); err == nil {
+		t.Fatal("an auto instance was given a region afterwards")
+	}
+
+	// Other services: region only through config.
+	if _, err := reg.CreatePlaced("datastore", "db", "weur"); err == nil {
+		t.Fatal("a datastore region at create was accepted")
+	}
+	ds, err := reg.CreatePlaced("datastore", "db", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SaveConfig(ds, map[string]any{"region": "weur"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SaveConfig(ds, map[string]any{"region": "enam"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A registry file that does not parse must stop the emulator, not load as empty — the next save
 // would write the empty registry over it and orphan every instance's data.
 func TestNewRefusesCorruptRegistry(t *testing.T) {

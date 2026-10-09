@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
 )
 
@@ -354,6 +355,10 @@ func init() {
 			props: map[string]any{
 				"service": serviceEnum,
 				"name":    map[string]any{"type": "string", "description": "Unique within this service. Lowercase, descriptive, e.g. 'orders'."},
+				"region": map[string]any{
+					"type": "string", "enum": common.Regions,
+					"description": "auth and blob only: where the instance's data is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
+				},
 			},
 			annotations: writes,
 			run: func(h *Handler, _ *http.Request, args map[string]any) (any, error) {
@@ -365,11 +370,19 @@ func init() {
 				if name == "" {
 					return nil, fmt.Errorf("name is required")
 				}
-				in, err := h.reg.Create(service, name)
+				in, err := h.reg.CreatePlaced(service, name, args["region"])
 				if err != nil {
 					return nil, err
 				}
-				return map[string]any{"service": service, "id": in.ID, "name": in.Name, "created_at": in.CreatedAt}, nil
+				out := map[string]any{"service": service, "id": in.ID, "name": in.Name, "created_at": in.CreatedAt}
+				if control.RegionAtCreate(service) {
+					region, _ := args["region"].(string)
+					if region == "" {
+						region = "auto"
+					}
+					out["region"] = region
+				}
+				return out, nil
 			},
 		},
 
@@ -404,6 +417,7 @@ func init() {
 			name:  "patch_instance_config",
 			title: "Update instance config",
 			description: "Merge changes into an instance's configuration. Send ONLY the top-level fields you want to change; everything else is preserved. " +
+				"The region of an auth or blob instance is fixed at creation and cannot be patched. " +
 				"Returns the fields that actually changed. Read get_instance_config first if you need to see the current shape.",
 			required: []string{"service", "instance", "changes"},
 			props: map[string]any{

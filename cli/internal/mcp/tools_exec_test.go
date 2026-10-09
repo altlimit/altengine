@@ -311,6 +311,51 @@ func mustCreate(t *testing.T, h *Handler, service, name string) {
 	runTool(t, h, "create_instance", map[string]any{"service": service, "name": name})
 }
 
+// Auth and blob take their region at creation and never after; every other service sets it
+// through config, so create_instance refuses one for them.
+func TestCreateInstanceRegion(t *testing.T) {
+	h := newLiveHandler(t)
+
+	out := runTool(t, h, "create_instance", map[string]any{"service": "blob", "name": "files", "region": "weur"})
+	if out["region"] != "weur" {
+		t.Fatalf("create = %v", out)
+	}
+	cfg := runTool(t, h, "get_instance_config", map[string]any{"service": "blob", "instance": "files"})["config"].(map[string]any)
+	if cfg["region"] != "weur" {
+		t.Fatalf("config = %v", cfg)
+	}
+	if text, isErr := toolText(t, h, "patch_instance_config", map[string]any{
+		"service": "blob", "instance": "files", "changes": map[string]any{"region": "enam"},
+	}); !isErr || !strings.Contains(text, "cannot be changed") {
+		t.Fatalf("a region patch was not refused: %s", text)
+	}
+	// Any other change keeps the region and saves.
+	runTool(t, h, "patch_instance_config", map[string]any{"service": "blob", "instance": "files", "changes": map[string]any{"defaultPublic": true}})
+
+	if out := runTool(t, h, "create_instance", map[string]any{"service": "auth", "name": "users", "region": "apac"}); out["region"] != "apac" {
+		t.Fatalf("auth create = %v", out)
+	}
+	if out := runTool(t, h, "create_instance", map[string]any{"service": "auth", "name": "people"}); out["region"] != "auto" {
+		t.Fatalf("auth create without a region = %v", out)
+	}
+	// From auto to a region is a change too.
+	if _, isErr := toolText(t, h, "patch_instance_config", map[string]any{
+		"service": "auth", "instance": "people", "changes": map[string]any{"region": "weur"},
+	}); !isErr {
+		t.Fatal("an auto auth instance was moved to a region")
+	}
+
+	if text, isErr := toolText(t, h, "create_instance", map[string]any{"service": "datastore", "name": "db", "region": "weur"}); !isErr || !strings.Contains(text, "patch_instance_config") {
+		t.Fatalf("a datastore region at create was accepted: %s", text)
+	}
+	if _, isErr := toolText(t, h, "create_instance", map[string]any{"service": "blob", "name": "bad", "region": "mars"}); !isErr {
+		t.Fatal("an unknown region was accepted")
+	}
+	// Datastore still takes its region through config.
+	runTool(t, h, "create_instance", map[string]any{"service": "datastore", "name": "db"})
+	runTool(t, h, "patch_instance_config", map[string]any{"service": "datastore", "instance": "db", "changes": map[string]any{"region": "weur"}})
+}
+
 // The six tools that closed the see-but-cannot-reach gaps. Registered is not the same as
 // working: the parity test only checks NAMES, and a tool whose path or body is wrong passes it
 // while failing every real call. So each one is actually executed against a live data plane.

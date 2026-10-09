@@ -24,7 +24,8 @@ func (h *Handler) listInstances(w http.ResponseWriter, service string) error {
 
 func (h *Handler) createInstance(w http.ResponseWriter, r *http.Request, service string) error {
 	var body struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Region any    `json:"region"`
 	}
 	if err := common.ReadJSON(r, &body); err != nil {
 		return err
@@ -32,7 +33,15 @@ func (h *Handler) createInstance(w http.ResponseWriter, r *http.Request, service
 	if body.Name == "" {
 		return common.BadRequest("name is required")
 	}
-	in, err := h.Reg.Create(service, body.Name)
+	// Auth and blob take their region here or never; every other service sets it through its
+	// config, so a region on their create is ignored, as hosted.
+	var in *control.Instance
+	var err error
+	if control.RegionAtCreate(service) {
+		in, err = h.Reg.CreatePlaced(service, body.Name, body.Region)
+	} else {
+		in, err = h.Reg.Create(service, body.Name)
+	}
 	if err != nil {
 		return err
 	}
