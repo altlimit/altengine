@@ -119,3 +119,97 @@ func TestIdentityTokenMayNotPublishOverHTTP(t *testing.T) {
 		t.Fatalf("identity publish -> %d (want 403)", resp.StatusCode)
 	}
 }
+
+// An end user's channel token lives no longer than the identity token it was minted from,
+// names the account (aui/sub/ce), and is refused at subscribe once the account is revoked.
+func TestEndUserChannelTokenEndsWithTheAccount(t *testing.T) {
+	reg, _ := control.New("")
+	mgr := identity.NewManager("")
+	idSvc := identity.NewService(reg, mgr, true)
+	mux := http.NewServeMux()
+	NewHandler(reg, auth.NewStore(true), NewHub()).WithIdentity(idSvc).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	authInst := reg.GetOrCreate("auth", "appauth")
+	reg.SetConfig(authInst, map[string]any{"access": map[string]any{
+		"channel:chat": map[string]any{"level": "read", "channels": []any{"posts.*"}},
+	}})
+	store, err := mgr.Open(authInst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := store.CreateUser("carol@example.com", "x", nil, time.Now().UnixMilli(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idExp := time.Now().Unix() + 600
+	idTok := identity.SignIdentity(identity.IdentityClaims{
+		Iss: authInst.ID, Sub: u.UID, Identifier: "carol@example.com", Exp: idExp,
+	}, authInst.Secret)
+
+	status, out := mint(t, srv, `{"channels":["posts.general"],"ttl_seconds":3600}`, idTok)
+	if status != 200 {
+		t.Fatalf("mint -> %d %v", status, out)
+	}
+	if out["expires_at"] != float64(idExp) {
+		t.Fatalf("expires_at = %v, want the identity token's %d", out["expires_at"], idExp)
+	}
+	tok := out["token"].(string)
+	c := PeekClaims(tok)
+	if c.Exp != idExp || c.Aui != authInst.ID || c.Sub != u.UID || c.Ce == nil || *c.Ce != 0 {
+		t.Fatalf("claims = %+v", c)
+	}
+
+	subscribe := func() int {
+		req, _ := http.NewRequest("GET", srv.URL+"/v1/channel/chat/subscribe?token="+tok, nil)
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Connection", "Upgrade")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if s := subscribe(); s == 401 {
+		t.Fatalf("a live account's token was refused")
+	}
+	if _, err := store.SetDisabled(u.UID, true, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if s := subscribe(); s != 401 {
+		t.Fatalf("subscribe after disable -> %d, want 401", s)
+	}
+}
+
+// One end user holds at most 20 sockets on a channel; org-key sockets are not capped by it.
+func TestPerEndUserSocketCap(t *testing.T) {
+	h := NewHub()
+	newConn := func(uid string) *conn { return &conn{uid: uid, subscribed: map[string]bool{}} }
+	for i := 0; i < maxConnectionsPerIdentity; i++ {
+		c := newConn("u1")
+		h.join("i", "ch", c)
+		if !c.subscribed["ch"] {
+			t.Fatalf("socket %d was refused under the cap", i+1)
+		}
+	}
+	over := newConn("u1")
+	h.join("i", "ch", over)
+	if over.subscribed["ch"] {
+		t.Fatal("a 21st socket for one end user was admitted")
+	}
+	other := newConn("u2")
+	h.join("i", "ch", other)
+	elsewhere := newConn("u1")
+	h.join("i", "other", elsewhere)
+	if !other.subscribed["ch"] || !elsewhere.subscribed["other"] {
+		t.Fatal("the cap leaked to another user or another channel")
+	}
+	for i := 0; i < maxConnectionsPerIdentity+5; i++ {
+		c := newConn("")
+		h.join("i", "ch", c)
+		if !c.subscribed["ch"] {
+			t.Fatal("an org-key socket was capped")
+		}
+	}
+}

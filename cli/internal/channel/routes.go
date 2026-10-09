@@ -127,12 +127,20 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	claims := Claims{Iss: inst.ID, Channels: channels, Exp: exp, Pub: pub, Pid: pid}
 	if user != nil {
 		// The presence identity is FORCED to the end user's uid — a client minting its own
 		// token must not be able to claim someone else's roster identity.
-		pid = user.UID
+		claims.Pid = user.UID
+		// Derived from the identity token, so it lives no longer than that token, and it
+		// names the account so a revocation reaches the socket too.
+		if user.Exp > 0 && user.Exp < claims.Exp {
+			claims.Exp = user.Exp
+			exp = user.Exp
+		}
+		ce := user.Ce
+		claims.Aui, claims.Sub, claims.Ce = user.AuthInstanceID, user.UID, &ce
 	}
-	claims := Claims{Iss: inst.ID, Channels: channels, Exp: exp, Pub: pub, Pid: pid}
 	token := SignJWT(claims, inst.Secret)
 
 	scheme := "ws"
@@ -145,8 +153,8 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 		"token": token, "expires_at": exp, "channels": channels,
 		"publish": pubOrFalse(pub), "ws_url": wsURL,
 	}
-	if pid != "" {
-		resp["presence_id"] = pid
+	if claims.Pid != "" {
+		resp["presence_id"] = claims.Pid
 	}
 	common.WriteJSON(w, 200, resp)
 	return nil
@@ -281,6 +289,22 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) error {
 	if claims == nil {
 		return common.Unauthenticated("invalid or expired token")
 	}
+	// An end user's token is refused once their account is revoked (disabled, deleted,
+	// reset). An open socket still runs to the token's exp, which is capped at the identity
+	// token's.
+	if claims.Aui != "" && claims.Sub != "" && h.Ident != nil {
+		var ce int64
+		if claims.Ce != nil {
+			ce = *claims.Ce
+		}
+		dead, err := h.Ident.IsRevoked(claims.Aui, claims.Sub, ce)
+		if err != nil {
+			return err
+		}
+		if dead {
+			return common.Unauthenticated("invalid or expired token")
+		}
+	}
 
 	// Initial channel selection: subset via ?channel=/?channels=, else all in the token.
 	requested := r.URL.Query()["channel"]
@@ -318,7 +342,7 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) error {
 	c := &conn{
 		id: common.UUID(), ws: ws,
 		allowed: sliceToSet(claims.Channels), subscribed: map[string]bool{},
-		pub: claims.Pub, presenceID: pid, exp: claims.Exp,
+		pub: claims.Pub, presenceID: pid, uid: claims.Sub, exp: claims.Exp,
 	}
 	h.runConn(inst, c, requested)
 	return nil

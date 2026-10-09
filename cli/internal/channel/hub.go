@@ -27,8 +27,13 @@ type conn struct {
 	subscribed map[string]bool
 	pub        string // "", http, ws, all
 	presenceID string
+	uid        string // the end user behind an identity-token mint ("" = org-key token)
 	exp        int64
 }
+
+// maxConnectionsPerIdentity is how many sockets one end user (a token minted from an
+// identity token) may hold on one channel. Org-key tokens are the app's own and not capped.
+const maxConnectionsPerIdentity = 20
 
 func (c *conn) send(msg []byte) bool {
 	c.writeMu.Lock()
@@ -56,12 +61,25 @@ func NewHub() *Hub { return &Hub{rooms: map[string]*room{}} }
 func roomKey(instanceID, channel string) string { return instanceID + ":" + channel }
 
 // join subscribes a connection to a channel; returns whether presence went 0->1 for
-// this member identity in the channel.
+// this member identity in the channel. A connection whose end user already holds
+// maxConnectionsPerIdentity sockets on the channel is not admitted: it stays unsubscribed,
+// which the subscribed frame reports.
 func (h *Hub) join(instanceID, channel string, c *conn) (firstForMember bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	key := roomKey(instanceID, channel)
 	r := h.rooms[key]
+	if c.uid != "" && r != nil && !r.conns[c] {
+		n := 0
+		for o := range r.conns {
+			if o.uid == c.uid {
+				n++
+			}
+		}
+		if n >= maxConnectionsPerIdentity {
+			return false
+		}
+	}
 	if r == nil {
 		r = &room{conns: map[*conn]bool{}}
 		h.rooms[key] = r

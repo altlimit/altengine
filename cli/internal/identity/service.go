@@ -38,6 +38,10 @@ type EndUser struct {
 	// read as `$auth.claims.X`, safe to authorize on.
 	Profile map[string]any
 	Claims  map[string]any
+	// The identity token's expiry (unix seconds) and credential epoch — what a credential
+	// derived from it (a channel subscriber token) must not outlive, and is revoked with.
+	Exp int64
+	Ce  int64
 	// The issuing instance's `access` config, carried so the rule engine reads the
 	// per-target rules without a second lookup.
 	Access AccessConfig
@@ -129,8 +133,24 @@ func (s *Service) ResolveToken(token string) (*EndUser, error) {
 		HasEmail:       claims.Email != "",
 		Profile:        p,
 		Claims:         c,
+		Exp:            claims.Exp,
+		Ce:             claims.Ce,
 		Access:         cfg.Access,
 	}, nil
+}
+
+// IsRevoked reports whether a credential derived from an identity token — minted for uid by
+// the auth instance authInstanceID, in credential epoch ce — has since been revoked. A
+// channel subscriber token minted for an end user is the case it exists for.
+func (s *Service) IsRevoked(authInstanceID, uid string, ce int64) (bool, error) {
+	if s.Reg.GetByID("auth", authInstanceID) == nil {
+		return true, nil
+	}
+	store, err := s.Mgr.Open(authInstanceID)
+	if err != nil {
+		return false, err
+	}
+	return revoked(store, &IdentityClaims{Sub: uid, Ce: ce})
 }
 
 // revoked reports whether verified identity claims were revoked since they were minted: the

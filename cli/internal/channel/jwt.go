@@ -14,6 +14,13 @@ type Claims struct {
 	Exp      int64    `json:"exp"` // unix seconds
 	Pub      string   `json:"pub,omitempty"`
 	Pid      string   `json:"pid,omitempty"`
+	// Minted for an END USER (from an identity token): the issuing auth instance, the user
+	// and the credential epoch, so the socket is refused once that account is disabled,
+	// deleted or reset. `sub` is also what one user's sockets per channel are capped by. All
+	// three are absent on org-key tokens.
+	Aui string `json:"aui,omitempty"`
+	Sub string `json:"sub,omitempty"`
+	Ce  *int64 `json:"ce,omitempty"`
 }
 
 // SignJWT produces an HS256 token.
