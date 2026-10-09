@@ -7,6 +7,7 @@ package functions
 // overlap guard.
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -151,5 +152,77 @@ func TestSchedulerIgnoresUnscheduledFunctions(t *testing.T) {
 	h.sched.mu.Unlock()
 	if n != 0 {
 		t.Errorf("an unscheduled function should not enter the due-set, got %d", n)
+	}
+}
+
+// A scheduled run that outlives its timeout is recorded as "timeout" and its lease is
+// released, so one slow function cannot hold its schedule indefinitely.
+func TestSchedulerRunTimeout(t *testing.T) {
+	h, in := schedHandler(t)
+	deploySched(t, h, in, `export default { async fetch() {
+		const end = Date.now() + 300; while (Date.now() < end) {}
+		return new Response("late");
+	} };`, "* * * * *")
+	h.sched.mu.Lock()
+	h.sched.runTimeout = 20 * time.Millisecond
+	h.sched.mu.Unlock()
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	h.runDue(t.Context(), t0)
+	h.runDue(t.Context(), t0.Add(time.Minute))
+	time.Sleep(150 * time.Millisecond) // well past the timeout, well short of the run
+	h.sched.mu.Lock()
+	status := h.sched.lastStatus[fnKey(in.ID, "job")]
+	running := h.sched.running[fnKey(in.ID, "job")]
+	h.sched.mu.Unlock()
+	if status != "timeout" || running {
+		t.Fatalf("lastStatus = %q, running = %v; want timeout and the lease released", status, running)
+	}
+}
+
+// One tick starts at most 25 of an organization's due jobs, most overdue first; the rest
+// stay due and unclaimed for the next tick instead of being advanced unrun.
+func TestSchedulerPerTickCap(t *testing.T) {
+	h, in := schedHandler(t)
+	const n = maxRunsPerOrgPerTick + 5
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("job%02d", i)
+		if _, err := h.store.Deploy(in.ID, DeployRequest{Name: name, Code: counterFn, Schedules: []byte(`["* * * * *"]`)}, DefaultKeepVersions); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	h.runDue(t.Context(), t0) // first sighting seeds every next-run
+	// Make five of them the most overdue: they must be among those started.
+	h.sched.mu.Lock()
+	for i := 0; i < 5; i++ {
+		h.sched.next[fnKey(in.ID, fmt.Sprintf("job%02d", n-1-i))] = t0.Add(-time.Hour)
+	}
+	h.sched.mu.Unlock()
+
+	tick := t0.Add(time.Minute)
+	h.runDue(t.Context(), tick)
+	settle(t, h)
+
+	h.sched.mu.Lock()
+	defer h.sched.mu.Unlock()
+	advanced := 0
+	for i := 0; i < n; i++ {
+		key := fnKey(in.ID, fmt.Sprintf("job%02d", i))
+		if h.sched.next[key].After(tick) {
+			advanced++
+			if h.sched.lastStatus[key] != "http:200" {
+				t.Errorf("%s lastStatus = %q", key, h.sched.lastStatus[key])
+			}
+		} else if h.sched.lastStatus[key] != "" {
+			t.Errorf("%s was not advanced but has a status %q", key, h.sched.lastStatus[key])
+		}
+	}
+	if advanced != maxRunsPerOrgPerTick {
+		t.Fatalf("started %d jobs in one tick, want %d", advanced, maxRunsPerOrgPerTick)
+	}
+	for i := 0; i < 5; i++ {
+		if key := fnKey(in.ID, fmt.Sprintf("job%02d", n-1-i)); !h.sched.next[key].After(tick) {
+			t.Errorf("most overdue %s was passed over", key)
+		}
 	}
 }
