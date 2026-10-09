@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -425,6 +426,41 @@ func TestExpandSecrets(t *testing.T) {
 	raw := "https://api.example.com/x?b=2&a=1&sig=%2Fx%2By"
 	if got, _, _, _ := expandSecrets(raw, http.Header{}, secrets); got != raw {
 		t.Fatalf("URL rewritten with no placeholder:\n got %s\nwant %s", got, raw)
+	}
+}
+
+// A redirect whose target carries a secret we just sent is refused however it is encoded.
+func TestNextHopRefusesEncodedSecret(t *testing.T) {
+	const cur = "https://api.example.com/a/b"
+	if got, err := nextHop("/next", cur, nil); err != nil || got != "https://api.example.com/next" {
+		t.Fatalf("relative: %q %v", got, err)
+	}
+	const secret = "sk_live_secret_value"
+	if _, err := nextHop("https://other.example.com/cb?k="+secret, cur, []string{secret}); err == nil {
+		t.Fatal("raw secret in Location was followed")
+	}
+	v := "ab+cd/ef gh=="
+	form := url.Values{"k": {v}}.Encode() // k=ab%2Bcd%2Fef+gh%3D%3D
+	for _, loc := range []string{
+		"https://o.example.com/cb?k=" + url.QueryEscape(v),
+		"https://o.example.com/cb?k=" + url.PathEscape(v),
+		"https://o.example.com/cb?" + form,
+		"https://o.example.com/cb?k=" + url.QueryEscape(url.QueryEscape(v)),
+		"https://o.example.com/cb?k=" + strings.ReplaceAll(url.PathEscape(url.PathEscape(v)), "%", "%25"),
+	} {
+		if _, err := nextHop(loc, cur, []string{v}); err == nil || !strings.Contains(err.Error(), "carry a secret") {
+			t.Fatalf("%s: err = %v", loc, err)
+		}
+	}
+	// A stray `%` neither fails the check nor waves everything through.
+	if _, err := nextHop("https://o.example.com/cb?p=100%", cur, []string{v}); err != nil {
+		t.Fatalf("stray percent: %v", err)
+	}
+	if _, err := nextHop("https://other.example.com/cb", cur, []string{secret}); err != nil {
+		t.Fatalf("ordinary redirect: %v", err)
+	}
+	if _, err := nextHop("http://[bad", cur, nil); err == nil {
+		t.Fatal("malformed Location was followed")
 	}
 }
 

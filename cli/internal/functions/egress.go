@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const maxRedirects = 3
@@ -256,18 +257,9 @@ func doEgress(rawURL, method string, header http.Header, body []byte, allowed []
 			return 0, nil, nil, fmt.Errorf("outbound fetch blocked: too many redirects")
 		}
 
-		base, _ := url.Parse(current)
-		nextURL, err := base.Parse(loc)
+		next, err := nextHop(loc, current, secretValues)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("outbound fetch blocked: redirect to an invalid URL")
-		}
-		next := nextURL.String()
-		// A host we just sent a secret to can answer with a Location containing it, and
-		// the next hop is a different origin. Refuse rather than sanitize.
-		for _, v := range secretValues {
-			if strings.Contains(next, v) {
-				return 0, nil, nil, fmt.Errorf("outbound fetch blocked: redirect target would carry a secret to another host")
-			}
+			return 0, nil, nil, err
 		}
 		if err := checkEgress(next, allowed); err != nil {
 			return 0, nil, nil, err
@@ -277,6 +269,72 @@ func doEgress(rawURL, method string, header http.Header, body []byte, allowed []
 		method, body, current = http.MethodGet, nil, next
 		header = stripSensitive(header, secretHeaders)
 	}
+}
+
+// nextHop resolves a Location into the next request URL, or refuses it.
+//
+// A host we just sent a secret to can answer with a Location that CONTAINS it, and the next
+// hop is a different origin. Refuse rather than sanitize. The match runs against the decoded
+// URL too: a value with `+`, `/` or `=` in it arrives percent-encoded (`sk%2Bab%3D`), possibly
+// form-encoded or encoded twice, and a raw comparison never sees it.
+func nextHop(loc, current string, secretValues []string) (string, error) {
+	base, err := url.Parse(current)
+	if err != nil {
+		return "", fmt.Errorf("outbound fetch blocked: redirect to an invalid URL")
+	}
+	nextURL, err := base.Parse(loc)
+	if err != nil {
+		return "", fmt.Errorf("outbound fetch blocked: redirect to an invalid URL")
+	}
+	next := nextURL.String()
+	if len(secretValues) > 0 {
+		readings := urlReadings(next)
+		for _, v := range secretValues {
+			for _, r := range readings {
+				if strings.Contains(r, v) {
+					return "", fmt.Errorf("outbound fetch blocked: redirect target would carry a secret to another host")
+				}
+			}
+		}
+	}
+	return next, nil
+}
+
+// decodeRounds bounds the decoding: a hostile host can encode a value twice (`%252B`).
+const decodeRounds = 3
+
+var pctRunRe = regexp.MustCompile(`(?:%[0-9a-fA-F]{2})+`)
+
+// urlReadings is raw as written, and percent-decoded — with and without form encoding's `+`
+// for space — until it stops changing. Lenient: a run that does not decode to UTF-8 is left
+// as written rather than failing the check.
+func urlReadings(raw string) []string {
+	decode := func(s string) string {
+		return pctRunRe.ReplaceAllStringFunc(s, func(run string) string {
+			d, err := url.PathUnescape(run)
+			if err != nil || !utf8.ValidString(d) {
+				return run
+			}
+			return d
+		})
+	}
+	seen := map[string]bool{raw: true}
+	out := []string{raw}
+	frontier := []string{raw}
+	for round := 0; round < decodeRounds && len(frontier) > 0; round++ {
+		var next []string
+		for _, s := range frontier {
+			for _, d := range []string{decode(s), decode(strings.ReplaceAll(s, "+", " "))} {
+				if !seen[d] {
+					seen[d] = true
+					out = append(out, d)
+					next = append(next, d)
+				}
+			}
+		}
+		frontier = next
+	}
+	return out
 }
 
 func stripSensitive(h http.Header, extra []string) http.Header {
