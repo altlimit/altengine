@@ -629,6 +629,7 @@ func (s *Store) SetSecrets(instanceID string, in map[string]json.RawMessage) (ma
 		}
 		prev, had := cfg.Secrets[name]
 		var entry Secret
+		kept := false
 		switch {
 		case obj.Value != nil:
 			entry = Secret{Value: *obj.Value, Egress: obj.Egress != nil && *obj.Egress}
@@ -638,6 +639,7 @@ func (s *Store) SetSecrets(instanceID string, in map[string]json.RawMessage) (ma
 				eg = *obj.Egress
 			}
 			entry = Secret{Value: prev.Value, Egress: eg}
+			kept = true
 		default:
 			return nil, common.BadRequest(fmt.Sprintf("secret '%s' has no value and does not exist", name))
 		}
@@ -682,11 +684,66 @@ func (s *Store) SetSecrets(instanceID string, in map[string]json.RawMessage) (ma
 				return nil, common.BadRequest(fmt.Sprintf("secret '%s' must name its hosts before it can be sent in a query parameter", name))
 			}
 		}
+		// Keeping the stored value is allowed only for a change that does not WIDEN where it
+		// can reach — otherwise an editor who was never shown the value could redirect it to
+		// somewhere they can read it. Such a change has to re-send the value.
+		if kept {
+			if widened := secretWidening(prev, entry); widened != "" {
+				return nil, common.BadRequest(fmt.Sprintf("secret '%s': %s needs its value re-sent", name, widened))
+			}
+		}
 		out[name] = entry
 	}
 	cfg.Secrets = out
 	s.save()
 	return out, nil
+}
+
+// secretWidening names what about next lets the value reach somewhere prev did not, or "".
+func secretWidening(prev, next Secret) string {
+	if !prev.Egress {
+		return "" // env is the widest exposure there is; anything else narrows it
+	}
+	if !next.Egress {
+		return "exposing an outbound-only secret in env"
+	}
+	// An unbound egress secret already goes to every allowlisted host, so binding it narrows.
+	if prev.Hosts != nil && next.Hosts != nil {
+		for _, h := range next.Hosts {
+			if !patternCovered(h, prev.Hosts) {
+				return fmt.Sprintf("sending it to '%s'", h)
+			}
+		}
+	}
+	if next.QueryParam != "" && next.QueryParam != prev.QueryParam {
+		return fmt.Sprintf("sending it in the '%s' query parameter", next.QueryParam)
+	}
+	return ""
+}
+
+// patternCovered reports whether every host pattern matches is matched by one of within
+// (allowlist syntax). `*.b` covers `x.b` and `*.x.b`, but not `b` itself.
+func patternCovered(pattern string, within []string) bool {
+	p := strings.ToLower(pattern)
+	for _, raw := range within {
+		w := strings.ToLower(raw)
+		if w == p {
+			return true
+		}
+		if !strings.HasPrefix(w, "*.") {
+			continue
+		}
+		base := w[2:]
+		if strings.HasPrefix(p, "*.") {
+			host := p[2:]
+			if host == base || strings.HasSuffix(host, "."+base) {
+				return true
+			}
+		} else if strings.HasSuffix(p, "."+base) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetSettings replaces the outbound allowlist and CORS origins.

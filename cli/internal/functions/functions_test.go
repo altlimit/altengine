@@ -569,6 +569,79 @@ func TestSecretKeepExisting(t *testing.T) {
 	}
 }
 
+// A write that keeps the stored value may not widen where that value can reach — values are
+// write-only, so otherwise an editor who was never shown one could flip it to env and log it,
+// or bind it to a host they control.
+func TestSecretKeepRefusesWidening(t *testing.T) {
+	bound := `{"value":"k","egress":true,"hosts":["*.example.com","b.test"],"queryParam":"key"}`
+	seed := func(t *testing.T, body string) *Store {
+		t.Helper()
+		s := memStore()
+		if _, err := s.SetSecrets("i1", raw(map[string]string{"K": body})); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	widen := map[string]string{
+		`{"egress":false}`:                        "env needs its value re-sent",
+		`{"egress":true,"hosts":["evil.test"]}`:   "'evil.test'",
+		`{"egress":true,"hosts":["example.com"]}`: "'example.com'",
+		`{"hosts":["*.b.test"]}`:                  "'*.b.test'",
+		`{"egress":true,"queryParam":"q"}`:        "'q' query parameter",
+	}
+	for body, want := range widen {
+		s := seed(t, bound)
+		_, err := s.SetSecrets("i1", raw(map[string]string{"K": body}))
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "re-sent") {
+			t.Fatalf("%s: err = %v, want %q", body, err, want)
+		}
+		if got := s.Config("i1").Secrets["K"]; got.QueryParam != "key" || len(got.Hosts) != 2 {
+			t.Fatalf("%s: a refused write changed the stored secret: %+v", body, got)
+		}
+	}
+	// Header-only to a query parameter widens too.
+	s := seed(t, `{"value":"k","egress":true,"hosts":["api.example.com"]}`)
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"queryParam":"key"}`})); err == nil || !strings.Contains(err.Error(), "re-sent") {
+		t.Fatalf("err = %v", err)
+	}
+
+	// With the value, each is an ordinary edit.
+	s = seed(t, bound)
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"value":"k2","egress":true,"hosts":["evil.test"]}`})); err != nil {
+		t.Fatal(err)
+	}
+	s = seed(t, bound)
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"value":"k2"}`})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Narrowing keeps the value.
+	s = seed(t, bound)
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"hosts":["api.example.com","*.eu.example.com"]}`})); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Config("i1").Secrets["K"]; got.Value != "k" || got.QueryParam != "key" || len(got.Hosts) != 2 {
+		t.Fatalf("narrowed = %+v", got)
+	}
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"queryParam":null}`})); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Config("i1").Secrets["K"]; got.QueryParam != "" || got.Value != "k" {
+		t.Fatalf("queryParam cleared = %+v", got)
+	}
+	// env -> egress narrows.
+	s = seed(t, `"plain"`)
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"K": `{"egress":true,"hosts":["api.example.com"]}`})); err != nil {
+		t.Fatal(err)
+	}
+	// Binding a secret stored before binding existed narrows it from every allowlisted host.
+	s = memStore()
+	s.configs["i1"] = &Config{Secrets: map[string]Secret{"OLD": {Value: "o", Egress: true}}, Versions: map[string][]Version{}}
+	if _, err := s.SetSecrets("i1", raw(map[string]string{"OLD": `{"hosts":["api.example.com"]}`})); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func raw(in map[string]string) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	for k, v := range in {
