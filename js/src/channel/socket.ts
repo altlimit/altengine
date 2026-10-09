@@ -39,6 +39,10 @@ export interface SocketEvents {
   message: ChannelMessage;
   state: SocketState;
   error: Error;
+  /** Channels the server would not subscribe this socket to — on open or on a subscribe() —
+   *  because a channel or user limit was reached. They stay requested and are tried again on
+   *  the next reconnect. */
+  refused: string[];
 }
 
 type Listener<T> = (payload: T) => void;
@@ -55,6 +59,7 @@ export class ChannelSocket {
     message: new Set(),
     state: new Set(),
     error: new Set(),
+    refused: new Set(),
   };
 
   private ws?: WebSocket;
@@ -222,11 +227,15 @@ export class ChannelSocket {
         // Only settle the oldest pending subscribe if this ack covers its channels —
         // an unsolicited ack (e.g. for the connect-time ?channels= subscription)
         // arriving late must not steal a runtime subscribe()'s resolution.
+        // A refused channel is answered too, so it counts as covered; the promise resolves with
+        // the channels actually admitted.
+        const refused: string[] = Array.isArray(frame.refused) ? frame.refused : [];
         const head = this.pendingSubscribes[0];
-        const acked = new Set<string>(frame.channels ?? []);
+        const acked = new Set<string>([...(frame.channels ?? []), ...refused]);
         if (head && head.channels.every((c) => acked.has(c))) {
           this.pendingSubscribes.shift()!.resolve(frame.channels ?? []);
         }
+        if (refused.length) this.emit("refused", refused);
         return;
       }
       case "published":
