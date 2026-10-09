@@ -567,10 +567,14 @@ func init() {
 		tool{
 			name:  "datastore_list_collections",
 			title: "List collections",
-			description: "List the collections in a datastore namespace. Collections are created implicitly by the first write, " +
-				"so an empty list means nothing has been written here yet.",
-			required:    []string{"instance"},
-			props:       map[string]any{"instance": instanceArg, "namespace": nsArg},
+			description: "List the collections in a datastore namespace, in name order, a page at a time. Collections are created implicitly by the first write, " +
+				"so an empty list means nothing has been written here yet. When `cursor` comes back non-null there are more: pass it back to get the next page.",
+			required: []string{"instance"},
+			props: map[string]any{
+				"instance":  instanceArg,
+				"namespace": nsArg,
+				"cursor":    map[string]any{"type": "string", "description": "The cursor a previous call returned, for the next page."},
+			},
 			annotations: readOnly,
 			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
 				in, err := h.instanceOf("datastore", argString(args, "instance"))
@@ -580,6 +584,9 @@ func init() {
 				// The collection listing is a control-plane read (there is no /v1 route for
 				// it), so this goes through the admin API by instance id.
 				path := fmt.Sprintf("/admin/datastore/%s/namespaces/%s/collections", url.PathEscape(in.ID), nsSegment(args))
+				if c := argString(args, "cursor"); c != "" {
+					path += "?cursor=" + url.QueryEscape(c)
+				}
 				res, err := h.serveInternal(r, http.MethodGet, path, nil)
 				if err != nil {
 					return nil, err
@@ -588,7 +595,7 @@ func init() {
 				if ns == "" {
 					ns = "(default)"
 				}
-				return map[string]any{"namespace": ns, "collections": res["collections"]}, nil
+				return map[string]any{"namespace": ns, "collections": res["collections"], "cursor": res["cursor"]}, nil
 			},
 		},
 

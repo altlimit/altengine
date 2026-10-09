@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -100,6 +101,19 @@ const MaxJSONBody = 8 << 20
 // over MaxJSONBody. An empty body decodes to the zero value (the hosted API is tolerant the same
 // way).
 func ReadJSON(r *http.Request, v any) error { return ReadJSONLimited(r, v, MaxJSONBody) }
+
+// PageLimit reads a `limit` query parameter as hosted: anything that is not a finite number
+// of at least 1 is the default — never "no limit" — and the result is capped at max.
+func PageLimit(raw string, def, max int) int {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 1 {
+		return def
+	}
+	if v > float64(max) {
+		return max
+	}
+	return int(v)
+}
 
 // ReadShaped reads a JSON body, checks its shape with validate (which sees the body as
 // generic JSON, so a wrong type is named rather than failing the decode), then decodes it

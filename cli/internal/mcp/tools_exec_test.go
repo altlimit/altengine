@@ -463,3 +463,23 @@ func TestDeleteInstanceRemovesItAndItsData(t *testing.T) {
 		t.Error("a deleted instance still answered a data-plane call")
 	}
 }
+
+// datastore_list_collections returns a page and a cursor for the next one.
+func TestListCollectionsPages(t *testing.T) {
+	h := newLiveHandler(t)
+	mustCreate(t, h, "datastore", "appdb")
+	for i := 0; i < 201; i++ {
+		runTool(t, h, "datastore_put", map[string]any{
+			"instance": "appdb", "collection": fmt.Sprintf("c%03d", i),
+			"documents": []any{map[string]any{"key": "k", "data": map[string]any{"x": 1}}},
+		})
+	}
+	first := runTool(t, h, "datastore_list_collections", map[string]any{"instance": "appdb"})
+	if n := len(first["collections"].([]any)); n != 200 || first["cursor"] != "c199" {
+		t.Fatalf("first page: %d collections, cursor %v", n, first["cursor"])
+	}
+	next := runTool(t, h, "datastore_list_collections", map[string]any{"instance": "appdb", "cursor": first["cursor"]})
+	if cols := next["collections"].([]any); len(cols) != 1 || cols[0] != "c200" || next["cursor"] != nil {
+		t.Fatalf("second page: %v", next)
+	}
+}

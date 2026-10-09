@@ -177,11 +177,13 @@ func (h *Handler) dsCollections(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	cols, err := store.Collections()
+	// A page: a namespace can hold any number of collections. `cursor` is the last name served.
+	q := r.URL.Query()
+	cols, cursor, err := store.Collections(q.Get("cursor"), common.PageLimit(q.Get("limit"), datastore.CollectionsPage, datastore.CollectionsMax))
 	if err != nil {
 		return err
 	}
-	common.WriteJSON(w, 200, map[string]any{"collections": cols})
+	common.WriteJSON(w, 200, map[string]any{"collections": cols, "cursor": cursor})
 	return nil
 }
 

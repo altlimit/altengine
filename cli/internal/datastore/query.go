@@ -888,25 +888,48 @@ func (s *Store) DropIndex(collection string, id int64) (bool, error) {
 	return n > 0, nil
 }
 
-// Collections lists distinct collection names in the namespace.
-func (s *Store) Collections() ([]string, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT collection FROM docs ORDER BY collection`)
+// Collection listing page sizes, as hosted.
+const (
+	CollectionsPage = 200
+	CollectionsMax  = 1000
+)
+
+// Collections lists a page of the collection names in the namespace, in name order, after
+// `after`. The cursor is the last name served, or nil when there are no more.
+//
+// A skip-scan, as hosted: each step is one seek to the first name after the previous one, so
+// a page costs one seek per collection on it however many documents each holds.
+func (s *Store) Collections(after string, limit int) ([]string, *string, error) {
+	limit = max(1, min(limit, CollectionsMax))
+	rows, err := s.db.Query(`WITH RECURSIVE c(name, n) AS (
+			SELECT (SELECT collection FROM docs WHERE collection > ? ORDER BY collection LIMIT 1), 1
+			UNION ALL
+			SELECT (SELECT collection FROM docs WHERE collection > c.name ORDER BY collection LIMIT 1), c.n + 1
+			  FROM c WHERE c.name IS NOT NULL AND c.n <= ?
+		)
+		SELECT name FROM c WHERE name IS NOT NULL`, after, limit)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var out []string
+	out := []string{}
 	for rows.Next() {
 		var c string
 		if err := rows.Scan(&c); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, c)
 	}
-	if out == nil {
-		out = []string{}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
 	}
-	return out, nil
+	// One past the page was read, to know whether there is a next one.
+	if len(out) > limit {
+		out = out[:limit]
+		cursor := out[limit-1]
+		return out, &cursor, nil
+	}
+	return out, nil, nil
 }
 
 func billableReads(rowsRead int) int {

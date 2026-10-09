@@ -106,7 +106,7 @@ var hostedTools = map[string][]string{
 	"datastore_create_index":     {"instance", "namespace", "collection", "fields", "unique"},
 	"datastore_delete":           {"instance", "namespace", "collection", "keys", "confirm"},
 	"datastore_get":              {"instance", "namespace", "collection", "keys"},
-	"datastore_list_collections": {"instance", "namespace"},
+	"datastore_list_collections": {"instance", "namespace", "cursor"},
 	"datastore_list_indexes":     {"instance", "namespace", "collection"},
 	"datastore_put":              {"instance", "namespace", "collection", "documents"},
 	"datastore_query":            {"instance", "namespace", "collection", "where", "order", "keys_only", "limit", "cursor"},

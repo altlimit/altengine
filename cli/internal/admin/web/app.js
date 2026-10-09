@@ -143,8 +143,10 @@ async function renderDS() {
     collSel.innerHTML = "";
     collSel.append(h("option", { value: "" }, "— pick collection —"));
     try {
-      const { collections } = await jGet(`/admin/datastore/${dsState.instId}/namespaces/${encodeURIComponent(dsState.ns)}/collections`);
+      const { collections, cursor } = await jGet(`/admin/datastore/${dsState.instId}/namespaces/${encodeURIComponent(dsState.ns)}/collections`);
       for (const c of collections) collSel.append(h("option", { value: c }, c));
+      // A page: say so, and the field beside the list takes any other name.
+      if (cursor) collSel.append(h("option", { value: "", disabled: true }, `first ${collections.length} shown — type a name for others`));
     } catch {}
   }
   collSel.addEventListener("change", () => { if (collSel.value) { dsState.coll = collSel.value; collInput.value = collSel.value; } });
