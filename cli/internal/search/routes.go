@@ -250,7 +250,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req SearchRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, ValidateSearchRequest); err != nil {
 		return err
 	}
 	resp, err := store.Search(r.PathValue("index"), req)

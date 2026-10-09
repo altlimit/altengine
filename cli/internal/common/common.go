@@ -101,6 +101,30 @@ const MaxJSONBody = 8 << 20
 // way).
 func ReadJSON(r *http.Request, v any) error { return ReadJSONLimited(r, v, MaxJSONBody) }
 
+// ReadShaped reads a JSON body, checks its shape with validate (which sees the body as
+// generic JSON, so a wrong type is named rather than failing the decode), then decodes it
+// into out. An empty body decodes to the zero value, as ReadJSON does.
+func ReadShaped(r *http.Request, out any, validate func(any) error) error {
+	var raw json.RawMessage
+	if err := ReadJSON(r, &raw); err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	var shape any
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return BadRequest("invalid JSON body")
+	}
+	if err := validate(shape); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return BadRequest("invalid JSON body")
+	}
+	return nil
+}
+
 // ReadJSONLimited is ReadJSON with a smaller cap, for public routes whose bodies are small by
 // nature: a body over maxBytes is a 413, refused up front from Content-Length when it says so.
 func ReadJSONLimited(r *http.Request, v any, maxBytes int) error {

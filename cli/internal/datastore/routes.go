@@ -317,7 +317,7 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req QueryRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, ValidateQueryRequest); err != nil {
 		return err
 	}
 	collection := r.PathValue("collection")
@@ -362,7 +362,7 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req AggregateRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, ValidateAggregateRequest); err != nil {
 		return err
 	}
 	collection := r.PathValue("collection")

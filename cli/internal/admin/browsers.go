@@ -74,7 +74,7 @@ func (h *Handler) searchQuery(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req search.SearchRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, search.ValidateSearchRequest); err != nil {
 		return err
 	}
 	resp, err := store.Search(r.PathValue("index"), req)
@@ -191,7 +191,7 @@ func (h *Handler) dsQuery(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req datastore.QueryRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, datastore.ValidateQueryRequest); err != nil {
 		return err
 	}
 	// The admin data browser is a full-trust console view (no end-user identity), so no row
@@ -217,7 +217,7 @@ func (h *Handler) dsAggregate(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var req datastore.AggregateRequest
-	if err := common.ReadJSON(r, &req); err != nil {
+	if err := common.ReadShaped(r, &req, datastore.ValidateAggregateRequest); err != nil {
 		return err
 	}
 	res, err := store.Aggregate(r.PathValue("collection"), req, *autoIndex, nil)

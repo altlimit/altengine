@@ -2,6 +2,7 @@ package search
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -502,11 +503,20 @@ func (p *parser) geo() (*setSQL, error) {
 	if p.next().kind != tLParen {
 		return nil, common.BadRequest("expected ( after geopoint")
 	}
-	latTok := p.next()
+	lat, err := geoNumber(p.next())
+	if err != nil {
+		return nil, err
+	}
 	if p.next().kind != tComma {
 		return nil, common.BadRequest("expected , in geopoint()")
 	}
-	lngTok := p.next()
+	lng, err := geoNumber(p.next())
+	if err != nil {
+		return nil, err
+	}
+	if math.Abs(lat) > 90 || math.Abs(lng) > 180 {
+		return nil, common.BadRequest("geopoint() latitude must be within ±90 and longitude within ±180")
+	}
 	if p.next().kind != tRParen {
 		return nil, common.BadRequest("expected ) after geopoint args")
 	}
@@ -517,17 +527,31 @@ func (p *parser) geo() (*setSQL, error) {
 	if opTok.kind != tOp || (opTok.text != "<" && opTok.text != "<=" && opTok.text != ">" && opTok.text != ">=") {
 		return nil, common.BadRequest("distance() requires a comparison operator")
 	}
-	distTok := p.next()
-	lat, err1 := strconv.ParseFloat(latTok.text, 64)
-	lng, err2 := strconv.ParseFloat(lngTok.text, 64)
-	dist, err3 := strconv.ParseFloat(distTok.text, 64)
-	if err1 != nil || err2 != nil || err3 != nil {
-		return nil, common.BadRequest("invalid geo numbers")
+	dist, err := geoNumber(p.next())
+	if err != nil {
+		return nil, err
 	}
 	return &setSQL{
 		fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='geo' AND haversine(lat,lng,?,?) %s ?`, pfx, opTok.text),
 		[]any{fnameTok.text, lat, lng, dist},
 	}, nil
+}
+
+// geoNumber reads one number of a distance() expression. A digit run too long for a double
+// is out of range rather than Infinity, as hosted.
+func geoNumber(t token) (float64, error) {
+	n, err := strconv.ParseFloat(t.text, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return 0, common.BadRequest(fmt.Sprintf("expected a number but found '%s'", t.text))
+	}
+	if err != nil || math.IsInf(n, 0) || math.IsNaN(n) {
+		v := t.text
+		if len(v) > 32 {
+			v = v[:32]
+		}
+		return 0, common.BadRequest(fmt.Sprintf("number out of range: '%s'", v))
+	}
+	return n, nil
 }
 
 // --- set combinators ---
