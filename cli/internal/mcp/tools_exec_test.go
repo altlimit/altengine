@@ -154,6 +154,62 @@ func TestContainerToolsRefuseHonestly(t *testing.T) {
 	}
 }
 
+// datastore_aggregate groups by `group_by`, orders by `order`, returns at most `limit` groups,
+// and says `truncated` when it cut the list — matching hosted.
+func TestDatastoreAggregateLimitOrderTruncated(t *testing.T) {
+	h := newLiveHandler(t)
+	mustCreate(t, h, "datastore", "aggdb")
+	// tag a ×3, b ×2, c ×1: three groups with distinct counts.
+	var docs []any
+	for i, tag := range []string{"a", "a", "a", "b", "b", "c"} {
+		docs = append(docs, map[string]any{"key": fmt.Sprintf("d%d", i), "data": map[string]any{"tag": tag}})
+	}
+	runTool(t, h, "datastore_put", map[string]any{"instance": "aggdb", "collection": "items", "documents": docs})
+	runTool(t, h, "datastore_create_index", map[string]any{
+		"instance": "aggdb", "collection": "items", "fields": []any{"tag"},
+	})
+
+	agg := func(extra map[string]any) map[string]any {
+		args := map[string]any{
+			"instance": "aggdb", "collection": "items", "group_by": []any{"tag"},
+			"metrics": []any{map[string]any{"fn": "count", "as": "n"}},
+		}
+		for k, v := range extra {
+			args[k] = v
+		}
+		return runTool(t, h, "datastore_aggregate", args)
+	}
+
+	all := agg(nil)
+	if groups, _ := all["groups"].([]any); len(groups) != 3 || all["truncated"] != false {
+		t.Fatalf("default limit: want 3 groups, not truncated; got %v", all)
+	}
+
+	cut := agg(map[string]any{"limit": 2, "order": []any{map[string]any{"field": "n", "dir": "desc"}}})
+	groups, _ := cut["groups"].([]any)
+	if len(groups) != 2 || cut["truncated"] != true {
+		t.Fatalf("limit 2: want 2 groups, truncated; got %v", cut)
+	}
+	first := groups[0].(map[string]any)
+	if first["group"].(map[string]any)["tag"] != "a" || first["metrics"].(map[string]any)["n"].(float64) != 3 {
+		t.Fatalf("order n desc: want tag a (3) first, got %v", first)
+	}
+
+	exact := agg(map[string]any{"limit": 3})
+	if groups, _ := exact["groups"].([]any); len(groups) != 3 || exact["truncated"] != false {
+		t.Fatalf("limit equal to the group count must not be truncated; got %v", exact)
+	}
+
+	for _, bad := range []any{0, -1, "abc", nil} {
+		if text, isErr := toolText(t, h, "datastore_aggregate", map[string]any{
+			"instance": "aggdb", "collection": "items",
+			"metrics": []any{map[string]any{"fn": "count"}}, "limit": bad,
+		}); !isErr || !strings.Contains(text, "limit must be a positive number") {
+			t.Fatalf("limit %v: want a refusal, got %q", bad, text)
+		}
+	}
+}
+
 func TestDatastoreAndSearchToolsRoundTrip(t *testing.T) {
 	h := newLiveHandler(t)
 	mustCreate(t, h, "datastore", "appdb")

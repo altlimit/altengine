@@ -13,8 +13,11 @@ package mcp
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 )
 
 // authAdminPath builds a control-plane path for an auth instance. Auth's user administration is
@@ -89,6 +92,8 @@ func init() {
 				"metrics":    map[string]any{"type": "array", "items": map[string]any{"type": "object"}, "description": `[{"fn":"count"}] or [{"fn":"sum","field":"total","as":"revenue"}]. Functions: count, sum, avg, min, max.`},
 				"where":      map[string]any{"type": "array", "items": map[string]any{"type": "object"}, "description": `Same filters as datastore_query: [{"field":"done","op":"=","value":false}].`},
 				"group_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Field names to group by."},
+				"order":      map[string]any{"type": "array", "items": map[string]any{"type": "object"}, "description": `Order groups by a group field or metric alias, e.g. [{"field":"n","dir":"desc"}].`},
+				"limit":      map[string]any{"type": "number", "description": fmt.Sprintf(`Groups to return (default %d, max %d). "truncated": true means there were more.`, defaultLimit, aggMaxGroups)},
 			},
 			annotations: readOnly,
 			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
@@ -96,19 +101,47 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
+				limit, err := aggregateLimit(args)
+				if err != nil {
+					return nil, err
+				}
 				// `op` is accepted as an alias for `fn`, matching hosted. Hosted's schema
 				// documented `op` while its engine only ever read `fn`, so the tool was
 				// unusable exactly as specified; the alias is there because models were told
 				// `op` for a long time, and it must be here too or the two disagree.
-				body := map[string]any{"metrics": aliasAggregateFn(args["metrics"])}
-				for _, k := range []string{"where", "group_by"} {
-					if v, ok := args[k]; ok {
-						body[k] = v
-					}
+				body := map[string]any{
+					"metrics": aliasAggregateFn(args["metrics"]),
+					// One past what is shown, so a cut list says it was cut instead of looking
+					// complete.
+					"limit": limit + 1,
 				}
+				if v, ok := args["where"]; ok {
+					body["where"] = v
+				}
+				// The tool's argument is `group_by`; the REST body's field is `group`. Passed
+				// through under its own name, grouping was silently ignored.
+				if v, ok := args["group_by"].([]any); ok {
+					body["group"] = v
+				}
+				if v, ok := args["order"].([]any); ok {
+					body["order"] = v
+				}
+				collection := argString(args, "collection")
 				path := fmt.Sprintf("/v1/datastore/%s/ns/%s/col/%s/aggregate",
-					url.PathEscape(in.Name), nsSegment(args), url.PathEscape(argString(args, "collection")))
-				return h.serveInternal(r, http.MethodPost, path, body)
+					url.PathEscape(in.Name), nsSegment(args), url.PathEscape(collection))
+				res, err := h.serveInternal(r, http.MethodPost, path, body)
+				if err != nil {
+					return nil, err
+				}
+				groups, _ := res["groups"].([]any)
+				if groups == nil {
+					groups = []any{}
+				}
+				truncated := len(groups) > limit
+				if truncated {
+					groups = groups[:limit]
+				}
+				return map[string]any{"instance": in.Name, "collection": collection, "groups": groups, "truncated": truncated}, nil
 			},
 		},
 
@@ -446,6 +479,46 @@ func init() {
 			},
 		},
 	)
+}
+
+// aggMaxGroups is the most groups datastore_aggregate returns: one under the datastore's page
+// cap, so the probe for "were there more" still fits in it.
+const aggMaxGroups = 499
+
+// aggregateLimit reads datastore_aggregate's `limit` as hosted does: absent means the default;
+// anything that is not a finite number of at least 1 is refused; the rest is floored and
+// capped at aggMaxGroups.
+func aggregateLimit(args map[string]any) (int, error) {
+	v, present := args["limit"]
+	if !present {
+		return defaultLimit, nil
+	}
+	n := math.NaN()
+	switch x := v.(type) {
+	case float64:
+		n = x
+	case string:
+		if s := strings.TrimSpace(x); s == "" {
+			n = 0
+		} else if f, err := strconv.ParseFloat(s, 64); err == nil {
+			n = f
+		}
+	case bool:
+		if x {
+			n = 1
+		} else {
+			n = 0
+		}
+	case nil:
+		n = 0
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) || n < 1 {
+		return 0, fmt.Errorf("INVALID_ARGUMENT: limit must be a positive number")
+	}
+	if n > aggMaxGroups {
+		return aggMaxGroups, nil
+	}
+	return int(math.Floor(n)), nil
 }
 
 // aliasAggregateFn rewrites {"op": ...} to {"fn": ...}, leaving an explicit `fn` alone.

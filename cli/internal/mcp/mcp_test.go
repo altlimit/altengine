@@ -102,7 +102,7 @@ var hostedTools = map[string][]string{
 	"container_run":              {"instance", "image", "size", "cmd", "env", "timeout_ms"},
 	"container_sizes":            {"instance"},
 	"create_instance":            {"service", "name", "region"},
-	"datastore_aggregate":        {"instance", "namespace", "collection", "metrics", "where", "group_by"},
+	"datastore_aggregate":        {"instance", "namespace", "collection", "metrics", "where", "group_by", "order", "limit"},
 	"datastore_create_index":     {"instance", "namespace", "collection", "fields", "unique"},
 	"datastore_delete":           {"instance", "namespace", "collection", "keys", "confirm"},
 	"datastore_get":              {"instance", "namespace", "collection", "keys"},
