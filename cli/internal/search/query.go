@@ -392,8 +392,10 @@ func (p *parser) compileTerm(field, word string, prefix, stem, phrase bool) *set
 				[]any{field, strings.ToLower(word)}}
 		case ftype == "untokenprefix":
 			if prefix {
-				return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ?`, pfx),
-					[]any{field, strings.ToLower(word) + "%"}}
+				// % _ and \ in the prefix match literally: each is escaped, and the ESCAPE
+				// clause is what makes the backslash an escape rather than part of the pattern.
+				return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx),
+					[]any{field, likeEscaper.Replace(strings.ToLower(word)) + "%"}}
 			}
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc=?`, pfx),
 				[]any{field, strings.ToLower(word)}}
@@ -536,6 +538,9 @@ func (p *parser) geo() (*setSQL, error) {
 		[]any{fnameTok.text, lat, lng, dist},
 	}, nil
 }
+
+// likeEscaper makes a LIKE prefix literal under ESCAPE '\'.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // geoNumber reads one number of a distance() expression. A digit run too long for a double
 // is out of range rather than Infinity, as hosted.
