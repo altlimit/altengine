@@ -1,6 +1,8 @@
 package identity
 
 import (
+	"encoding/json"
+	"math"
 	"regexp"
 	"strings"
 
@@ -326,14 +328,93 @@ func validateFilterList(v any, loc string) error {
 		if !ok {
 			return common.BadRequest(loc + "[" + itoa(i) + "] must be an object")
 		}
-		if field, _ := fm["field"].(string); field == "" {
-			return common.BadRequest(loc + "[" + itoa(i) + "].field must be a non-empty string")
+		at := loc + "[" + itoa(i) + "]"
+		field, _ := fm["field"].(string)
+		if field == "" {
+			return common.BadRequest(at + ".field must be a non-empty string")
 		}
-		if op, _ := fm["op"].(string); !ruleOps[op] {
-			return common.BadRequest(loc + "[" + itoa(i) + "].op must be one of =, !=, <, <=, >, >=, in")
+		// The datastore's own field check: a rule on a field no query can name would only
+		// ever fail at request time.
+		if !validRuleField(field) {
+			return common.BadRequest(at + ".field '" + field + "' is not a valid field path")
+		}
+		op, _ := fm["op"].(string)
+		if !ruleOps[op] {
+			return common.BadRequest(at + ".op must be one of =, !=, <, <=, >, >=, in")
+		}
+		value, has := fm["value"]
+		if !has {
+			return common.BadRequest(at + ".value is required")
+		}
+		if op == "in" {
+			// `in` takes a list — or a placeholder, since a claim can hold one.
+			ok := false
+			if arr, isArr := value.([]any); isArr {
+				ok = true
+				for _, x := range arr {
+					if !isRuleScalar(x) {
+						ok = false
+						break
+					}
+				}
+			} else if s, isStr := value.(string); isStr && authPlaceholderRe.MatchString(s) {
+				ok = true
+			}
+			if !ok {
+				return common.BadRequest(at + ".value for 'in' must be an array of scalars or a $auth placeholder")
+			}
+		} else if !isRuleScalar(value) {
+			return common.BadRequest(at + ".value must be a string, number, boolean, null or a $auth placeholder")
 		}
 	}
 	return nil
+}
+
+// authPlaceholderRe is the placeholders Substitute resolves. Any other `$auth…` string is
+// denied there on every request, so it is refused when the rule is saved.
+var authPlaceholderRe = regexp.MustCompile(`^\$auth\.(uid|identifier|email|(claims|profile)\.[^.]+(\.[^.]+)*)$`)
+
+// isRuleScalar reports whether v is a rule filter value: a JSON scalar, or a `$auth.*`
+// placeholder (which is a string).
+func isRuleScalar(v any) bool {
+	switch t := v.(type) {
+	case nil, bool:
+		return true
+	case string:
+		return !strings.HasPrefix(t, "$auth") || authPlaceholderRe.MatchString(t)
+	case float64:
+		return !math.IsNaN(t) && !math.IsInf(t, 0)
+	case json.Number:
+		f, err := t.Float64()
+		return err == nil && !math.IsNaN(f) && !math.IsInf(f, 0)
+	case int, int64:
+		return true
+	}
+	return false
+}
+
+// Meta selectors a datastore query accepts as a field.
+var ruleMetaFields = map[string]bool{"__key__": true, "__created__": true, "__updated__": true}
+
+// Segments that name an object's prototype machinery are not field names.
+var reservedFieldSegs = map[string]bool{"__proto__": true, "constructor": true, "prototype": true}
+
+// validRuleField is the datastore's field check: a meta selector, or a dot-path of at most 8
+// identifier segments.
+func validRuleField(field string) bool {
+	if ruleMetaFields[field] {
+		return true
+	}
+	segs := strings.Split(field, ".")
+	if len(segs) > 8 {
+		return false
+	}
+	for _, s := range segs {
+		if !topLevelFieldRe.MatchString(s) || reservedFieldSegs[s] {
+			return false
+		}
+	}
+	return true
 }
 
 func parseCollectionRules(cm map[string]any) CollectionRules {

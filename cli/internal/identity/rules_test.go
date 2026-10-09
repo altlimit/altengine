@@ -1,6 +1,9 @@
 package identity
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A row rule for an endpoint the entry's `level` can't reach is dead config that would
 // silently 403 at runtime. ValidateAccessLevels rejects it at admin save time, mirroring the
@@ -143,5 +146,50 @@ func TestDatastoreReadGroupsShape(t *testing.T) {
 	}
 	if len(flat) != 1 || len(flat[0]) != 1 {
 		t.Fatalf("flat read should be one AND-group: %+v", flat)
+	}
+}
+
+// A rule's field and value are checked when it is saved, not left to fail on every request
+// the rule touches.
+func TestValidateRuleFilterFieldAndValue(t *testing.T) {
+	ds := func(filter map[string]any) any {
+		return map[string]any{"datastore:db": map[string]any{"level": "read", "rules": map[string]any{
+			"_default": map[string]any{"c": map[string]any{"read": []any{filter}}}}}}
+	}
+	field := func(f any) any { return ds(map[string]any{"field": f, "op": "=", "value": "$auth.uid"}) }
+	for _, bad := range []any{"a..b", "a b", "1x", "a.__proto__", "constructor", "$auth.uid", "a-b", float64(5), "a.b.c.d.e.f.g.h.i"} {
+		if err := ValidateAccessLevels(field(bad)); err == nil {
+			t.Errorf("field %v: accepted", bad)
+		}
+	}
+	for _, ok := range []string{"owner", "author.uid", "_x", "__key__", "__created__", "__updated__"} {
+		if err := ValidateAccessLevels(field(ok)); err != nil {
+			t.Errorf("field %q: %v", ok, err)
+		}
+	}
+
+	if err := ValidateAccessLevels(ds(map[string]any{"field": "x", "op": "="})); err == nil || !strings.Contains(err.Error(), "value is required") {
+		t.Errorf("missing value: %v", err)
+	}
+	value := func(op string, v any) any { return ds(map[string]any{"field": "x", "op": op, "value": v}) }
+	for _, bad := range []any{map[string]any{"a": float64(1)}, []any{float64(1), float64(2)}, "$auth.uidx", "$auth.claims", "$auth.password"} {
+		if err := ValidateAccessLevels(value("=", bad)); err == nil {
+			t.Errorf("= %v: accepted", bad)
+		}
+	}
+	for _, bad := range []any{"a", float64(5), []any{float64(1), map[string]any{"a": float64(1)}}, []any{[]any{float64(1)}}, []any{"$auth.bogus"}, "$auth.uidx"} {
+		if err := ValidateAccessLevels(value("in", bad)); err == nil {
+			t.Errorf("in %v: accepted", bad)
+		}
+	}
+	for _, ok := range []any{"$auth.uid", "$auth.email", "$auth.identifier", "$auth.claims.role", "$auth.profile.org.id", "public", "", float64(3), -1.5, true, false, nil} {
+		if err := ValidateAccessLevels(value("=", ok)); err != nil {
+			t.Errorf("= %v: %v", ok, err)
+		}
+	}
+	for _, ok := range []any{[]any{}, []any{"a", float64(1), true, nil, "$auth.uid"}, "$auth.claims.groups"} {
+		if err := ValidateAccessLevels(value("in", ok)); err != nil {
+			t.Errorf("in %v: %v", ok, err)
+		}
 	}
 }
