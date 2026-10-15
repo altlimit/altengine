@@ -15,8 +15,9 @@ export interface StartRunRequest {
   /** Override the script's own parallel/exclusive setting for this run. Exclusive (the default
    *  for anything touching the desktop) means the run has the machine to itself. */
   parallel?: boolean;
-  /** POSTed once the run AND its files have landed, HMAC-signed with the instance secret.
-   *  Mutually exclusive with `on_complete` — a run has one completion target. */
+  /** POSTed once the run AND its files have landed, signed with the instance's webhook signing
+   *  secret — check it with `verifyWebhook`. Mutually exclusive with `on_complete` — a run has
+   *  one completion target. */
   webhook_url?: string;
   /** A function to call once the run AND its files have landed, as
    *  `<functions-instance>/<function>`. Mutually exclusive with `webhook_url`.

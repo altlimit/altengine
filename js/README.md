@@ -170,6 +170,21 @@ PC being asleep is the ordinary case. `wait`'s `timeoutMs` bounds the WAIT, not
 the run — giving up leaves the job running on the machine, so call `cancel` if
 that is what you meant.
 
+A run's completion webhook is signed with the instance's webhook signing secret
+(`whsec_…`, shown to an organization owner). Verify it against the raw body:
+
+```ts
+import { verifyWebhook } from "@altengine/sdk";
+
+const ok = await verifyWebhook({
+  secret: process.env.ALTENGINE_WEBHOOK_SECRET!,
+  body: await request.text(), // the raw body, not a re-serialised parse
+  signature: request.headers.get("x-altengine-signature"),
+  timestamp: request.headers.get("x-altengine-timestamp"),
+  // toleranceMs: 5 * 60 * 1000 (the default)
+});
+```
+
 Organization API key only. End-user identity tokens are refused here as they are
 for containers: a run spends time on hardware you own, and access rules bound
 what a user may read, not what they may spend.

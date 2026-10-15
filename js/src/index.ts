@@ -112,6 +112,13 @@ export { f, facet } from "./search/fields.js";
 
 export { AutomationClient } from "./automation/client.js";
 export * from "./automation/types.js";
+export {
+  verifyWebhook,
+  WEBHOOK_SIGNATURE_HEADER,
+  WEBHOOK_TIMESTAMP_HEADER,
+  DEFAULT_WEBHOOK_TOLERANCE_MS,
+  type VerifyWebhookOptions,
+} from "./automation/webhook.js";
 
 export { BlobClient, blobFromJobEnv, MAX_SINGLE_PUT_BYTES } from "./blob/client.js";
 export * from "./blob/types.js";

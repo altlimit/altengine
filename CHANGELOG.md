@@ -46,4 +46,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 - All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
 - JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
   `webSocket` option.
+- JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
+  completion webhook's signature and timestamp.
 - Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
