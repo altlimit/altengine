@@ -42,6 +42,32 @@ func (h *Handler) authUsers(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// authCreateUser creates an end user from the console (and MCP's auth_create_user): the
+// instance's signup fields plus a password. Not a signup — see identity.AdminCreateUser.
+func (h *Handler) authCreateUser(w http.ResponseWriter, r *http.Request) error {
+	in, err := h.resolveInst(r, "auth")
+	if err != nil {
+		return err
+	}
+	s, err := h.authStore(r)
+	if err != nil {
+		return err
+	}
+	var body map[string]any
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	if body == nil {
+		return common.BadRequest("body must be an object of the instance's signup fields and a password")
+	}
+	user, err := identity.AdminCreateUser(s, identity.ParseConfig(in.Config()), body)
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 201, user.Public())
+	return nil
+}
+
 // authUser reads one end user — env.auth.getUser. Answers null for a uid that is not there,
 // as the hosted stub does, so `if (!user)` behaves the same on both.
 func (h *Handler) authUser(w http.ResponseWriter, r *http.Request) error {

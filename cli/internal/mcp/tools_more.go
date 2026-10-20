@@ -348,12 +348,12 @@ func init() {
 		tool{
 			name:        "auth_create_user",
 			title:       "Create an end user",
-			description: "Create an account directly, without the sign-up flow — for seeding test users or migrating one in. The fields you pass must satisfy the instance's configured sign-up fields.",
+			description: "Create an account directly, without the sign-up flow — for seeding test users or migrating one in. The fields you pass must satisfy the instance's configured sign-up fields. Sends no email — this is not a sign-up, so no welcome or verification mail goes out.",
 			required:    []string{"instance", "fields", "password"},
 			props: map[string]any{
 				"instance": instanceArg,
 				"fields":   map[string]any{"type": "object", "description": `The sign-up fields, e.g. {"email": "a@example.com", "name": "Ada"}.`},
-				"password": map[string]any{"type": "string", "description": "The account's password."},
+				"password": map[string]any{"type": "string", "description": "At least 8 characters."},
 			},
 			annotations: writes,
 			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
@@ -361,13 +361,22 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				body := map[string]any{"password": argString(args, "password")}
-				if f, ok := args["fields"].(map[string]any); ok {
-					for k, v := range f {
-						body[k] = v
-					}
+				f, ok := args["fields"].(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("fields must be an object of the instance's signup fields")
 				}
-				return h.serveInternal(r, http.MethodPost, "/v1/auth/"+url.PathEscape(in.Name)+"/signup", body)
+				body := map[string]any{}
+				for k, v := range f {
+					body[k] = v
+				}
+				body["password"] = args["password"]
+				// The console's create, not the public /signup: no signup gate, no email, no
+				// session, and the account is not marked verify-pending.
+				u, err := h.serveInternal(r, http.MethodPost, "/admin/auth/"+url.PathEscape(in.ID)+"/users", body)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"instance": in.Name, "uid": u["uid"], "identifier": u["identifier"], "profile": u["profile"], "claims": u["claims"]}, nil
 			},
 		},
 		tool{

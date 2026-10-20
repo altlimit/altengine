@@ -131,6 +131,28 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// AdminCreateUser creates an account from the console or MCP, as hosted: the same signup-field
+// parsing and password rule as /signup, but it is not a signup. It ignores whether public
+// signup is allowed, sends no email, issues no session, and never marks the account
+// verify-pending — so the email-verification gate, if on, refuses its password sign-in until
+// the address is verified, and turning the gate on later grandfathers it like any account that
+// predates the gate.
+func AdminCreateUser(store *Store, cfg Config, body map[string]any) (*UserRow, error) {
+	identifier, profile, err := collectSignup(cfg.Signup, body)
+	if err != nil {
+		return nil, err
+	}
+	password, err := validatePassword(body["password"])
+	if err != nil {
+		return nil, err
+	}
+	pwHash, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	return store.CreateUser(identifier, pwHash, profile, nowMS(), false)
+}
+
 // --- POST /signup ---
 
 func (h *Handler) signup(w http.ResponseWriter, r *http.Request) error {

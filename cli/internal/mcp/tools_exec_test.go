@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -306,13 +307,9 @@ func TestAuthTools(t *testing.T) {
 		"fields":   map[string]any{"email": "ada@example.com"},
 		"password": "correct horse battery staple",
 	})
-	user, _ := created["user"].(map[string]any)
-	if user == nil {
+	uid, _ := created["uid"].(string)
+	if uid == "" || created["instance"] != "users" || created["identifier"] != "ada@example.com" {
 		t.Fatalf("auth_create_user returned %v", created)
-	}
-	uid, _ := user["uid"].(string)
-	if uid == "" {
-		t.Fatalf("no uid in %v", user)
 	}
 
 	listed := runTool(t, h, "auth_list_users", map[string]any{"instance": "users"})
@@ -365,6 +362,53 @@ func TestAuthTools(t *testing.T) {
 func mustCreate(t *testing.T, h *Handler, service, name string) {
 	t.Helper()
 	runTool(t, h, "create_instance", map[string]any{"service": service, "name": name})
+}
+
+// auth_create_user is the console's create, not a signup, as hosted: it works with public
+// signup off, sends nothing, issues no session, and does not mark the account verify-pending.
+// So under the email-verification gate its password sign-in is refused until the address is
+// verified, and turning the gate off and on again grandfathers it like any account that
+// predates the gate — which a gated signup never is.
+func TestAuthCreateUserUnderVerifyGate(t *testing.T) {
+	h := newLiveHandler(t)
+	mustCreate(t, h, "auth", "gated")
+	in := h.reg.Get("auth", "gated")
+	setGate := func(on bool) {
+		t.Helper()
+		if err := h.reg.SaveConfig(in, map[string]any{"settings": map[string]any{"requireEmailVerification": on, "allowSignup": false}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setGate(true)
+
+	created := runTool(t, h, "auth_create_user", map[string]any{
+		"instance": "gated",
+		"fields":   map[string]any{"email": "ada@example.com"},
+		"password": "correct horse battery staple",
+	})
+	if len(created) != 5 || created["uid"] == "" || created["identifier"] != "ada@example.com" {
+		t.Fatalf("auth_create_user returned %v; want only instance, uid, identifier, profile, claims", created)
+	}
+
+	signin := func() error {
+		_, err := h.serveInternal(httptest.NewRequest("POST", "/", nil), http.MethodPost, "/v1/auth/gated/signin",
+			map[string]any{"identifier": "ada@example.com", "password": "correct horse battery staple"})
+		return err
+	}
+	if err := signin(); err == nil || !strings.Contains(err.Error(), "EMAIL_UNVERIFIED") {
+		t.Fatalf("sign-in under the gate = %v, want EMAIL_UNVERIFIED", err)
+	}
+	setGate(false)
+	setGate(true)
+	if err := signin(); err != nil {
+		t.Fatalf("an admin-created account was not grandfathered when the gate came back on: %v", err)
+	}
+
+	if text, isErr := toolText(t, h, "auth_create_user", map[string]any{
+		"instance": "gated", "fields": map[string]any{"email": "bob@example.com"}, "password": "short",
+	}); !isErr || !strings.Contains(text, "at least 8") {
+		t.Fatalf("a short password = %s", text)
+	}
 }
 
 // Auth and blob take their region at creation and never after; every other service sets it
