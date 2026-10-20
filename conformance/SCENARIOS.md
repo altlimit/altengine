@@ -63,7 +63,8 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 
 ## Channel
 
-- [ ] createToken: channels echoed, expires_at sane, ws_url usable
+- [ ] createToken: channels echoed, expires_at sane, ws_endpoint + protocols usable (server
+      answers `altengine.v1`), ws_url usable with Deprecation/Sunset headers
 - [ ] publish via HTTP → delivered count matches live subscribers
 - [ ] WS lifecycle: connect with token → receive published message with
       channel/data/ts

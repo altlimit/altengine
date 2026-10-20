@@ -367,7 +367,7 @@ function renderChannels() {
       }).then((r) => r.json());
     } catch (e) { toast("token mint failed", true); return; }
     if (tok.error) { toast(tok.error.message, true); return; }
-    const ws = new WebSocket(tok.ws_url);
+    const ws = new WebSocket(tok.ws_endpoint, tok.protocols);
     chState.ws = ws;
     connectBtn.textContent = "Disconnect";
     ws.onopen = () => line("sys", "connected: " + list.join(", "));

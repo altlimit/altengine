@@ -3,7 +3,6 @@ package channel
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -31,8 +30,8 @@ func NewHandler(reg *control.Registry, a *auth.Store, hub *Hub) *Handler {
 	return &Handler{
 		Reg: reg, Auth: a, Hub: hub,
 		up: websocket.Upgrader{
-			CheckOrigin:  func(r *http.Request) bool { return true }, // local dev
-			Subprotocols: []string{"bearer"},
+			CheckOrigin: func(r *http.Request) bool { return true }, // local dev
+			// No Subprotocols list: subscribe sets the one protocol it answers with.
 		},
 	}
 }
@@ -147,12 +146,8 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "wss"
 	}
-	wsURL := scheme + "://" + r.Host + "/v1/channel/" + url.PathEscape(inst.Name) + "/subscribe?token=" + url.QueryEscape(token)
-
-	resp := map[string]any{
-		"token": token, "expires_at": exp, "channels": channels,
-		"publish": pubOrFalse(pub), "ws_url": wsURL,
-	}
+	resp := wsConnectFields(scheme, r.Host, inst.Name, token)
+	resp["token"], resp["expires_at"], resp["channels"], resp["publish"] = token, exp, channels, pubOrFalse(pub)
 	if claims.Pid != "" {
 		resp["presence_id"] = claims.Pid
 	}
@@ -268,15 +263,16 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) error {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		return common.NewError(426, "expected a WebSocket upgrade", "INVALID_ARGUMENT")
 	}
-	token := r.URL.Query().Get("token")
-	usedSubproto := false
-	if token == "" {
-		token = subprotocolToken(r)
-		usedSubproto = token != ""
+	// The token rides in Sec-WebSocket-Protocol, Authorization, or the deprecated ?token=;
+	// the first two win over the third.
+	picked, err := upgradeToken(r)
+	if err != nil {
+		return err
 	}
-	if token == "" {
+	if picked == nil {
 		return common.Unauthenticated("missing token")
 	}
+	token := picked.token
 	peek := PeekClaims(token)
 	if peek == nil || peek.Iss == "" {
 		return common.Unauthenticated("invalid token")
@@ -326,9 +322,14 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	var respHeader http.Header
-	if usedSubproto {
-		respHeader = http.Header{"Sec-WebSocket-Protocol": {"bearer"}}
+	// The upgrader has no Subprotocols list, so it answers with exactly the protocol set here
+	// (altengine.v1, or bearer for the older form) — never the one carrying the token.
+	respHeader := http.Header{}
+	if picked.echo != "" {
+		respHeader.Set("Sec-WebSocket-Protocol", picked.echo)
+	}
+	if picked.source == srcQuery {
+		setQueryTokenDeprecation(respHeader)
 	}
 	ws, err := h.up.Upgrade(w, r, respHeader)
 	if err != nil {
@@ -468,20 +469,6 @@ func errorFrame(msg string) []byte {
 }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
-
-func subprotocolToken(r *http.Request) string {
-	proto := r.Header.Get("Sec-WebSocket-Protocol")
-	if proto == "" {
-		return ""
-	}
-	parts := strings.Split(proto, ",")
-	for i, p := range parts {
-		if strings.TrimSpace(p) == "bearer" && i+1 < len(parts) {
-			return strings.TrimSpace(parts[i+1])
-		}
-	}
-	return ""
-}
 
 func contains(list []string, s string) bool {
 	for _, x := range list {

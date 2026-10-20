@@ -481,7 +481,7 @@ curl -XPOST $BASE/v1/auth/appauth/signup -d '{"email":"alice@example.com","passw
 ID_TOKEN=...   # the id_token from the response
 curl -H "Authorization: Bearer $ID_TOKEN" -XPOST $BASE/v1/datastore/shop/ns/main/col/posts/query -d '{}'
 
-# channels: mint token, then connect a WebSocket to the returned ws_url
+# channels: mint token, then open a WebSocket on ws_endpoint offering the returned protocols
 curl -H "$AUTH" -XPOST $BASE/v1/channel/chat/tokens -d '{"channels":["room1"],"publish":true}'
 curl -H "$AUTH" -XPOST $BASE/v1/channel/chat/publish -d '{"channel":"room1","data":{"hi":"there"}}'
 ```
