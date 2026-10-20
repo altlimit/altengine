@@ -116,10 +116,10 @@ func init() {
 			},
 		},
 		tool{
-			name:  "blob_put",
-			title: "Store a small object",
+			name:        "blob_put",
+			title:       "Store a small object",
 			description: fmt.Sprintf("Store a small object directly — text, or base64 for binary. At most %d bytes; use blob_upload_url for anything larger or for a file you are not holding. Returns the object, with its public URL if it is public.", maxInlineBytes),
-			required: []string{"instance", "name", "content"},
+			required:    []string{"instance", "name", "content"},
 			props: map[string]any{
 				"instance":     instanceArg,
 				"name":         map[string]any{"type": "string", "description": "Filename, e.g. 'logo.svg'. Appears in the public URL."},

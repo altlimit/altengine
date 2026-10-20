@@ -461,8 +461,8 @@ func init() {
 			},
 		},
 		tool{
-			name:  "auth_set_rules",
-			title: "Set the access rules",
+			name:        "auth_set_rules",
+			title:       "Set the access rules",
 			description: "Replace the instance's row-level access rules. REPLACES the whole object — call auth_get_rules first and send back the result with your change applied, or you will silently drop every rule you did not repeat. Rules decide what end users can reach directly, so a mistake here is a data exposure.",
 			required:    []string{"instance", "access"},
 			props: map[string]any{

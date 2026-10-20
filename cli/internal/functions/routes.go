@@ -20,8 +20,8 @@
 package functions
 
 import (
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
