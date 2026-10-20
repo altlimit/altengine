@@ -347,6 +347,12 @@ func ftsQuote(s string) string {
 // expanded.
 func (p *parser) compileTermExpanded(field, word string, stem, phrase bool) *setSQL {
 	base := p.compileTerm(field, word, stem, phrase)
+	if n, ok := numericValue(word, stem, phrase); ok && field != "" {
+		// A number or date value compares numerically whatever the field's type, as hosted:
+		// `year:2011` matches a number 2011, not the word "2011" in text. Its synonym
+		// alternatives are still words.
+		base = p.numericCond(field, "=", n)
+	}
 	if stem || p.ix == nil || p.ix.syn == nil {
 		return base
 	}
@@ -388,36 +394,70 @@ func (p *parser) compileTerm(field, word string, stem, phrase bool) *setSQL {
 	}
 	match := ftsQuote(word)
 	if field != "" {
-		// Field-scoped: FTS on that field name, OR atom/untokenprefix exact/prefix.
-		ftype := p.fieldType(field)
-		switch {
-		case ftype == "atom":
-			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='atom' AND text_lc=?`, pfx),
-				[]any{field, strings.ToLower(word)}}
-		case ftype == "untokenprefix":
+		// Field-scoped: every type the field has been written as is a way to match it, and
+		// the results are their union, as hosted — full text for text/html/tokenprefix (and
+		// for a field of no textual type), in full for atom, as a prefix for untokenprefix.
+		types := p.schema[field]
+		wantText := types["text"] || types["html"] || types["tokenprefix"]
+		var sqls []string
+		var args []any
+		if wantText || (!types["atom"] && !types["untokenprefix"]) {
+			if types["tokenprefix"] && !phrase {
+				match = prefixMatch(word)
+			}
+			sqls = append(sqls, fmt.Sprintf(`SELECT doc_id FROM %s WHERE %s MATCH ? AND name=?`, ftsTable, ftsTable))
+			args = append(args, match, field)
+		}
+		if types["atom"] {
+			sqls = append(sqls, fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='atom' AND text_lc=?`, pfx))
+			args = append(args, field, strings.ToLower(word))
+		}
+		if types["untokenprefix"] {
 			// Always a case-insensitive prefix match, as hosted: the value is the prefix.
 			// % _ and \ match literally: each is escaped, and the ESCAPE clause is what
 			// makes the backslash an escape rather than part of the pattern.
-			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx),
-				[]any{field, likeEscaper.Replace(strings.ToLower(word)) + "%"}}
-		case ftype == "number" || ftype == "date":
-			// equality on a numeric field
-			n, _ := strconv.ParseFloat(word, 64)
-			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type IN ('number','date') AND num_val=?`, pfx),
-				[]any{field, n}}
-		default:
-			if ftype == "tokenprefix" && !phrase {
-				match = prefixMatch(word)
-			}
-			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s WHERE %s MATCH ? AND name=?`, ftsTable, ftsTable),
-				[]any{match, field}}
+			sqls = append(sqls, fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx))
+			args = append(args, field, likeEscaper.Replace(strings.ToLower(word))+"%")
 		}
+		return &setSQL{strings.Join(sqls, " UNION "), args}
 	}
 	// Global term: any tokenized field OR any atom exact.
 	return &setSQL{
 		fmt.Sprintf(`SELECT doc_id FROM %s WHERE %s MATCH ? UNION SELECT doc_id FROM %s_fields WHERE type='atom' AND text_lc=?`,
 			ftsTable, ftsTable, pfx),
 		[]any{match, strings.ToLower(word)},
+	}
+}
+
+var (
+	numberValueRe = regexp.MustCompile(`^-?\d+(\.\d+)?$`)
+	dateValueRe   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+)
+
+// numericValue reads a query value the hosted tokenizer takes as a number or a date
+// (YYYY-MM-DD, as epoch milliseconds). A phrase or a stemmed word is never one.
+func numericValue(word string, stem, phrase bool) (float64, bool) {
+	if stem || phrase {
+		return 0, false
+	}
+	if dateValueRe.MatchString(word) {
+		if ms, err := parseDate([]byte(`"` + word + `"`)); err == nil {
+			return float64(ms), true
+		}
+	}
+	if numberValueRe.MatchString(word) {
+		if n, err := strconv.ParseFloat(word, 64); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// numericCond matches a number or date field compared with n.
+func (p *parser) numericCond(field, op string, n float64) *setSQL {
+	return &setSQL{
+		fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type IN ('number','date') AND num_val %s ?`, p.ix.prefix, op),
+		[]any{field, n},
 	}
 }
 
