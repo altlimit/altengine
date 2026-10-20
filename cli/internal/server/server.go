@@ -122,7 +122,7 @@ func New(opts Options) (*Server, error) {
 	reg.OnValidateConfig("search", search.ValidateConfig)
 	reg.OnValidateConfig("datastore", datastore.ValidateConfig)
 	reg.OnValidateConfig("channel", channel.ValidateConfig)
-	reg.OnValidateConfig("auth", identity.ValidateConfig)
+	reg.OnValidateConfigChange("auth", identity.ValidateConfigChange)
 	reg.OnValidateConfig("blob", blob.ValidateConfig)
 	reg.OnValidateConfig("container", container.ValidateConfig)
 

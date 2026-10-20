@@ -180,6 +180,78 @@ func parseAccess(v any) AccessConfig {
 // save-time guard so a config that stores in dev also stores in prod (and vice-versa). Called
 // on the auth admin config write; the read path (parseAccess) stays tolerant.
 func ValidateAccessLevels(access any) error {
+	return ValidateAccessChange(access, nil)
+}
+
+// ValidateAccessChange is ValidateAccessLevels for a save that replaces `stored`: a filter
+// already in the stored config is taken as it is, and only a filter that is new or changed is
+// held to the field and value checks. A rule saved before those checks existed keeps working at
+// request time, so it must not block every later save of the config.
+func ValidateAccessChange(access, stored any) error {
+	return validateAccess(access, storedFilters(stored))
+}
+
+// filterKey identifies a filter by (field, op, value), as the grandfathering compares them.
+func filterKey(field, op string, value any) string {
+	b, err := json.Marshal([]any{field, op, canonicalJSON(value)})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// canonicalJSON turns json.Number into float64, so a value decoded either way keys the same.
+func canonicalJSON(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			return f
+		}
+		return t.String()
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = canonicalJSON(x)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			out[k] = canonicalJSON(x)
+		}
+		return out
+	}
+	return v
+}
+
+// storedFilters is every filter in a stored access config: any object carrying a string field
+// and a string op, wherever it sits.
+func storedFilters(access any) map[string]bool {
+	out := map[string]bool{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case []any:
+			for _, x := range t {
+				walk(x)
+			}
+		case map[string]any:
+			field, fok := t["field"].(string)
+			op, ook := t["op"].(string)
+			if fok && ook {
+				out[filterKey(field, op, t["value"])] = true
+				return
+			}
+			for _, x := range t {
+				walk(x)
+			}
+		}
+	}
+	walk(access)
+	return out
+}
+
+func validateAccess(access any, gf map[string]bool) error {
 	m, ok := access.(map[string]any)
 	if !ok {
 		return nil // absent/malformed access → tolerant read handles it
@@ -214,7 +286,7 @@ func ValidateAccessLevels(access any) error {
 				if (hasCreate && cm["create"] != nil || hasUpdate && cm["update"] != nil) && level == "read" {
 					return common.BadRequest(loc + " declares a create/update rule, but level 'read' is read-only — set this target's level to \"write\" or \"full\".")
 				}
-				if err := validateCollectionShape(cm, loc); err != nil {
+				if err := validateCollectionShape(cm, loc, gf); err != nil {
 					return err
 				}
 			}
@@ -227,9 +299,9 @@ func ValidateAccessLevels(access any) error {
 // read path silently drops — an OR that's empty / over-cap / malformed, and a nested (dotted)
 // field-rule key whose read mask would silently no-op (a fail-open field leak). Mirrors the
 // hosted validateMatch + top-level field-key guard so a config that stores in dev stores in prod.
-func validateCollectionShape(cm map[string]any, loc string) error {
+func validateCollectionShape(cm map[string]any, loc string, gf map[string]bool) error {
 	if v, ok := cm["read"]; ok && v != nil {
-		if err := validateReadPolicyShape(v, loc+".read"); err != nil {
+		if err := validateReadPolicyShape(v, loc+".read", gf); err != nil {
 			return err
 		}
 	}
@@ -239,7 +311,7 @@ func validateCollectionShape(cm map[string]any, loc string) error {
 			continue
 		}
 		if v, ok := wm["match"]; ok && v != nil {
-			if err := validateMatchShape(v, loc+"."+mode+".match"); err != nil {
+			if err := validateMatchShape(v, loc+"."+mode+".match", gf); err != nil {
 				return err
 			}
 		}
@@ -257,12 +329,12 @@ func validateCollectionShape(cm map[string]any, loc string) error {
 			continue
 		}
 		if v, ok := fm["read"]; ok && v != nil {
-			if err := validateReadPolicyShape(v, loc+".fields['"+fname+"'].read"); err != nil {
+			if err := validateReadPolicyShape(v, loc+".fields['"+fname+"'].read", gf); err != nil {
 				return err
 			}
 		}
 		if v, ok := fm["write"]; ok && v != nil {
-			if err := validateMatchShape(v, loc+".fields['"+fname+"'].write"); err != nil {
+			if err := validateMatchShape(v, loc+".fields['"+fname+"'].write", gf); err != nil {
 				return err
 			}
 		}
@@ -275,22 +347,22 @@ func validateCollectionShape(cm map[string]any, loc string) error {
 // such a value with an empty policy, which at COLLECTION level is default-deny (fail-closed) but
 // at FIELD level means "no mask → always visible" (fail-OPEN, a silent field leak). Mirrors the
 // hosted validator, which routes a non-keyword read string through validateMatch and throws.
-func validateReadPolicyShape(v any, loc string) error {
+func validateReadPolicyShape(v any, loc string, gf map[string]bool) error {
 	if s, ok := v.(string); ok {
 		if s != "public" && s != "authenticated" {
 			return common.BadRequest(loc + ` must be "public", "authenticated", an array of filters, or { any: [[...], ...] }`)
 		}
 		return nil
 	}
-	return validateMatchShape(v, loc)
+	return validateMatchShape(v, loc, gf)
 }
 
 // validateMatchShape rejects a Match that isn't a flat filter array or a well-formed
 // `{ any: [[...], ...] }` (non-empty, ≤ maxMatchGroups, each group a valid filter list).
-func validateMatchShape(v any, loc string) error {
+func validateMatchShape(v any, loc string, gf map[string]bool) error {
 	switch t := v.(type) {
 	case []any:
-		return validateFilterList(v, loc)
+		return validateFilterList(v, loc, gf)
 	case map[string]any:
 		anyRaw, ok := t["any"].([]any)
 		if !ok {
@@ -303,7 +375,7 @@ func validateMatchShape(v any, loc string) error {
 			return common.BadRequest(loc + ".any allows at most 4 OR-groups")
 		}
 		for i, g := range anyRaw {
-			if err := validateFilterList(g, loc+".any["+itoa(i)+"]"); err != nil {
+			if err := validateFilterList(g, loc+".any["+itoa(i)+"]", gf); err != nil {
 				return err
 			}
 		}
@@ -317,8 +389,10 @@ func validateMatchShape(v any, loc string) error {
 // one: the tolerant read path silently DROPS a filter with a bad op, and a group that drops all
 // of its filters collapses to an empty (match-all) group — a fail-open that OR amplifies (one
 // malformed branch makes the whole disjunction match every row). Mirrors the hosted
-// validateFilters op check so a rule rejected in prod is rejected here too.
-func validateFilterList(v any, loc string) error {
+// validateFilters op check so a rule rejected in prod is rejected here too. A filter in `gf` (the
+// stored config's, keyed by filterKey) with a supported op is grandfathered past the field and
+// value checks.
+func validateFilterList(v any, loc string, gf map[string]bool) error {
 	arr, ok := v.([]any)
 	if !ok {
 		return common.BadRequest(loc + " must be an array of filters")
@@ -332,6 +406,9 @@ func validateFilterList(v any, loc string) error {
 		field, _ := fm["field"].(string)
 		if field == "" {
 			return common.BadRequest(at + ".field must be a non-empty string")
+		}
+		if op, _ := fm["op"].(string); ruleOps[op] && gf[filterKey(field, op, fm["value"])] {
+			continue
 		}
 		// The datastore's own field check: a rule on a field no query can name would only
 		// ever fail at request time.

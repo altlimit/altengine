@@ -10,6 +10,12 @@ import (
 // most often trips on. Settings may sit at the top level or under `settings`, as ParseConfig reads
 // them.
 func ValidateConfig(cfg map[string]any) error {
+	return ValidateConfigChange(cfg, nil)
+}
+
+// ValidateConfigChange is ValidateConfig for a save that replaces `before`: a rule filter already
+// stored there is grandfathered, as hosted (see ValidateAccessChange).
+func ValidateConfigChange(cfg, before map[string]any) error {
 	settings := cfg
 	if s, ok := cfg["settings"].(map[string]any); ok {
 		settings = s
@@ -25,7 +31,7 @@ func ValidateConfig(cfg map[string]any) error {
 	if on, _ := lookup(cfg, "captchaEnabled").(bool); on && key == "" {
 		return common.BadRequest("captchaSiteKey is required when captcha is enabled")
 	}
-	if err := ValidateAccessLevels(cfg["access"]); err != nil {
+	if err := ValidateAccessChange(cfg["access"], before["access"]); err != nil {
 		return err
 	}
 	parsed := ParseConfig(cfg)
