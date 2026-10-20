@@ -322,9 +322,10 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 
 // placedRegion names the services whose region is chosen when the instance is created and
 // cannot be changed afterwards — hosted, each such instance's data lives in one place, put
-// there at creation — and the config field that holds it. Locally a region changes nothing;
-// the rule is kept so a config that saves here saves there.
-var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region"}
+// there at creation (a container's job watcher, by its first job) — and the config field that
+// holds it. Locally a region changes nothing; the rule is kept so a config that saves here
+// saves there.
+var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region", "container": "config.region"}
 
 // RegionAtCreate reports whether service takes its region at creation (and only then).
 func RegionAtCreate(service string) bool { return placedRegion[service] != "" }

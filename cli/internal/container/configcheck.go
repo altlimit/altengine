@@ -19,6 +19,9 @@ var onCompleteRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[A-Za-z0-9_-]+$`)
 // ValidateConfig is the container instance's config check on a write, with the hosted rules:
 // a value out of range is refused rather than clamped, so a mistake is reported.
 func ValidateConfig(cfg map[string]any) error {
+	if err := common.CheckRegion(cfg); err != nil {
+		return err
+	}
 	if v, present := cfg["rateLimit"]; present && v != nil {
 		if n, ok := common.Int(v); !ok || n < 1 {
 			return common.BadRequest("rateLimit must be a positive integer or null")

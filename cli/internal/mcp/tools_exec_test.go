@@ -445,6 +445,20 @@ func TestCreateInstanceRegion(t *testing.T) {
 		t.Fatal("an auto auth instance was moved to a region")
 	}
 
+	// Container takes its region at creation too, and keeps it.
+	if out := runTool(t, h, "create_instance", map[string]any{"service": "container", "name": "jobs", "region": "weur"}); out["region"] != "weur" {
+		t.Fatalf("container create = %v", out)
+	}
+	if text, isErr := toolText(t, h, "patch_instance_config", map[string]any{
+		"service": "container", "instance": "jobs", "changes": map[string]any{"region": "enam"},
+	}); !isErr || !strings.Contains(text, "cannot be changed") {
+		t.Fatalf("a container region patch was not refused: %s", text)
+	}
+	runTool(t, h, "patch_instance_config", map[string]any{"service": "container", "instance": "jobs", "changes": map[string]any{"maxConcurrent": 2}})
+	if _, isErr := toolText(t, h, "create_instance", map[string]any{"service": "container", "name": "bad", "region": "mars"}); !isErr {
+		t.Fatal("an unknown container region was accepted")
+	}
+
 	if text, isErr := toolText(t, h, "create_instance", map[string]any{"service": "datastore", "name": "db", "region": "weur"}); !isErr || !strings.Contains(text, "patch_instance_config") {
 		t.Fatalf("a datastore region at create was accepted: %s", text)
 	}

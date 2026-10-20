@@ -33,7 +33,7 @@ func (h *Handler) createInstance(w http.ResponseWriter, r *http.Request, service
 	if body.Name == "" {
 		return common.BadRequest("name is required")
 	}
-	// Auth and blob take their region here or never; every other service sets it through its
+	// Auth, blob and container take their region here or never; every other service sets it through its
 	// config, so a region on their create is ignored, as hosted.
 	var in *control.Instance
 	var err error

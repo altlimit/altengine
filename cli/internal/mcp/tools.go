@@ -357,7 +357,7 @@ func init() {
 				"name":    map[string]any{"type": "string", "description": "Unique within this service. Lowercase, descriptive, e.g. 'orders'."},
 				"region": map[string]any{
 					"type": "string", "enum": common.Regions,
-					"description": "auth and blob only: where the instance's data is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
+					"description": "auth, blob and container only: where the instance's data (container: its job watcher) is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
 				},
 			},
 			annotations: writes,
@@ -417,7 +417,7 @@ func init() {
 			name:  "patch_instance_config",
 			title: "Update instance config",
 			description: "Merge changes into an instance's configuration. Send ONLY the top-level fields you want to change; everything else is preserved. " +
-				"The region of an auth or blob instance is fixed at creation and cannot be patched. " +
+				"The region of an auth, blob or container instance is fixed at creation and cannot be patched. " +
 				"Returns the fields that actually changed. Read get_instance_config first if you need to see the current shape.",
 			required: []string{"service", "instance", "changes"},
 			props: map[string]any{

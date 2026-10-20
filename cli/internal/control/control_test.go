@@ -107,7 +107,7 @@ func TestSaveConfigValidatesThenRunsHooks(t *testing.T) {
 	}
 }
 
-// An auth or blob instance's region is chosen at creation; any config write that would change
+// An auth, blob or container instance's region is chosen at creation; any config write that would change
 // it — including a full replace that leaves it out — is refused.
 func TestRegionFixedAtCreate(t *testing.T) {
 	reg, err := New("")
@@ -122,6 +122,18 @@ func TestRegionFixedAtCreate(t *testing.T) {
 		t.Fatalf("a replace dropping the region = %v", err)
 	}
 	if err := reg.ReplaceConfig(b, map[string]any{"region": "weur", "defaultPublic": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Container: the same, in config.region.
+	c, err := reg.CreatePlaced("container", "jobs", "enam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SaveConfig(c, map[string]any{"region": "weur"}); err == nil || !strings.Contains(err.Error(), "config.region") || !strings.Contains(err.Error(), "'enam'") {
+		t.Fatalf("a container region change = %v", err)
+	}
+	if err := reg.SaveConfig(c, map[string]any{"maxConcurrent": 2}); err != nil {
 		t.Fatal(err)
 	}
 
