@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -324,16 +325,10 @@ func (p *parser) term(field string) (*setSQL, error) {
 	switch t.kind {
 	case tWord:
 		p.next()
-		w := t.text
-		prefix := false
-		if strings.HasSuffix(w, "*") {
-			prefix = true
-			w = strings.TrimSuffix(w, "*")
-		}
-		return p.compileTermExpanded(field, w, prefix, stem, false), nil
+		return p.compileTermExpanded(field, t.text, stem, false), nil
 	case tPhrase:
 		p.next()
-		return p.compileTermExpanded(field, t.text, false, stem, true), nil
+		return p.compileTermExpanded(field, t.text, stem, true), nil
 	}
 	return nil, common.BadRequest("unexpected token in query: " + t.text)
 }
@@ -347,12 +342,12 @@ func ftsQuote(s string) string {
 // compileTermExpanded compiles a term PLUS its synonym/numeral alternatives from the
 // instance config (additive OR — the original term is always one branch, so expansion
 // can only widen). Expanding at the leaf means `NOT laptop` naturally excludes the
-// synonyms too (the negation wraps the expanded set). No expansion for prefix/stem
-// terms or on numeric/untokenized fields, matching the hosted engine's gating; `!=`
-// deliberately calls compileTerm directly and is never expanded.
-func (p *parser) compileTermExpanded(field, word string, prefix, stem, phrase bool) *setSQL {
-	base := p.compileTerm(field, word, prefix, stem, phrase)
-	if prefix || stem || p.ix == nil || p.ix.syn == nil {
+// synonyms too (the negation wraps the expanded set). No expansion for stemmed terms or
+// on numeric/untokenized fields; `!=` deliberately calls compileTerm directly and is never
+// expanded.
+func (p *parser) compileTermExpanded(field, word string, stem, phrase bool) *setSQL {
+	base := p.compileTerm(field, word, stem, phrase)
+	if stem || p.ix == nil || p.ix.syn == nil {
 		return base
 	}
 	if field != "" {
@@ -362,27 +357,36 @@ func (p *parser) compileTermExpanded(field, word string, prefix, stem, phrase bo
 		}
 	}
 	for _, alt := range p.ix.synAlts(word) {
-		base = union(base, p.compileTerm(field, alt, false, false, strings.Contains(alt, " ")))
+		base = union(base, p.compileTerm(field, alt, false, strings.Contains(alt, " ")))
 	}
 	return base
 }
 
-// compileTerm builds a set for a term in a text-ish context.
-func (p *parser) compileTerm(field, word string, prefix, stem, phrase bool) *setSQL {
+// nonWordRun is what prefixMatch splits a tokenprefix query on.
+var nonWordRun = regexp.MustCompile(`[^A-Za-z0-9_]+`)
+
+// prefixMatch is a tokenprefix field's query, as hosted: its first run of letters, digits
+// and underscores as an FTS prefix — so `title:abc` matches "abcdef", and `title:abc*` is
+// the same query. A value with no such run is matched as quoted text.
+func prefixMatch(word string) string {
+	runs := strings.Fields(nonWordRun.ReplaceAllString(word, " "))
+	if len(runs) == 0 {
+		return ftsQuote(word)
+	}
+	return runs[0] + "*"
+}
+
+// compileTerm builds a set for a term in a text-ish context. There is no `*` operator, as
+// hosted: a trailing `*` is part of the value. In quoted full-text it is a separator the
+// tokenizer drops, a tokenprefix field always matches as a prefix (see prefixMatch), and an
+// atom or untokenprefix value keeps it as a character.
+func (p *parser) compileTerm(field, word string, stem, phrase bool) *setSQL {
 	pfx := p.ix.prefix
 	ftsTable := pfx + "_fts"
 	if stem && p.ix.stemming {
 		ftsTable = pfx + "_fts_stem"
 	}
-	var match string
-	switch {
-	case phrase:
-		match = ftsQuote(word)
-	case prefix:
-		match = ftsQuote(word) + "*"
-	default:
-		match = ftsQuote(word)
-	}
+	match := ftsQuote(word)
 	if field != "" {
 		// Field-scoped: FTS on that field name, OR atom/untokenprefix exact/prefix.
 		ftype := p.fieldType(field)
@@ -391,13 +395,9 @@ func (p *parser) compileTerm(field, word string, prefix, stem, phrase bool) *set
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='atom' AND text_lc=?`, pfx),
 				[]any{field, strings.ToLower(word)}}
 		case ftype == "untokenprefix":
-			// Always a case-insensitive prefix match, as hosted: the value is the prefix,
-			// and a trailing `*` is part of it rather than an operator. % _ and \ match
-			// literally: each is escaped, and the ESCAPE clause is what makes the backslash
-			// an escape rather than part of the pattern.
-			if prefix {
-				word += "*"
-			}
+			// Always a case-insensitive prefix match, as hosted: the value is the prefix.
+			// % _ and \ match literally: each is escaped, and the ESCAPE clause is what
+			// makes the backslash an escape rather than part of the pattern.
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx),
 				[]any{field, likeEscaper.Replace(strings.ToLower(word)) + "%"}}
 		case ftype == "number" || ftype == "date":
@@ -406,6 +406,9 @@ func (p *parser) compileTerm(field, word string, prefix, stem, phrase bool) *set
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type IN ('number','date') AND num_val=?`, pfx),
 				[]any{field, n}}
 		default:
+			if ftype == "tokenprefix" && !phrase {
+				match = prefixMatch(word)
+			}
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s WHERE %s MATCH ? AND name=?`, ftsTable, ftsTable),
 				[]any{match, field}}
 		}
@@ -450,15 +453,9 @@ func (p *parser) fieldValue(field, op string) (*setSQL, error) {
 
 	switch op {
 	case ":", "=":
-		prefix := false
-		w := val
-		if vt.kind == tWord && strings.HasSuffix(w, "*") {
-			prefix = true
-			w = strings.TrimSuffix(w, "*")
-		}
-		return p.compileTermExpanded(field, w, prefix, stem, vt.kind == tPhrase), nil
+		return p.compileTermExpanded(field, val, stem, vt.kind == tPhrase), nil
 	case "!=":
-		eq := p.compileTerm(field, val, false, stem, vt.kind == tPhrase)
+		eq := p.compileTerm(field, val, stem, vt.kind == tPhrase)
 		return negate(p.ix, eq), nil
 	case "<", "<=", ">", ">=":
 		n, err := parseNumOrDate(val)

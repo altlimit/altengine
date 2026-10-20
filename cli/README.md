@@ -335,10 +335,11 @@ no single-document GET — use the `documents/get` batch.
 
 Field types: `text html atom number date geo tokenprefix untokenprefix`. Query language: bare/global
 terms, field scope (`title:up`, `genre = "sci fi"`), numeric/date compares (`rating > 3`),
-`AND`/`OR`/`NOT`/`-`, grouping (`genre:(comedy OR drama)`), phrases, prefix (`term*`), stemming
-(`~running`), and geo (`distance(loc, geopoint(37.7,-122.4)) < 1000`). Supports `limit`/`offset`/
-`cursor`, `sort`, `ids_only`, `returned_fields`, facet discovery + refinements, and bounded
-`total_hits` with `total_hits_accuracy`.
+`AND`/`OR`/`NOT`/`-`, grouping (`genre:(comedy OR drama)`), phrases, stemming (`~running`), and
+geo (`distance(loc, geopoint(37.7,-122.4)) < 1000`). Supports `limit`/`offset`/`cursor`, `sort`, `ids_only`, `returned_fields`, facet discovery + refinements, and bounded
+`total_hits` with `total_hits_accuracy`. There is no `*` wildcard: a `tokenprefix` field matches
+its query as a word prefix (`title:wond` finds "wonderful") and an `untokenprefix` field as a
+prefix of the whole value; a `*` in a query is an ordinary character.
 
 Result shaping matches production too: **snippets** (`snippet` block → per-result highlighted,
 HTML-escaped excerpts via FTS5) and **field collapsing** (`collapse: {field, limit}` — top-N per
