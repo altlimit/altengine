@@ -391,14 +391,15 @@ func (p *parser) compileTerm(field, word string, prefix, stem, phrase bool) *set
 			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='atom' AND text_lc=?`, pfx),
 				[]any{field, strings.ToLower(word)}}
 		case ftype == "untokenprefix":
+			// Always a case-insensitive prefix match, as hosted: the value is the prefix,
+			// and a trailing `*` is part of it rather than an operator. % _ and \ match
+			// literally: each is escaped, and the ESCAPE clause is what makes the backslash
+			// an escape rather than part of the pattern.
 			if prefix {
-				// % _ and \ in the prefix match literally: each is escaped, and the ESCAPE
-				// clause is what makes the backslash an escape rather than part of the pattern.
-				return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx),
-					[]any{field, likeEscaper.Replace(strings.ToLower(word)) + "%"}}
+				word += "*"
 			}
-			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc=?`, pfx),
-				[]any{field, strings.ToLower(word)}}
+			return &setSQL{fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type='untokenprefix' AND text_lc LIKE ? ESCAPE '\'`, pfx),
+				[]any{field, likeEscaper.Replace(strings.ToLower(word)) + "%"}}
 		case ftype == "number" || ftype == "date":
 			// equality on a numeric field
 			n, _ := strconv.ParseFloat(word, 64)
