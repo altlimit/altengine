@@ -13,7 +13,10 @@ class FakeWS {
   onmessage?: (ev: { data: string }) => void;
   onclose?: (ev: { code: number }) => void;
   onerror?: () => void;
-  constructor(public url: string) {
+  constructor(
+    public url: string,
+    public protocols?: string | string[]
+  ) {
     FakeWS.last = this;
     queueMicrotask(() => {
       this.readyState = 1;
@@ -62,5 +65,50 @@ describe("ChannelSocket refusals", () => {
     FakeWS.last.frame({ type: "subscribed", channels: [], refused: ["busy"] });
     expect(refused).toEqual([["busy"]]);
     sock.close();
+  });
+});
+
+// The token goes in a subprotocol, not the URL, whenever the server says where to connect
+// without it; a response with only `ws_url` comes from an older server and is opened as is.
+describe("ChannelSocket token transport", () => {
+  async function dial(tok: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const sock = new ChannelSocket({
+      getToken: () => tok as any,
+      webSocket: FakeWS as unknown as new (url: string, protocols?: string | string[]) => WebSocket,
+      pingIntervalMs: 60_000,
+      ...extra,
+    });
+    await sock.connect();
+    sock.close();
+    return FakeWS.last;
+  }
+
+  it("opens ws_endpoint with the response's protocols", async () => {
+    const ws = await dial({
+      token: "a.b.c",
+      ws_endpoint: "wss://x.test/v1/channel/i/subscribe",
+      protocols: ["altengine.v1", "altengine.token.a.b.c"],
+      ws_url: "wss://x.test/v1/channel/i/subscribe?token=a.b.c",
+    });
+    expect(ws.url).toBe("wss://x.test/v1/channel/i/subscribe");
+    expect(ws.protocols).toEqual(["altengine.v1", "altengine.token.a.b.c"]);
+  });
+
+  it("builds the protocols from the token when the response has an endpoint but no protocols", async () => {
+    const ws = await dial({ token: "a.b.c", ws_endpoint: "wss://x.test/v1/channel/i/subscribe" });
+    expect(ws.protocols).toEqual(["altengine.v1", "altengine.token.a.b.c"]);
+  });
+
+  it("falls back to ws_url, token in the query, for an older server", async () => {
+    const ws = await dial({ token: "a.b.c", ws_url: "wss://x.test/v1/channel/i/subscribe?token=a.b.c" });
+    expect(ws.url).toBe("wss://x.test/v1/channel/i/subscribe?token=a.b.c");
+    expect(ws.protocols).toBeUndefined();
+  });
+
+  it("sends the token as a subprotocol to an explicit url", async () => {
+    const ws = await dial({ token: "a.b.c" }, { url: "wss://x.test/v1/channel/i/subscribe", channels: ["r1", "r2"] });
+    expect(ws.url).toBe("wss://x.test/v1/channel/i/subscribe?channels=r1%2Cr2");
+    expect(ws.url).not.toContain("a.b.c");
+    expect(ws.protocols).toEqual(["altengine.v1", "altengine.token.a.b.c"]);
   });
 });

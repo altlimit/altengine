@@ -14,7 +14,7 @@
  * await idx.put([{ fields: [f.text("title", "Blue Shoes"), f.number("price", 59)] }]);
  *
  * const ch = ae.channel("myapp");
- * const { token, ws_url } = await ch.createToken({ channels: ["room:1"] });
+ * const { token, ws_endpoint, protocols } = await ch.createToken({ channels: ["room:1"] });
  * ```
  *
  * For the browser WebSocket subscriber, import from `@altengine/sdk/channel`.

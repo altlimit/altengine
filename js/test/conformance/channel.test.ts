@@ -8,7 +8,7 @@ const instance = uniq("sdk-conf");
 let ch: ChannelClient;
 
 // Node's `ws` implements the browser WebSocket surface closely enough for the socket.
-const wsCtor = WebSocket as unknown as new (url: string) => globalThis.WebSocket;
+const wsCtor = WebSocket as unknown as new (url: string, protocols?: string | string[]) => globalThis.WebSocket;
 
 const waitFor = <T>(fn: (resolve: (v: T) => void) => void, ms = 10_000): Promise<T> =>
   new Promise<T>((resolve, reject) => {
@@ -29,7 +29,39 @@ describe("channel tokens & publish", () => {
     expect(tok.token.split(".")).toHaveLength(3);
     expect(tok.channels).toEqual(["room:1", "room:2"]);
     expect(tok.ws_url).toContain("/subscribe");
+    expect(tok.ws_endpoint).toMatch(/\/subscribe$/);
+    expect(tok.protocols).toEqual(["altengine.v1", `altengine.token.${tok.token}`]);
     expect(tok.expires_at).toBeGreaterThan(Date.now() / 1000);
+  });
+
+  it("the socket opens with the token as a subprotocol, and the server answers altengine.v1", async () => {
+    const tok = await ch.createToken({ channels: ["room:proto"] });
+    const ws = new WebSocket(tok.ws_endpoint!, tok.protocols);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+      expect(ws.protocol).toBe("altengine.v1");
+    } finally {
+      ws.close();
+    }
+  });
+
+  it("a ?token= socket still opens, answered with the deprecation headers", async () => {
+    const tok = await ch.createToken({ channels: ["room:legacy"] });
+    const ws = new WebSocket(tok.ws_url);
+    try {
+      const headers = await new Promise<Record<string, string | string[] | undefined>>((resolve, reject) => {
+        ws.once("upgrade", (res) => resolve(res.headers));
+        ws.once("error", reject);
+      });
+      expect(headers["deprecation"]).toBe("true");
+      expect(headers["sunset"]).toBe("Sun, 31 Jan 2027 00:00:00 GMT");
+      expect(String(headers["link"])).toContain('rel="deprecation"');
+    } finally {
+      ws.close();
+    }
   });
 
   it("HTTP publish reports delivered count (0 with no subscribers)", async () => {

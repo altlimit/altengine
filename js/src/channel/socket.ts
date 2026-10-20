@@ -1,8 +1,8 @@
 /** ChannelSocket — the browser/edge WebSocket subscriber for altengine channels.
  *
  * Standalone and browser-safe: no API keys, no other SDK imports. Your backend
- * mints a subscriber token (`ChannelClient.createToken`) and hands `{token, ws_url}`
- * to the page; the socket does the rest — connect, auto-reconnect with backoff,
+ * mints a subscriber token (`ChannelClient.createToken`) and hands the response
+ * (`{token, ws_endpoint, protocols}`) to the page; the socket does the rest — connect, auto-reconnect with backoff,
  * token re-mint on reconnect, resubscribe, and keepalive pings.
  */
 
@@ -12,21 +12,30 @@ export type SocketState = "idle" | "connecting" | "open" | "reconnecting" | "clo
 
 export interface SocketToken {
   token: string;
-  /** Ready-made subscribe URL from the token response. Optional when `url` is set. */
+  /** Subscribe URL without the token, from the token response. */
+  ws_endpoint?: string;
+  /** Subprotocols that carry the token, from the token response. */
+  protocols?: string[];
+  /** @deprecated The subscribe URL with the token in its query string. Used only when the
+   * response has no `ws_endpoint` (an older server). */
   ws_url?: string;
 }
+
+/** The subprotocol offered alongside the token, and the one the server answers with. */
+const WS_PROTOCOL = "altengine.v1";
+const WS_TOKEN_PROTOCOL_PREFIX = "altengine.token.";
 
 export interface ChannelSocketOptions {
   /** Called before every connection attempt (including reconnects) so tokens are
    * always fresh. Return the token-mint response (or `{token}` with `url` set). */
   getToken: () => Promise<SocketToken> | SocketToken;
-  /** Explicit subscribe URL (`wss://…/v1/channel/<instance>/subscribe`) when the
-   * token response's `ws_url` isn't used; `?token=` is appended automatically. */
+  /** Explicit subscribe URL (`wss://…/v1/channel/<instance>/subscribe`) when the token
+   * response has no `ws_endpoint`. The token is sent as a subprotocol, not in the URL. */
   url?: string;
   /** Subset of the token's channels to subscribe on connect (default: all). */
   channels?: string[];
   /** WebSocket constructor for runtimes without a global one. */
-  webSocket?: new (url: string) => WebSocket;
+  webSocket?: new (url: string, protocols?: string | string[]) => WebSocket;
   /** Keepalive ping interval in ms (default 30000). A silent connection past
    * ~1.5 intervals is treated as dead and reconnected. */
   pingIntervalMs?: number;
@@ -157,16 +166,27 @@ export class ChannelSocket {
     this.ws?.send(typeof frame === "string" ? frame : JSON.stringify(frame));
   }
 
-  private buildUrl(tok: SocketToken): string {
-    let raw = tok.ws_url ?? this.opts.url;
-    if (!raw) throw new Error("no WebSocket URL: token response had no ws_url and no url option was set");
-    const url = new URL(raw);
-    if (!url.searchParams.has("token")) url.searchParams.set("token", tok.token);
+  /** Where to dial, and with which subprotocols. The token travels as a subprotocol
+   * (`altengine.token.<token>`, beside `altengine.v1`), never in the URL — except against an
+   * older server whose response has only `ws_url`, which is opened as it is. */
+  private target(tok: SocketToken): { url: string; protocols?: string[] } {
+    const endpoint = tok.ws_endpoint ?? (tok.ws_url ? undefined : this.opts.url);
+    let url: URL;
+    let protocols: string[] | undefined;
+    if (endpoint) {
+      url = new URL(endpoint);
+      protocols = tok.protocols?.length ? tok.protocols : [WS_PROTOCOL, WS_TOKEN_PROTOCOL_PREFIX + tok.token];
+    } else if (tok.ws_url) {
+      url = new URL(tok.ws_url);
+      if (!url.searchParams.has("token")) url.searchParams.set("token", tok.token);
+    } else {
+      throw new Error("no WebSocket URL: token response had no ws_endpoint and no url option was set");
+    }
     // Narrow the initial subscription to the explicitly requested subset.
     if (this.explicitChannels && this.desired.size) {
       url.searchParams.set("channels", [...this.desired].join(","));
     }
-    return url.toString();
+    return { url: url.toString(), protocols };
   }
 
   private async dial(): Promise<void> {
@@ -185,7 +205,8 @@ export class ChannelSocket {
 
     await new Promise<void>((resolve) => {
       let settled = false;
-      const ws = new WS(this.buildUrl(tok));
+      const { url, protocols } = this.target(tok);
+      const ws = protocols ? new WS(url, protocols) : new WS(url);
       this.ws = ws;
 
       ws.onopen = () => {

@@ -21,6 +21,8 @@ class TestTokensAndPublish:
         assert len(tok["token"].split(".")) == 3
         assert tok["channels"] == ["room:1", "room:2"]
         assert "/subscribe" in tok["ws_url"]
+        assert tok["ws_endpoint"].endswith("/subscribe")
+        assert tok["protocols"] == ["altengine.v1", "altengine.token." + tok["token"]]
         assert tok["expires_at"] > time.time()
 
     def test_http_publish_delivered_count(self, ch):

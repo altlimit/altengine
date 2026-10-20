@@ -40,6 +40,10 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
   `.gitignore`.
 - A JSON body over 8 MiB is a 413; channel frames over 64 KiB close the socket; multipart parts
   are bounded by the reserved size and abandoned uploads are reaped after 6 hours.
+- Channel subscribe takes its token from `Sec-WebSocket-Protocol: altengine.v1,
+  altengine.token.<token>` (answered with `altengine.v1`) or `Authorization: Bearer`, as hosted.
+  `?token=` still works and is answered with `Deprecation`, `Sunset: Sun, 31 Jan 2027` and a
+  `rel="deprecation"` `Link`. Token mints return `ws_endpoint` and `protocols` beside `ws_url`.
 
 ### SDKs
 
@@ -49,3 +53,7 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 - JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
   completion webhook's signature and timestamp.
 - Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
+- JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
+  `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
+  An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
+  types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.

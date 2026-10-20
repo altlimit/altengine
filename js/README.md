@@ -131,7 +131,7 @@ WebSocket (auto-reconnect, resubscribe, keepalive):
 import { ChannelSocket } from "@altengine/sdk/channel";
 
 const sock = new ChannelSocket({
-  getToken: () => fetch("/api/channel-token").then((r) => r.json()), // { token, ws_url }
+  getToken: () => fetch("/api/channel-token").then((r) => r.json()), // the token response: { token, ws_endpoint, protocols, … }
 });
 sock.on("message", ({ channel, data }) => render(data));
 await sock.connect();

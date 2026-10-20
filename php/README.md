@@ -121,7 +121,7 @@ $delivered = $ch->publish('room:1', ['hello' => 'world']);
 $roster = $ch->presence('room:1');
 ```
 
-This SDK does not open WebSockets — hand `['token' => ..., 'ws_url' => ...]`
+This SDK does not open WebSockets — hand the token response (`token`, `ws_endpoint`, `protocols`)
 to your web/mobile client and subscribe there (e.g. with
 [`@altengine/sdk/channel`](../js/)).
 

@@ -33,8 +33,8 @@ type SocketOptions struct {
 	// CreateToken, or a call to your own backend.
 	GetToken func(ctx context.Context) (*TokenResponse, error)
 	// URL is an explicit subscribe URL (wss://…/v1/channel/<instance>/subscribe)
-	// when the token response's ws_url isn't used; ?token= is appended
-	// automatically.
+	// used in place of the token response's ws_endpoint. The token is sent as a
+	// subprotocol, not in the URL.
 	URL string
 	// Channels is the subset of the token's channels to subscribe on connect
 	// (default: all).
@@ -256,20 +256,40 @@ func (s *ChannelSocket) send(ctx context.Context, conn *websocket.Conn, frame an
 	return conn.Write(ctx, websocket.MessageText, b)
 }
 
-func (s *ChannelSocket) buildURL(tok *TokenResponse) (string, error) {
-	raw := tok.WSURL
-	if s.opts.URL != "" {
-		raw = s.opts.URL
-	}
+// Subprotocols for the subscribe upgrade: the token rides in the second, and the server
+// answers with the first.
+const (
+	wsProtocol            = "altengine.v1"
+	wsTokenProtocolPrefix = "altengine.token."
+)
+
+// target returns where to dial and the subprotocols to offer. The token travels as a
+// subprotocol, never in the URL — except against an older server whose token response has
+// only ws_url, which is opened as it is.
+func (s *ChannelSocket) target(tok *TokenResponse) (string, []string, error) {
+	raw := s.opts.URL
 	if raw == "" {
-		return "", errors.New("no WebSocket URL: token response had no ws_url and no URL option was set")
+		raw = tok.WSEndpoint
+	}
+	var protocols []string
+	legacy := false
+	switch {
+	case raw != "":
+		protocols = tok.Protocols
+		if len(protocols) == 0 {
+			protocols = []string{wsProtocol, wsTokenProtocolPrefix + tok.Token}
+		}
+	case tok.WSURL != "":
+		raw, legacy = tok.WSURL, true
+	default:
+		return "", nil, errors.New("no WebSocket URL: token response had no ws_endpoint and no URL option was set")
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	q := u.Query()
-	if q.Get("token") == "" {
+	if legacy && q.Get("token") == "" {
 		q.Set("token", tok.Token)
 	}
 	// Narrow the initial subscription to the explicitly requested subset.
@@ -279,7 +299,7 @@ func (s *ChannelSocket) buildURL(tok *TokenResponse) (string, error) {
 	}
 	s.mu.Unlock()
 	u.RawQuery = q.Encode()
-	return u.String(), nil
+	return u.String(), protocols, nil
 }
 
 func (s *ChannelSocket) dial(ctx context.Context) error {
@@ -287,11 +307,11 @@ func (s *ChannelSocket) dial(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get token: %w", err)
 	}
-	u, err := s.buildURL(tok)
+	u, protocols, err := s.target(tok)
 	if err != nil {
 		return err
 	}
-	conn, _, err := websocket.Dial(ctx, u, nil)
+	conn, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{Subprotocols: protocols})
 	if err != nil {
 		return err
 	}

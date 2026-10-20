@@ -30,7 +30,8 @@ class ChannelClient:
         each ≤200 bytes). ``ttl_seconds`` defaults to 3600 (max 14400);
         ``publish`` grants publish capability (requires a ``write`` grant);
         ``presence_id`` (≤128 bytes) is bound into the token server-side.
-        Returns ``{token, expires_at, channels, publish, ws_url, ...}``."""
+        Returns ``{token, expires_at, channels, publish, ws_endpoint, protocols, ...}``
+        (``ws_url``, the token in the query string, is deprecated)."""
         body: Dict[str, Any] = {"channels": list(channels)}
         if ttl_seconds is not None:
             body["ttl_seconds"] = ttl_seconds

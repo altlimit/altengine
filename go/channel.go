@@ -64,7 +64,14 @@ type TokenResponse struct {
 	ExpiresAt int64       `json:"expires_at"`
 	Channels  []string    `json:"channels"`
 	Publish   PublishMode `json:"publish"`
-	// WSURL is a ready-made WebSocket URL (wss://…/subscribe?token=…).
+	// WSEndpoint is the WebSocket URL without the token (wss://…/subscribe).
+	// Dial it offering Protocols. Empty from older servers.
+	WSEndpoint string `json:"ws_endpoint,omitempty"`
+	// Protocols are the subprotocols that carry the token:
+	// ["altengine.v1", "altengine.token.<token>"].
+	Protocols []string `json:"protocols,omitempty"`
+	// Deprecated: WSURL carries the token in its query string
+	// (wss://…/subscribe?token=…). Use WSEndpoint and Protocols.
 	WSURL      string `json:"ws_url"`
 	PresenceID string `json:"presence_id,omitempty"`
 }

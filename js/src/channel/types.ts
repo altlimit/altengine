@@ -21,7 +21,13 @@ export interface TokenResponse {
   expires_at: number;
   channels: string[];
   publish: PublishMode;
-  /** Ready-made WebSocket URL (`wss://…/subscribe?token=…`). */
+  /** WebSocket URL without the token (`wss://…/subscribe`). Open it with `protocols`:
+   * `new WebSocket(ws_endpoint, protocols)`. Absent from older servers. */
+  ws_endpoint?: string;
+  /** `["altengine.v1", "altengine.token.<token>"]` — the subprotocols that carry the token. */
+  protocols?: string[];
+  /** @deprecated WebSocket URL with the token in its query string (`wss://…/subscribe?token=…`).
+   * Use `ws_endpoint` + `protocols`. */
   ws_url: string;
   presence_id?: string;
 }

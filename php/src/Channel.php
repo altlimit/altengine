@@ -26,7 +26,8 @@ class Channel
      * ≤200 bytes). Options: ttl_seconds (default 3600, max 14400), publish
      * ("http"|"ws"|"all"|true — requires a write grant), presence_id (≤128
      * bytes, bound into the token server-side). Returns
-     * {token, expires_at, channels, publish, ws_url, ...}.
+     * {token, expires_at, channels, publish, ws_endpoint, protocols, ...}
+     * (ws_url, the token in the query string, is deprecated).
      *
      * @param list<string> $channels
      */

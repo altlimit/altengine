@@ -12,8 +12,13 @@ import asyncio
 import inspect
 import json
 import random
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+
+# Subprotocols for the subscribe upgrade: the token rides in the second, and the
+# server answers with the first.
+WS_PROTOCOL = "altengine.v1"
+WS_TOKEN_PROTOCOL_PREFIX = "altengine.token."
 
 TokenProvider = Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]
 
@@ -27,7 +32,7 @@ class ChannelSocket:
 
     ``get_token`` is called before every connection attempt (including
     reconnects) so tokens are always fresh; it returns the token-mint response
-    (``{token, ws_url, ...}``). Messages arrive on :meth:`messages` (an async
+    (``{token, ws_endpoint, protocols, ...}``). Messages arrive on :meth:`messages` (an async
     iterator) and/or the ``on_message`` callback.
     """
 
@@ -126,24 +131,34 @@ class ChannelSocket:
             tok = await tok
         return tok
 
-    def _build_url(self, tok: Dict[str, Any]) -> str:
-        raw = self._url or tok.get("ws_url")
-        if not raw:
-            raise ChannelSocketError("no WebSocket URL: token response had no ws_url and no url was set")
+    def _target(self, tok: Dict[str, Any]) -> Tuple[str, Optional[List[str]]]:
+        """Where to dial, and the subprotocols to offer. The token travels as a
+        subprotocol, never in the URL — except against an older server whose
+        token response has only ``ws_url``, which is opened as it is."""
+        raw = self._url or tok.get("ws_endpoint")
+        protocols: Optional[List[str]] = None
+        legacy = False
+        if raw:
+            protocols = list(tok.get("protocols") or []) or [WS_PROTOCOL, WS_TOKEN_PROTOCOL_PREFIX + tok["token"]]
+        elif tok.get("ws_url"):
+            raw, legacy = tok["ws_url"], True
+        else:
+            raise ChannelSocketError("no WebSocket URL: token response had no ws_endpoint and no url was set")
         parts = urlsplit(raw)
         query = parse_qs(parts.query)
-        if "token" not in query:
+        if legacy and "token" not in query:
             query["token"] = [tok["token"]]
         # Narrow the initial subscription to the explicitly requested subset.
         if self._explicit and self._desired:
             query["channels"] = [",".join(sorted(self._desired))]
-        return urlunsplit(parts._replace(query=urlencode(query, doseq=True)))
+        return urlunsplit(parts._replace(query=urlencode(query, doseq=True))), protocols
 
     async def _dial(self) -> None:
         import websockets
 
         tok = await self._token()
-        ws = await websockets.connect(self._build_url(tok), max_size=1 << 20)
+        url, protocols = self._target(tok)
+        ws = await websockets.connect(url, max_size=1 << 20, subprotocols=protocols)
         self._ws = ws
         self._attempts = 0
         self._last_activity = asyncio.get_running_loop().time()

@@ -31,6 +31,12 @@ func TestChannelTokensAndPublish(t *testing.T) {
 		if !strings.Contains(tok.WSURL, "/subscribe") {
 			t.Fatalf("ws_url=%q", tok.WSURL)
 		}
+		if !strings.HasSuffix(tok.WSEndpoint, "/subscribe") {
+			t.Fatalf("ws_endpoint=%q", tok.WSEndpoint)
+		}
+		if len(tok.Protocols) != 2 || tok.Protocols[0] != "altengine.v1" || tok.Protocols[1] != "altengine.token."+tok.Token {
+			t.Fatalf("protocols=%v", tok.Protocols)
+		}
 		if tok.ExpiresAt <= time.Now().Unix() {
 			t.Fatalf("expires_at=%d", tok.ExpiresAt)
 		}
