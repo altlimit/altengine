@@ -477,7 +477,6 @@ func (p *parser) fieldType(field string) string {
 
 // fieldValue compiles `field op value` for comparison/equality operators.
 func (p *parser) fieldValue(field, op string) (*setSQL, error) {
-	pfx := p.ix.prefix
 	// value token
 	stem := false
 	if p.cur().kind == tTilde {
@@ -494,32 +493,17 @@ func (p *parser) fieldValue(field, op string) (*setSQL, error) {
 	switch op {
 	case ":", "=":
 		return p.compileTermExpanded(field, val, stem, vt.kind == tPhrase), nil
-	case "!=":
-		eq := p.compileTerm(field, val, stem, vt.kind == tPhrase)
-		return negate(p.ix, eq), nil
-	case "<", "<=", ">", ">=":
-		n, err := parseNumOrDate(val)
-		if err != nil {
-			return nil, err
+	case "!=", "<", "<=", ">", ">=":
+		// A comparison, `!=` included, takes a number or a date and matches the documents
+		// whose number/date field compares so, as hosted — `!=` is not a negation, so a
+		// document without the field does not match it.
+		n, ok := numericValue(val, stem, vt.kind == tPhrase)
+		if !ok {
+			return nil, common.BadRequest(fmt.Sprintf("operator '%s' on field '%s' requires a numeric value", op, field))
 		}
-		return &setSQL{
-			fmt.Sprintf(`SELECT doc_id FROM %s_fields WHERE name=? AND type IN ('number','date') AND num_val %s ?`, pfx, op),
-			[]any{field, n},
-		}, nil
+		return p.numericCond(field, op, n), nil
 	}
 	return nil, common.BadRequest("unsupported operator: " + op)
-}
-
-func parseNumOrDate(s string) (float64, error) {
-	if n, err := strconv.ParseFloat(s, 64); err == nil {
-		return n, nil
-	}
-	// date YYYY-MM-DD or RFC3339
-	ms, err := parseDate([]byte(`"` + s + `"`))
-	if err != nil {
-		return 0, common.BadRequest("invalid numeric/date value: " + s)
-	}
-	return float64(ms), nil
 }
 
 func (p *parser) geo() (*setSQL, error) {
