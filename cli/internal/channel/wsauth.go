@@ -49,9 +49,11 @@ func offeredProtocols(r *http.Request) []string {
 }
 
 // upgradeToken picks the upgrade's token. Precedence: the `altengine.token.` subprotocol,
-// the older `bearer, <token>` subprotocol, `Authorization: Bearer` (a channel token, not an
-// API key), then `?token=`. A token subprotocol offered without `altengine.v1` is refused:
-// there would be nothing safe to echo. A nil result with a nil error means no token at all.
+// the older `bearer, <token>` subprotocol, `?token=`, then `Authorization: Bearer` (a channel
+// token, not an API key) — as the hosted service: a client that sends a default Authorization
+// beside its channel token in the URL connects on the URL token. An empty `altengine.token.`
+// value is no token and falls through. A token subprotocol offered without `altengine.v1` is
+// refused: there would be nothing safe to echo. A nil result with a nil error means no token.
 func upgradeToken(r *http.Request) (*upgradeAuth, error) {
 	offered := offeredProtocols(r)
 	echo := ""
@@ -63,11 +65,10 @@ func upgradeToken(r *http.Request) (*upgradeAuth, error) {
 			if echo == "" {
 				return nil, common.NewError(400, "offer the "+wsProtocol+" subprotocol alongside "+wsTokenProtocolPrefix+"<token>", "INVALID_ARGUMENT")
 			}
-			tok := strings.TrimPrefix(p, wsTokenProtocolPrefix)
-			if tok == "" {
-				return nil, nil
+			if tok := strings.TrimPrefix(p, wsTokenProtocolPrefix); tok != "" {
+				return &upgradeAuth{token: tok, source: srcProtocol, echo: echo}, nil
 			}
-			return &upgradeAuth{token: tok, source: srcProtocol, echo: echo}, nil
+			break
 		}
 	}
 	for i, p := range offered {
@@ -79,11 +80,11 @@ func upgradeToken(r *http.Request) (*upgradeAuth, error) {
 			return &upgradeAuth{token: offered[i+1], source: srcBearerProtocol, echo: e}, nil
 		}
 	}
-	if m := bearerHeader(r); m != "" && strings.Count(m, ".") == 2 {
-		return &upgradeAuth{token: m, source: srcHeader, echo: echo}, nil
-	}
 	if q := r.URL.Query().Get("token"); q != "" {
 		return &upgradeAuth{token: q, source: srcQuery, echo: echo}, nil
+	}
+	if m := bearerHeader(r); m != "" && strings.Count(m, ".") == 2 {
+		return &upgradeAuth{token: m, source: srcHeader, echo: echo}, nil
 	}
 	return nil, nil
 }

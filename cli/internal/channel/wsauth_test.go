@@ -105,7 +105,7 @@ func TestSubscribeTokenTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("protocol and header win over ?token=", func(t *testing.T) {
+	t.Run("protocol wins over ?token=, and ?token= over the header", func(t *testing.T) {
 		_, resp, err := dial(t, endpoint+"?token=junk.junk.junk", protocols, nil)
 		if err != nil {
 			t.Fatalf("dial: %v", err)
@@ -115,7 +115,16 @@ func TestSubscribeTokenTransport(t *testing.T) {
 		if err == nil || resp == nil || resp.StatusCode != 401 {
 			t.Fatalf("a bad protocol token beside a good query should be 401, got err=%v resp=%v", err, resp)
 		}
-		_, resp, err = dial(t, endpoint+"?token=junk.junk.junk", nil, http.Header{"Authorization": {"Bearer " + token}})
+		// A default Authorization beside the channel token in the URL connects on the URL token.
+		_, resp, err = dial(t, endpoint+"?token="+url.QueryEscape(token), nil, http.Header{"Authorization": {"Bearer junk.junk.junk"}})
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		if resp.Header.Get("Deprecation") != "true" {
+			t.Fatalf("a URL token should carry the deprecation headers")
+		}
+		// The header alone authenticates, and is not deprecated.
+		_, resp, err = dial(t, endpoint, nil, http.Header{"Authorization": {"Bearer " + token}})
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
