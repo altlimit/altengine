@@ -36,8 +36,8 @@ export interface ChannelSocketOptions {
   channels?: string[];
   /** WebSocket constructor for runtimes without a global one. */
   webSocket?: new (url: string, protocols?: string | string[]) => WebSocket;
-  /** Keepalive ping interval in ms (default 30000). A silent connection past
-   * ~1.5 intervals is treated as dead and reconnected. */
+  /** Keepalive ping interval in ms (default 30000, at most 60000). A silent
+   * connection past ~1.5 intervals is treated as dead and reconnected. */
   pingIntervalMs?: number;
   /** Reconnect backoff base/cap in ms (defaults 250 / 30000). */
   backoffBaseMs?: number;
@@ -277,7 +277,8 @@ export class ChannelSocket {
   }
 
   private startPing(): void {
-    const interval = this.opts.pingIntervalMs ?? 30_000;
+    // The server closes (4408) a connection that pinged and then stops for 15 minutes.
+    const interval = Math.min(this.opts.pingIntervalMs ?? 30_000, 60_000);
     this.stopPing();
     this.pingTimer = setInterval(() => {
       if (!this.isOpen()) return;
