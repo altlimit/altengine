@@ -84,6 +84,10 @@
       "get": "read",
       "send": "write",
       "reply": "write",
+      "markRead": "write",
+      "listAddresses": "read",
+      "createAddress": "write",
+      "disableAddress": "write",
       "delete": "full"
     },
     "search": {

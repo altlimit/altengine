@@ -875,6 +875,46 @@ var serviceMethods = map[string]map[string]call{
 				return o, nil
 			},
 		},
+		"markRead": {
+			method: "POST", level: auth.Write, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/messages/%s/read", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"listAddresses": {
+			method: "GET", level: auth.Read, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				q := url.Values{}
+				if v, ok := o["cursor"].(string); ok && v != "" {
+					q.Set("cursor", v)
+				}
+				if v, ok := o["limit"]; ok && v != nil {
+					q.Set("limit", fmt.Sprint(v))
+				}
+				return fmt.Sprintf("/v1/mailbox/%s/addresses?%s", esc(t.instance), q.Encode()), nil
+			},
+		},
+		// `local` omitted mints an unguessable name, as hosted.
+		"createAddress": {
+			method: "POST", level: auth.Write, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/addresses", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				if o == nil {
+					o = map[string]any{}
+				}
+				return o, nil
+			},
+		},
+		"disableAddress": {
+			method: "DELETE", level: auth.Write, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/addresses/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
 		"delete": {
 			method: "DELETE", level: auth.Full, minArgs: 2,
 			path: func(t target, a []goja.Value) (string, error) {
