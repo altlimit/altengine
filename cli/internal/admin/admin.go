@@ -51,7 +51,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/me", common.Wrap(h.me))
 
 	// Instances (per service).
-	for _, svc := range []string{"search", "datastore", "channel", "auth"} {
+	// (The mailbox's own console routes — inbox, compose, replay — are mounted by its package.)
+	for _, svc := range []string{"search", "datastore", "channel", "auth", "mailbox"} {
 		s := svc
 		mux.HandleFunc("GET /admin/"+s, common.Wrap(func(w http.ResponseWriter, r *http.Request) error { return h.listInstances(w, s) }))
 		mux.HandleFunc("POST /admin/"+s, common.Wrap(func(w http.ResponseWriter, r *http.Request) error { return h.createInstance(w, r, s) }))

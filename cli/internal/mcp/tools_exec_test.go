@@ -27,6 +27,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/datastore"
 	"github.com/altlimit/altengine/cli/internal/identity"
+	"github.com/altlimit/altengine/cli/internal/mailbox"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
 
@@ -52,6 +53,10 @@ func newLiveHandler(t *testing.T) *Handler {
 	identity.NewHandler(reg, idSvc).Register(mux)
 	blob.NewHandler(reg, a, blob.NewStore("")).Register(mux)
 	container.NewHandler(reg, a, container.NewStore(nil), mux).Register(mux)
+	mailSvc := mailbox.NewService(reg, mailbox.NewStore(""), mux, hub, mailbox.Options{})
+	mailbox.NewHandler(reg, a, mailSvc).Register(mux)
+	reg.OnValidateConfig("mailbox", mailbox.ValidateConfig)
+	reg.OnDelete("mailbox", mailSvc.Drop)
 	// Admin before MCP, as the real server does: some tools reach an /admin route, and admin's
 	// console handler is a catch-all on "/" that would otherwise swallow them.
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)

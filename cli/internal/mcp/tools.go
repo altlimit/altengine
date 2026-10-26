@@ -12,6 +12,7 @@ import (
 
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
+	"github.com/altlimit/altengine/cli/internal/mailbox"
 )
 
 // services an agent can create and address. Derived from the registry rather than written out
@@ -319,8 +320,9 @@ func init() {
 		tool{
 			name:  "list_instances",
 			title: "List instances",
-			description: "List every service instance (search, datastore, channel, auth, functions) with its id, name and creation time. " +
-				"Start here: instance NAMES from this call are accepted anywhere a tool asks for an instance.",
+			description: "List every service instance (search, datastore, channel, auth, functions, blob, container, mailbox) with its id, name and creation time. " +
+				"Start here: instance NAMES from this call are accepted anywhere a tool asks for an instance. A mailbox also carries `slug`, the first part of " +
+				"every address, `<slug>.<anything>@<domain>` (locally the slug is the instance name).",
 			props: map[string]any{
 				"service": mergeMap(serviceEnum, map[string]any{"description": "Only this service. Omit for all."}),
 			},
@@ -338,7 +340,15 @@ func init() {
 				for _, s := range wanted {
 					rows := []map[string]any{}
 					for _, in := range h.reg.List(s) {
-						rows = append(rows, map[string]any{"id": in.ID, "name": in.Name, "created_at": in.CreatedAt})
+						row := map[string]any{"id": in.ID, "name": in.Name, "created_at": in.CreatedAt}
+						if s == "mailbox" {
+							if slug := mailbox.SlugOf(in.Name); slug != "" {
+								row["slug"] = slug
+							} else {
+								row["slug"] = nil
+							}
+						}
+						rows = append(rows, row)
 					}
 					out[s] = rows
 				}
@@ -357,7 +367,7 @@ func init() {
 				"name":    map[string]any{"type": "string", "description": "Unique within this service. Lowercase, descriptive, e.g. 'orders'."},
 				"region": map[string]any{
 					"type": "string", "enum": common.Regions,
-					"description": "auth, blob and container only: where the instance's data (container: its job watcher) is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
+					"description": "auth, blob, container and mailbox only: where the instance's data (container: its job watcher) is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
 				},
 			},
 			annotations: writes,

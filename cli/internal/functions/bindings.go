@@ -799,6 +799,89 @@ var serviceMethods = map[string]map[string]call{
 			},
 		},
 	},
+	// Mailbox. The case it exists for is a route that calls a function: the message arrives as
+	// the request body, and the natural next step is to reply. Every method is the /v1 call it
+	// maps to, so the send mode, the reply rule and the caps apply exactly as over HTTP.
+	"mailbox": {
+		// Only the address fields and the send mode, as the hosted stub returns.
+		"info": {
+			level: auth.Read, minArgs: 1,
+			custom: func(b *bindings, t target, a []goja.Value) (any, error) {
+				got, err := b.do("GET", "/v1/mailbox/"+esc(t.instance), "", nil)
+				if err != nil {
+					return nil, err
+				}
+				obj, _ := got.(map[string]any)
+				return map[string]any{"domain": obj["domain"], "address": obj["address"], "pattern": obj["pattern"], "sendMode": obj["sendMode"]}, nil
+			},
+		},
+		"list": {
+			method: "GET", level: auth.Read, minArgs: 1,
+			path: func(t target, a []goja.Value) (string, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				q := url.Values{}
+				if v, ok := o["to"].(string); ok && v != "" {
+					q.Set("to", v)
+				}
+				if v, ok := o["direction"].(string); ok && (v == "in" || v == "out") {
+					q.Set("direction", v)
+				}
+				if o["unread"] == true {
+					q.Set("unread", "1")
+				}
+				if v, ok := o["cursor"].(string); ok && v != "" {
+					q.Set("cursor", v)
+				}
+				if v, ok := o["limit"]; ok && v != nil {
+					q.Set("limit", fmt.Sprint(v))
+				}
+				return fmt.Sprintf("/v1/mailbox/%s/messages?%s", esc(t.instance), q.Encode()), nil
+			},
+		},
+		"get": {
+			method: "GET", level: auth.Read, minArgs: 2, unwrap: "message",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/messages/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		// A new message: a `replyToMessageId` in it is ignored, as hosted — `reply` is the
+		// threaded path.
+		"send": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "message",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/send", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				o, _ := argAny(a, 1).(map[string]any)
+				out := map[string]any{}
+				for k, v := range o {
+					if k != "replyToMessageId" {
+						out[k] = v
+					}
+				}
+				return out, nil
+			},
+		},
+		"reply": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "message",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/messages/%s/reply", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				o, _ := argAny(a, 2).(map[string]any)
+				if o == nil {
+					o = map[string]any{}
+				}
+				return o, nil
+			},
+		},
+		"delete": {
+			method: "DELETE", level: auth.Full, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/messages/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+	},
 	// Automation. Declared for its GRANT LEVELS, which are shared like every other service's;
 	// none of it runs here, because a run is a script driving a real desktop and the emulator
 	// has no fleet. See the `unavailable` field for why the stub exists anyway.

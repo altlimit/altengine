@@ -78,6 +78,14 @@
       "createIndex": "write",
       "deleteIndex": "full"
     },
+    "mailbox": {
+      "info": "read",
+      "list": "read",
+      "get": "read",
+      "send": "write",
+      "reply": "write",
+      "delete": "full"
+    },
     "search": {
       "index": "write",
       "get": "read",

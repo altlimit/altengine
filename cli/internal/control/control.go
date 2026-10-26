@@ -187,7 +187,7 @@ func (r *Registry) save() error {
 // copy of this list, and when the container service landed nobody added it there — so every
 // container call in the emulator's DEFAULT mode answered 403, which reads as a broken emulator
 // rather than a missing line in an auth file. A test asserts dev-open covers all of these.
-var Services = []string{"search", "datastore", "channel", "auth", "functions", "blob", "container"}
+var Services = []string{"search", "datastore", "channel", "auth", "functions", "blob", "container", "mailbox"}
 
 // needsSecret reports whether a service signs tokens with a per-instance secret: channel
 // subscriber tokens and auth end-user identity tokens.
@@ -236,6 +236,17 @@ func defaultConfig(service string) map[string]any {
 			"maxTimeoutMs":  300000,
 			"maxConcurrent": 2,
 			"maxJobCostUsd": 1,
+		}
+	case "mailbox":
+		// `{settings, routes}`, fully defaulted as hosted returns it (internal/mailbox owns the
+		// rules; this is only the seed). Every address is accepted, mail is sent only in reply
+		// to authenticated senders, and everything expires after seven days.
+		return map[string]any{
+			"settings": map[string]any{
+				"rateLimit": nil, "region": "auto", "acceptMode": "any", "inboundDailyCap": 5000,
+				"retentionDays": 7, "sendMode": "reply", "dailySendCap": nil, "keepRaw": true,
+			},
+			"routes": []any{},
 		}
 	case "auth":
 		// The seed blob an auth instance starts with. Every key is optional — the auth
@@ -326,7 +337,7 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 // there at creation (a container's job watcher, by its first job) — and the config field that
 // holds it. Locally a region changes nothing; the rule is kept so a config that saves here
 // saves there.
-var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region", "container": "config.region"}
+var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region", "container": "config.region", "mailbox": "settings.region"}
 
 // RegionAtCreate reports whether service takes its region at creation (and only then).
 func RegionAtCreate(service string) bool { return placedRegion[service] != "" }
@@ -335,7 +346,11 @@ func RegionAtCreate(service string) bool { return placedRegion[service] != "" }
 // may sit under `settings` or at the top level, read in that order.
 func regionIn(service string, cfg map[string]any) string {
 	v := cfg["region"]
-	if service == "auth" {
+	if service == "mailbox" {
+		// A mailbox keeps every scalar in `settings`; a top-level region means nothing to it.
+		v = nil
+	}
+	if service == "auth" || service == "mailbox" {
 		if s, ok := cfg["settings"].(map[string]any); ok {
 			if sv, ok := s["region"]; ok {
 				v = sv
@@ -366,7 +381,7 @@ func (r *Registry) CreatePlaced(service, name string, region any) (*Instance, er
 		return in, err
 	}
 	cfg := r.ConfigSnapshot(in)
-	if s, ok := cfg["settings"].(map[string]any); ok && service == "auth" {
+	if s, ok := cfg["settings"].(map[string]any); ok && (service == "auth" || service == "mailbox") {
 		ns := make(map[string]any, len(s)+1)
 		for k, v := range s {
 			ns[k] = v

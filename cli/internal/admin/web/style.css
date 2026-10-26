@@ -60,6 +60,7 @@ input, select, textarea {
   border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit;
 }
 textarea { font-family: var(--mono); min-height: 90px; resize: vertical; }
+input[type="checkbox"] { width: auto; }
 button.btn {
   background: var(--accent); color: #061021; border: none; border-radius: 8px;
   padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer;
@@ -68,6 +69,16 @@ button.btn:hover { filter: brightness(1.08); }
 button.btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
 button.btn.danger { background: transparent; color: var(--err); border: 1px solid var(--border); }
 button.btn.sm { padding: 4px 9px; font-size: 12px; }
+a.btn {
+  display: inline-block; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 14px; text-decoration: none; font-weight: 500;
+}
+a.btn.sm { padding: 4px 9px; font-size: 12px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.btn:disabled { opacity: .5; cursor: not-allowed; }
+fieldset.card { min-width: 0; }
+legend { color: var(--muted); font-size: 12px; font-weight: 600; padding: 0 6px; }
+a { color: var(--accent); }
 table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; }

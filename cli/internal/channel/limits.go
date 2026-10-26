@@ -20,6 +20,13 @@ var (
 	errMessageTooLarge = common.BadRequest("message exceeds 32768 bytes")
 )
 
+// ValidateChannel is the channel-name rule, for a service that names a channel in its own config
+// (a mailbox route) and must refuse one the channel service would.
+func ValidateChannel(ch string) error { return validateChannel(ch) }
+
+// MaxMessageBytes is the largest framed message ({channel, data, ts}) a publish may carry.
+const MaxMessageBytes = maxMessageBytes
+
 func validateChannel(ch string) error {
 	if !channelRe.MatchString(ch) || ch[0] == '!' || reservedChannelRe.MatchString(ch) {
 		return common.BadRequest("invalid channel name")

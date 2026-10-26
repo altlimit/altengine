@@ -1,6 +1,6 @@
 // Package server wires the emulator's HTTP surface: the data planes (/v1/search,
-// /v1/datastore, /v1/channel, /v1/auth, /v1/functions, /v1/blob, /v1/container and the
-// public /fn and /blob paths), the control-plane admin API (/admin), MCP, and the embedded
+// /v1/datastore, /v1/channel, /v1/auth, /v1/functions, /v1/blob, /v1/container, /v1/mailbox
+// and the public /fn and /blob paths), the control-plane admin API (/admin), MCP, and the embedded
 // admin console — mounted in the same order as the hosted platform (data plane, then admin,
 // then static assets).
 package server
@@ -26,6 +26,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/devsite"
 	"github.com/altlimit/altengine/cli/internal/functions"
 	"github.com/altlimit/altengine/cli/internal/identity"
+	"github.com/altlimit/altengine/cli/internal/mailbox"
 	"github.com/altlimit/altengine/cli/internal/mcp"
 	"github.com/altlimit/altengine/cli/internal/search"
 )
@@ -49,6 +50,14 @@ type Options struct {
 	// loopback ones allowed by default. For the case the default does not cover: a phone or a
 	// second machine on the LAN pointed at this emulator.
 	AllowOrigins []string
+
+	// MailDomain is the domain every mailbox address is on ("" => mail.localhost).
+	MailDomain string
+	// SMTPAddr, when set, starts an SMTP listener there that delivers into local mailboxes.
+	SMTPAddr string
+	// SMTPAuthenticated marks mail received over SMTP as coming from an authenticated sender,
+	// so a mailbox in `reply` send mode may answer it.
+	SMTPAuthenticated bool
 }
 
 // Server is the assembled emulator.
@@ -59,6 +68,8 @@ type Server struct {
 	reg  *control.Registry
 	lim  *limiter
 	blob *blob.Store
+	mail *mailbox.Service
+	smtp *mailbox.SMTPServer
 
 	site   *devsite.Server
 	siteLn net.Listener
@@ -112,6 +123,15 @@ func New(opts Options) (*Server, error) {
 	// something a restart should adopt.
 	container.NewHandler(reg, a, container.NewStore(nil), mux).Register(mux)
 
+	// Mailbox, after functions and channels: a route hands an arriving message to a function
+	// (dispatched into this same mux) or publishes it into the hub. Messages and their files live
+	// under the data directory like the other services' data.
+	mailSvc := mailbox.NewService(reg, mailbox.NewStore(opts.DataDir), mux, hub, mailbox.Options{
+		Domain: opts.MailDomain,
+		Base:   "http://" + opts.Addr,
+	})
+	mailbox.NewHandler(reg, a, mailSvc).Register(mux)
+
 	// Deleting an instance drops its data, and each service says how. One teardown path for
 	// the console and for MCP's delete_instance — a delete that leaves a database behind is a
 	// local disk leak, and worse, an emulator that means something different by "deleted" than
@@ -125,11 +145,16 @@ func New(opts Options) (*Server, error) {
 	reg.OnValidateConfigChange("auth", identity.ValidateConfigChange)
 	reg.OnValidateConfig("blob", blob.ValidateConfig)
 	reg.OnValidateConfig("container", container.ValidateConfig)
+	reg.OnValidateConfig("mailbox", mailbox.ValidateConfig)
+	reg.OnConfigSaved("mailbox", func(in *control.Instance, _ map[string]any) {
+		reg.SetConfig(in, mailbox.NormalizedConfigMap(in.Config()))
+	})
 
 	reg.OnDelete("datastore", dsMgr.DropInstance)
 	reg.OnDelete("search", srMgr.DropInstance)
 	reg.OnDelete("auth", idMgr.Drop)
 	reg.OnDelete("blob", blobStore.Drop)
+	reg.OnDelete("mailbox", mailSvc.Drop)
 
 	// Admin before MCP: MCP's tools dispatch into this same mux, and some of them (the
 	// datastore collection listing) reach an /admin route, so those must already be mounted.
@@ -157,7 +182,16 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/v1/static", staticStub)
 	mux.HandleFunc("/v1/static/", staticStub)
 
-	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore}
+	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore, mail: mailSvc}
+
+	if opts.SMTPAddr != "" {
+		// Bound here, like the site listener, so a port in use is a startup error.
+		ln, err := mailSvc.ListenSMTP(opts.SMTPAddr, opts.SMTPAuthenticated)
+		if err != nil {
+			return nil, err
+		}
+		srv.smtp = ln
+	}
 
 	if opts.StaticDir != "" {
 		site, err := devsite.New(devsite.Options{
@@ -210,6 +244,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) ListenAndServe() error {
 	s.fn.StartScheduler(context.Background())
 	s.blob.StartReaper(context.Background())
+	s.mail.Run(context.Background())
 	log.Printf("altengine listening on http://%s", s.opts.Addr)
 	log.Printf("  admin console:  http://%s/", s.opts.Addr)
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
@@ -218,6 +253,11 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  functions:      /fn/{instance}/{function} — console.log lands here")
 	log.Printf("  blob:           /v1/blob/{instance} — public objects at /blob/{instance}/{name}/{id}")
 	log.Printf("  containers:     /v1/container/{instance} — jobs run on your local Docker daemon")
+	log.Printf("  mailbox:        /v1/mailbox/{instance} — addresses <instance>[.<name>]@%s; nothing sent leaves the emulator", s.mail.Domain())
+	if s.smtp != nil {
+		log.Printf("  smtp:           %s — delivers into local mailboxes", s.smtp.Addr())
+		go s.smtp.Serve()
+	}
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
 	s.serveSite()

@@ -44,6 +44,13 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
   altengine.token.<token>` (answered with `altengine.v1`) or `Authorization: Bearer`, as hosted.
   `?token=` still works and is answered with `Deprecation`, `Sunset: Sun, 31 Jan 2027` and a
   `rel="deprecation"` `Link`. Token mints return `ws_endpoint` and `protocols` beside `ws_url`.
+- Mailbox service: `/v1/mailbox/{instance}`, the `mailbox_*` MCP tools and `env.mailbox`.
+  Addresses are `<instance>[.<name>]@mail.localhost` (`--mail-domain` or
+  `ALTENGINE_MAIL_DOMAIN`). Routes call functions, publish to channels and POST signed webhooks.
+  Nothing sent leaves the emulator: sends are recorded, and a send to a local address is
+  delivered into that mailbox (console toggle). The console's Mailbox tab composes test mail,
+  uploads `.eml` files and replays a message through the current routes. `--smtp` starts an SMTP
+  listener on `127.0.0.1:2525` (`--smtp-addr`, `--smtp-auth pass|none`).
 
 ### SDKs
 

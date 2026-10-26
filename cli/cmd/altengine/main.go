@@ -149,7 +149,18 @@ func devCmd(args []string) {
 	// phone or a second machine on the LAN pointed at this emulator. It widens who may drive
 	// your local data, so it is a flag rather than the default.
 	allowOrigin := fs.String("allow-origin", "", "extra browser origin(s) allowed to call the API, comma-separated")
+	mailDomain := fs.String("mail-domain", envOr("ALTENGINE_MAIL_DOMAIN", "mail.localhost"), "domain every mailbox address is on (env ALTENGINE_MAIL_DOMAIN)")
+	smtp := fs.Bool("smtp", false, "also accept mail over SMTP, delivered into local mailboxes")
+	smtpAddr := fs.String("smtp-addr", "127.0.0.1:2525", "address for the SMTP listener (with --smtp)")
+	smtpAuth := fs.String("smtp-auth", "pass", "how mail received over SMTP is marked: pass (sender authenticated) or none")
 	_ = fs.Parse(flagsFirst(fs, args))
+	if *smtpAuth != "pass" && *smtpAuth != "none" {
+		fail(fmt.Errorf("--smtp-auth must be pass or none"))
+	}
+	smtpListen := ""
+	if *smtp {
+		smtpListen = *smtpAddr
+	}
 
 	// Three states, and the third is the point: detection is a guess, and a guess that cannot be
 	// overridden is worse than none — both -spa and -spa=false have to beat it.
@@ -189,6 +200,10 @@ func devCmd(args []string) {
 		StaticAddr:   staticAddr,
 		StaticSPA:    spaOverride,
 		AllowOrigins: splitList(*allowOrigin),
+
+		MailDomain:        *mailDomain,
+		SMTPAddr:          smtpListen,
+		SMTPAuthenticated: *smtpAuth == "pass",
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "startup error:", err)
@@ -293,6 +308,14 @@ lists its flags.`
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+// envOr is an environment variable's value, or def when it is unset or empty.
+func envOr(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
 }
 
 // flagsFirst moves every flag in args ahead of the positionals, so a flag written after the

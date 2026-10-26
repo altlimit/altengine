@@ -59,7 +59,10 @@ function parseJSONField(text, fallback) {
 // ---- router ----
 const views = {};
 let current = "overview";
+// A view that polls registers its stop function here; leaving the view stops it.
+let viewCleanup = null;
 function setView(name) {
+  if (typeof viewCleanup === "function") { viewCleanup(); viewCleanup = null; }
   current = name;
   for (const b of document.querySelectorAll("#nav .tab")) b.classList.toggle("active", b.dataset.view === name);
   main.innerHTML = "";
@@ -96,7 +99,7 @@ views.overview = async () => {
     "Four services running locally. Point your SDK at this host and use any Bearer token."));
   const grid = h("div", { class: "grid" });
   main.append(grid);
-  for (const svc of ["datastore", "search", "channel", "auth"]) {
+  for (const svc of ["datastore", "search", "channel", "auth", "mailbox"]) {
     try {
       const { instances } = await jGet(`/admin/${svc}`);
       const label = svc === "channel" ? "channels" : svc;
@@ -115,6 +118,7 @@ views.overview = async () => {
       h("span", { class: "muted" }, "Search"), h("span", {}, location.origin + "/v1/search/{instance}"),
       h("span", { class: "muted" }, "Channels"), h("span", {}, location.origin + "/v1/channel/{instance}"),
       h("span", { class: "muted" }, "Auth"), h("span", {}, location.origin + "/v1/auth/{instance}"),
+      h("span", { class: "muted" }, "Mailbox"), h("span", {}, location.origin + "/v1/mailbox/{instance}"),
       h("span", { class: "muted" }, "API keys"), h("span", {}, "Authorization: Bearer <any-token>"),
     )
   ));
@@ -515,6 +519,461 @@ async function renderAuth() {
   } catch (e) {
     usersCard.append(h("p", { class: "muted" }, "Could not load users: " + e.message));
   }
+}
+
+// ================= MAILBOX =================
+// Mail never leaves the emulator. Test mail goes in through the same inbound path as /inject
+// (limits, accept mode, caps and routes all apply); sends land in Sent, and with loopback on a
+// send to a local address arrives in that mailbox.
+const mbState = { instId: null, tab: "Inbox", open: null, pendingOpen: null };
+let uidSeq = 0;
+const nid = (p) => `${p}-${++uidSeq}`;
+// A labelled control: the label is tied to the control by id.
+function field(labelText, control, cls = "flex1") {
+  if (!control.id) control.id = nid("f");
+  return h("div", { class: cls }, h("label", { for: control.id }, labelText), control);
+}
+function checkbox(labelText, checked) {
+  const cb = h("input", { type: "checkbox", ...(checked ? { checked: "" } : {}) });
+  return { cb, el: h("label", { class: "row", style: "gap:6px;color:var(--text)" }, cb, labelText) };
+}
+function fmtBytes(n) {
+  if (n == null) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+views.mailbox = async () => {
+  main.append(h("h1", {}, "Mailbox"),
+    h("p", { class: "muted" },
+      "Email addresses an app or agent owns. Nothing sent from here leaves your machine: deliver test mail below, and read what your app sends under Sent."));
+  main.append(await instancePicker("mailbox", (id) => { mbState.instId = id; mbState.open = null; renderMailbox(); }, mbState.instId));
+  main.append(h("div", { id: "mb-holder" }));
+  if (mbState.instId) renderMailbox();
+};
+
+async function renderMailbox() {
+  const holder = $("#mb-holder"); if (!holder) return; holder.innerHTML = "";
+  if (typeof viewCleanup === "function") { viewCleanup(); viewCleanup = null; }
+  if (!mbState.instId) return;
+  let info;
+  try { info = await jGet(`/admin/mailbox/${mbState.instId}/info`); }
+  catch (e) { holder.append(errBox(e)); return; }
+
+  const loop = checkbox("Loop back sends to local addresses", info.loopback);
+  loop.cb.addEventListener("change", async () => {
+    try { await jPut("/admin/mailbox-settings", { loopback: loop.cb.checked }); toast("loopback " + (loop.cb.checked ? "on" : "off")); }
+    catch (e) { toast(e.message, true); }
+  });
+  holder.append(h("div", { class: "card" },
+    h("div", { class: "kv mono" },
+      h("span", { class: "muted" }, "Address"), h("span", {}, info.address || "— (instance name is not a valid address slug; use inject with a bare name)"),
+      h("span", { class: "muted" }, "Every name"), h("span", {}, info.pattern || "—"),
+      h("span", { class: "muted" }, "Messages"), h("span", {}, `${info.message_count} (${fmtBytes(info.stored_bytes)} stored)`),
+      h("span", { class: "muted" }, "Modes"), h("span", {}, `accept ${info.config.settings.acceptMode}, send ${info.config.settings.sendMode}, keep ${info.config.settings.retentionDays} days`),
+    ),
+    h("div", { style: "margin-top:8px" }, loop.el)));
+
+  const names = ["Inbox", "Sent", "Compose", "Upload .eml", "Settings & routes", "Addresses"];
+  const sub = subtabs(names, (name) => { mbState.tab = name; mbState.open = null; renderMailboxTab(name, holder, info); });
+  holder.append(sub.bar, sub.body);
+  renderMailboxTab("Inbox", holder, info);
+}
+
+function renderMailboxTab(name, holder, info) {
+  if (typeof viewCleanup === "function") { viewCleanup(); viewCleanup = null; }
+  const body = holder.querySelector(".subtab-body"); body.innerHTML = "";
+  if (name === "Inbox") return mailList(body, info, "in");
+  if (name === "Sent") return mailList(body, info, "out");
+  if (name === "Compose") return mailCompose(body, info);
+  if (name === "Upload .eml") return mailUpload(body, info);
+  if (name === "Settings & routes") return mailSettings(body, info);
+  if (name === "Addresses") return mailAddresses(body, info);
+}
+
+// The message list, newest first, refreshed every few seconds while it is on screen.
+function mailList(body, info, direction) {
+  const base = `/admin/mailbox/${mbState.instId}`;
+  const listBox = h("div", { "aria-live": "polite" });
+  const view = h("div");
+  let cursor = null, rows = [], sig = "";
+  const more = h("button", { class: "btn ghost", onclick: () => load(true) }, "Load more");
+
+  function draw() {
+    listBox.innerHTML = "";
+    if (!rows.length) {
+      listBox.append(h("div", { class: "empty" }, direction === "in"
+        ? "No mail yet. Compose a test email, upload an .eml, or inject one from your app."
+        : "Nothing sent yet."));
+      return;
+    }
+    const tb = h("tbody");
+    for (const m of rows) {
+      const who = direction === "in" ? (m.from.name ? `${m.from.name} <${m.from.address}>` : m.from.address) : m.to.map((t) => t.address).join(", ");
+      tb.append(h("tr", {},
+        h("td", {}, h("button", { class: "btn ghost sm", onclick: () => openMsg(m.id), "aria-label": `Open message: ${m.subject || "(no subject)"}` }, "Open")),
+        h("td", { class: "mono" }, who),
+        h("td", {}, (m.readAt || direction === "out" ? "" : "● ") + (m.subject || "(no subject)"), h("div", { class: "muted", style: "font-size:12px" }, m.snippet)),
+        h("td", { class: "mono" }, m.local + (m.plusTag ? "+" + m.plusTag : "")),
+        h("td", {}, direction === "in" ? (m.verified ? h("span", { class: "pill ok" }, "authenticated") : h("span", { class: "pill" }, "unverified")) : h("span", { class: "pill" }, m.status)),
+        h("td", { class: "muted" }, fmtTime(m.receivedAt)),
+      ));
+    }
+    listBox.append(h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {},
+        h("th", { scope: "col" }, ""), h("th", { scope: "col" }, direction === "in" ? "From" : "To"),
+        h("th", { scope: "col" }, "Subject"), h("th", { scope: "col" }, "Name"),
+        h("th", { scope: "col" }, direction === "in" ? "Sender" : "Status"), h("th", { scope: "col" }, "When"))),
+      tb)));
+    if (cursor) listBox.append(h("div", { class: "row", style: "margin-top:8px" }, more));
+  }
+  async function load(append) {
+    try {
+      const q = new URLSearchParams({ direction, limit: "25" });
+      if (append && cursor) q.set("cursor", cursor);
+      const res = await jGet(`${base}/messages?${q}`);
+      if (append) rows = rows.concat(res.messages); else rows = res.messages;
+      if (!append) cursor = res.cursor; else cursor = res.cursor;
+      draw();
+    } catch (e) { listBox.innerHTML = ""; listBox.append(errBox(e)); }
+  }
+  // Live refresh: only the first page, and only redrawn when something changed.
+  async function poll() {
+    try {
+      const res = await jGet(`${base}/messages?direction=${direction}&limit=25`);
+      const s = res.messages.map((m) => m.id + (m.readAt || "")).join(",");
+      if (s !== sig && rows.length <= 25) { sig = s; rows = res.messages; cursor = res.cursor; draw(); }
+    } catch {}
+  }
+  async function openMsg(id) {
+    mbState.open = id;
+    await renderMessage(view, id, direction, () => { load(false); });
+    view.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
+  body.append(listBox, view);
+  load(false).then(() => { sig = rows.map((m) => m.id + (m.readAt || "")).join(","); });
+  const timer = setInterval(poll, 3000);
+  viewCleanup = () => clearInterval(timer);
+  // A message another tab asked to show ("Open in inbox" after delivering one).
+  const want = mbState.pendingOpen;
+  mbState.pendingOpen = null;
+  if (want) openMsg(want);
+}
+
+async function renderMessage(view, id, direction, reload) {
+  const base = `/admin/mailbox/${mbState.instId}`;
+  view.innerHTML = "";
+  let res;
+  try { res = await jGet(`${base}/messages/${encodeURIComponent(id)}`); }
+  catch (e) { view.append(errBox(e)); return; }
+  const m = res.message;
+  const heading = h("h2", { tabindex: "-1" }, m.subject || "(no subject)");
+  const bodyBox = h("div");
+  const showText = () => { bodyBox.innerHTML = ""; bodyBox.append(h("pre", { style: "white-space:pre-wrap;max-height:420px" }, m.text != null ? m.text : "(no text part)")); };
+  // HTML is rendered ONLY in a sandboxed frame: no script, no same-origin access, no forms.
+  const showHTML = () => {
+    bodyBox.innerHTML = "";
+    const fr = h("iframe", { sandbox: "", title: "HTML body of this message", style: "width:100%;height:420px;border:1px solid var(--border);border-radius:8px;background:#fff" });
+    fr.srcdoc = m.html || "";
+    bodyBox.append(fr);
+  };
+  const actions = h("div", { class: "row", style: "margin:8px 0" });
+  actions.append(h("button", { class: "btn ghost sm", onclick: showText }, "Text"));
+  if (m.html != null) actions.append(h("button", { class: "btn ghost sm", onclick: showHTML }, "HTML (sandboxed)"));
+  if (res.rawUrl) actions.append(h("a", { class: "btn ghost sm", href: res.rawUrl, download: "" }, "Download .eml"));
+  if (direction === "in") {
+    actions.append(h("button", { class: "btn sm", onclick: async () => {
+      try {
+        await jPost(`${base}/messages/${encodeURIComponent(id)}/replay`, {});
+        toast("replayed through the current routes");
+        renderMessage(view, id, direction, reload);
+      } catch (e) { toast(e.message, true); }
+    } }, "Replay through routes"));
+  }
+  actions.append(h("button", { class: "btn danger sm", onclick: async () => {
+    if (!confirm("Delete this message and its attachments?")) return;
+    try { await jDel(`${base}/messages/${encodeURIComponent(id)}`); toast("deleted"); view.innerHTML = ""; mbState.open = null; reload(); }
+    catch (e) { toast(e.message, true); }
+  } }, "Delete"));
+
+  const addr = (a) => (a.name ? `${a.name} <${a.address}>` : a.address);
+  const card = h("div", { class: "card" }, heading,
+    h("div", { class: "kv", style: "font-size:13px" },
+      h("span", { class: "muted" }, "From"), h("span", { class: "mono" }, addr(m.from)),
+      h("span", { class: "muted" }, "To"), h("span", { class: "mono" }, m.to.map(addr).join(", ") || "—"),
+      ...(m.cc.length ? [h("span", { class: "muted" }, "Cc"), h("span", { class: "mono" }, m.cc.map(addr).join(", "))] : []),
+      h("span", { class: "muted" }, "Name"), h("span", { class: "mono" }, m.local + (m.plusTag ? " (tag " + m.plusTag + ")" : "")),
+      h("span", { class: "muted" }, "Sender"), h("span", {}, m.direction === "out" ? "this mailbox" : (m.verified ? "authenticated" : "not authenticated — reply mode will not answer it")),
+      h("span", { class: "muted" }, "Status"), h("span", {}, m.status),
+      h("span", { class: "muted" }, "Received"), h("span", {}, fmtTime(m.receivedAt)),
+      h("span", { class: "muted" }, "Expires"), h("span", {}, fmtTime(m.expiresAt)),
+      ...(m.messageId ? [h("span", { class: "muted" }, "Message-ID"), h("span", { class: "mono" }, m.messageId)] : []),
+    ),
+    actions, bodyBox);
+  if ((m.textTruncated || m.htmlTruncated)) card.append(h("p", { class: "muted" }, "A body was cut at 512 KB; the full message is in the .eml."));
+
+  if (m.attachments.length) {
+    card.append(h("h2", {}, "Attachments"));
+    const ul = h("ul");
+    for (const a of m.attachments) {
+      const name = a.filename || `attachment-${a.idx}`;
+      ul.append(h("li", {},
+        a.url ? h("a", { href: a.url, download: name }, name) : h("span", {}, name),
+        h("span", { class: "muted" }, ` ${a.contentType}, ${fmtBytes(a.size)}`),
+        a.rejected ? h("span", { class: "pill" }, `not stored: ${a.rejected}`) : null));
+    }
+    card.append(ul);
+  }
+  if (direction === "in") {
+    card.append(h("h2", {}, "Route deliveries"));
+    if (!m.deliveries.length) card.append(h("p", { class: "muted" }, "No route matched this message."));
+    else {
+      const tb = h("tbody");
+      for (const d of m.deliveries) {
+        const ok = d.status.startsWith("ok:");
+        tb.append(h("tr", {},
+          h("td", { class: "mono" }, d.action),
+          h("td", {}, h("span", { class: "pill" + (ok ? " ok" : "") }, d.status)),
+          h("td", {}, String(d.attempts)),
+          h("td", { class: "muted" }, d.nextAt ? "retry " + fmtTime(d.nextAt) : "—")));
+      }
+      card.append(h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Action"), h("th", { scope: "col" }, "Result"), h("th", { scope: "col" }, "Attempts"), h("th", { scope: "col" }, "Next"))),
+        tb)));
+    }
+  }
+  view.append(card);
+  showText();
+  heading.focus();
+}
+
+// Compose a test email: a real MIME message, delivered through the inbound path.
+function mailCompose(body, info) {
+  const from = h("input", { value: "sender@example.com", autocomplete: "off" });
+  const fromName = h("input", { placeholder: "optional" });
+  const to = h("input", { value: info.address || "inbox", autocomplete: "off" });
+  const subject = h("input", { value: "Test message" });
+  const text = h("textarea", { placeholder: "Plain-text body" });
+  const html = h("textarea", { placeholder: "<p>Optional HTML body</p>" });
+  const files = h("input", { type: "file", multiple: "" });
+  const auth = checkbox("Sender authenticated (lets reply mode answer this sender)", true);
+  const result = h("div", { role: "status", "aria-live": "polite" });
+  const send = h("button", { class: "btn", type: "submit" }, "Deliver");
+  const form = h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    result.innerHTML = "";
+    send.disabled = true;
+    try {
+      const attachments = [];
+      for (const f of files.files) attachments.push({ filename: f.name, contentType: f.type || "application/octet-stream", content: await fileToBase64(f) });
+      const res = await jPost(`/admin/mailbox/${mbState.instId}/compose`, {
+        from: from.value.trim(), fromName: fromName.value, to: to.value.trim(), subject: subject.value,
+        text: text.value, html: html.value, attachments, authenticated: auth.cb.checked,
+      });
+      toast("delivered");
+      result.append(h("p", {}, "Delivered as ", h("span", { class: "mono" }, res.message.id), ". ",
+        h("button", { class: "btn ghost sm", type: "button", onclick: () => { mbState.pendingOpen = res.message.id; openTab("Inbox"); } }, "Open in inbox")));
+    } catch (err) {
+      result.append(refusalBox(err));
+    } finally { send.disabled = false; }
+  } },
+    h("div", { class: "row" }, field("From", from), field("From name", fromName)),
+    h("div", { class: "row" }, field("To (a full address, or a bare name on this mailbox)", to)),
+    field("Subject", subject, ""),
+    field("Text", text, ""),
+    field("HTML", html, ""),
+    field("Attachments", files, ""),
+    h("div", { style: "margin-top:8px" }, auth.el),
+    h("div", { class: "row", style: "margin-top:10px" }, send),
+    result);
+  body.append(form);
+}
+
+// A refusal shows the SMTP answer a real sender would have received.
+function refusalBox(err) {
+  if (err.status === 422 && err.data && err.data.rejected) {
+    return h("div", { class: "card", role: "alert", style: "border-color:var(--err)" },
+      h("strong", { style: "color:var(--err)" }, "Refused"),
+      h("pre", { style: "margin:6px 0 0" }, err.data.rejected));
+  }
+  return errBox(err);
+}
+
+function openTab(name) {
+  const holder = $("#mb-holder"); if (!holder) return;
+  for (const b of holder.querySelectorAll(".subtab")) if (b.textContent === name) { b.click(); return; }
+}
+
+function mailUpload(body, info) {
+  const file = h("input", { type: "file", accept: ".eml,message/rfc822" });
+  const to = h("input", { value: info.address || "inbox" });
+  const from = h("input", { value: "sender@example.com" });
+  const auth = checkbox("Sender authenticated", true);
+  const result = h("div", { role: "status", "aria-live": "polite" });
+  const go = h("button", { class: "btn", type: "submit" }, "Deliver .eml");
+  body.append(h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    result.innerHTML = "";
+    if (!file.files.length) { result.append(h("p", { role: "alert" }, "Choose an .eml file first.")); return; }
+    const q = new URLSearchParams({ to: to.value.trim(), from: from.value.trim(), authenticated: auth.cb.checked ? "1" : "0" });
+    try {
+      const res = await fetch(`/admin/mailbox/${mbState.instId}/eml?${q}`, { method: "POST", body: file.files[0] });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) { const err = new Error(data && data.error ? `${data.error.code}: ${data.error.message}` : `HTTP ${res.status}`); err.status = res.status; err.data = data; throw err; }
+      toast("delivered");
+      result.append(h("p", {}, "Delivered as ", h("span", { class: "mono" }, data.message.id), ". ",
+        h("button", { class: "btn ghost sm", type: "button", onclick: () => { mbState.pendingOpen = data.message.id; openTab("Inbox"); } }, "Open in inbox")));
+    } catch (err) { result.append(refusalBox(err)); }
+  } },
+    h("p", { class: "muted", style: "margin-top:0" }, "Delivers the file unmodified — malformed messages included — through the same path as any inbound mail."),
+    field(".eml file", file, ""),
+    h("div", { class: "row" }, field("Envelope to", to), field("Envelope from (used when the message has no From)", from)),
+    h("div", { style: "margin-top:8px" }, auth.el),
+    h("div", { class: "row", style: "margin-top:10px" }, go),
+    result));
+}
+
+// Settings and the routes editor. The save is a FULL replace, so every field is named.
+function mailSettings(body, info) {
+  const s = info.config.settings;
+  const sel = (opts, v) => h("select", {}, ...opts.map((o) => h("option", { value: o, ...(o === v ? { selected: "" } : {}) }, o)));
+  const num = (v, ph) => h("input", { type: "number", min: "0", value: v == null ? "" : String(v), placeholder: ph || "" });
+  const acceptMode = sel(["any", "registered"], s.acceptMode);
+  const sendMode = sel(["off", "reply", "any"], s.sendMode);
+  const retention = num(s.retentionDays);
+  const inboundCap = num(s.inboundDailyCap);
+  const sendCap = num(s.dailySendCap, "organization cap");
+  const rateLimit = num(s.rateLimit, "no limit");
+  const keepRaw = checkbox("Keep the raw .eml", s.keepRaw);
+  const optNum = (el) => (el.value.trim() === "" ? null : Number(el.value));
+
+  const routes = JSON.parse(JSON.stringify(info.config.routes || []));
+  const routesBox = h("div");
+  function drawRoutes() {
+    routesBox.innerHTML = "";
+    if (!routes.length) routesBox.append(h("p", { class: "muted" }, "No routes: mail is stored and nothing is called."));
+    routes.forEach((r, i) => {
+      const m = r.match || (r.match = {});
+      const inp = (key, ph) => { const el = h("input", { value: m[key] || "", placeholder: ph }); el.addEventListener("input", () => { if (el.value) m[key] = el.value; else delete m[key]; }); return el; };
+      const hasAtt = sel(["either", "yes", "no"], m.hasAttachment === true ? "yes" : m.hasAttachment === false ? "no" : "either");
+      hasAtt.addEventListener("change", () => { if (hasAtt.value === "either") delete m.hasAttachment; else m.hasAttachment = hasAtt.value === "yes"; });
+      const acts = h("div");
+      (r.do || (r.do = [])).forEach((a, j) => {
+        const kind = a.function != null ? "function" : a.webhook != null ? "webhook" : "channel";
+        const kindSel = sel(["function", "channel", "webhook"], kind);
+        const target = h("input", { value: a[kind] || "", placeholder: kind === "webhook" ? "https://example.com/hook" : "<instance>/<name>" });
+        const incl = checkbox("include text", !!a.includeText);
+        const sync = () => {
+          const k = kindSel.value;
+          r.do[j] = { [k]: target.value.trim() };
+          if (k === "channel" && incl.cb.checked) r.do[j].includeText = true;
+          incl.el.style.display = k === "channel" ? "" : "none";
+          target.placeholder = k === "webhook" ? "https://example.com/hook" : "<instance>/<name>";
+        };
+        kindSel.addEventListener("change", sync); target.addEventListener("input", sync); incl.cb.addEventListener("change", sync);
+        incl.el.style.display = kind === "channel" ? "" : "none";
+        acts.append(h("div", { class: "row", style: "margin:4px 0" },
+          field(`Action ${j + 1} kind`, kindSel, ""), field(`Action ${j + 1} target`, target), h("div", { style: "align-self:end" }, incl.el),
+          h("button", { class: "btn danger sm", type: "button", style: "align-self:end", onclick: () => { r.do.splice(j, 1); drawRoutes(); } }, `Remove action ${j + 1}`)));
+      });
+      routesBox.append(h("fieldset", { class: "card" },
+        h("legend", {}, `Route ${i + 1}${i === 0 ? " (checked first)" : ""}`),
+        h("div", { class: "row" }, field("To name (glob)", inp("to", "e.g. support*")), field("From (glob)", inp("from", "e.g. *@github.com"))),
+        h("div", { class: "row" }, field("Subject contains", inp("subject", "")), field("Has attachment", hasAtt)),
+        acts,
+        h("div", { class: "row", style: "margin-top:6px" },
+          h("button", { class: "btn ghost sm", type: "button", onclick: () => { if (r.do.length >= 3) { toast("at most 3 actions per route", true); return; } r.do.push({ function: "" }); drawRoutes(); } }, "+ Action"),
+          h("button", { class: "btn ghost sm", type: "button", disabled: i === 0 ? "" : null, onclick: () => { [routes[i - 1], routes[i]] = [routes[i], routes[i - 1]]; drawRoutes(); } }, "Move up"),
+          h("button", { class: "btn danger sm", type: "button", onclick: () => { routes.splice(i, 1); drawRoutes(); } }, `Remove route ${i + 1}`))));
+    });
+  }
+  drawRoutes();
+  const result = h("div", { role: "status", "aria-live": "polite" });
+  const save = h("button", { class: "btn", type: "submit" }, "Save settings and routes");
+  body.append(h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    result.innerHTML = "";
+    const config = {
+      settings: {
+        rateLimit: optNum(rateLimit), region: s.region, acceptMode: acceptMode.value, inboundDailyCap: optNum(inboundCap),
+        retentionDays: optNum(retention), sendMode: sendMode.value, dailySendCap: optNum(sendCap), keepRaw: keepRaw.cb.checked,
+      },
+      routes,
+    };
+    try {
+      await jPut(`/admin/mailbox/${mbState.instId}/config`, { config });
+      toast("saved");
+      result.append(h("p", {}, "Saved. Replay a message to run it through the new routes."));
+    } catch (err) { result.append(h("div", { role: "alert" }, errBox(err))); }
+  } },
+    h("div", { class: "card" }, h("h2", { style: "margin-top:0" }, "Settings"),
+      h("div", { class: "row" }, field("Accept mail for", acceptMode), field("Send mode", sendMode), field("Retention (days, 1–90)", retention)),
+      h("div", { class: "row" }, field("Inbound per day (max 5000)", inboundCap), field("Sends per day (blank: org cap)", sendCap), field("Rate limit (req/min, blank: none)", rateLimit)),
+      h("div", { style: "margin-top:8px" }, keepRaw.el),
+      h("p", { class: "muted", style: "font-size:12px" }, `Region: ${s.region} (fixed at creation).`)),
+    h("h2", {}, "Routes"),
+    h("p", { class: "muted" }, "The first route whose every condition holds runs its actions."),
+    routesBox,
+    h("div", { class: "row", style: "margin:8px 0" },
+      h("button", { class: "btn ghost", type: "button", onclick: () => { if (routes.length >= 20) { toast("at most 20 routes", true); return; } routes.push({ match: {}, do: [{ function: "" }] }); drawRoutes(); } }, "+ Route"),
+      save),
+    result));
+
+  // The webhook signing secret.
+  const secretOut = h("pre", { "aria-live": "polite" }, "hidden");
+  body.append(h("div", { class: "card" }, h("h2", { style: "margin-top:0" }, "Webhook signing secret"),
+    h("p", { class: "muted", style: "font-size:12px" }, "Webhook deliveries carry x-altengine-timestamp and x-altengine-signature: v1=<hex HMAC-SHA256 of \"<timestamp>.<body>\">."),
+    secretOut,
+    h("div", { class: "row" },
+      h("button", { class: "btn ghost", onclick: async () => { try { secretOut.textContent = (await jPost(`/admin/mailbox/${mbState.instId}/webhook-secret/reveal`, {})).secret; } catch (e) { toast(e.message, true); } } }, "Reveal"),
+      h("button", { class: "btn danger", onclick: async () => {
+        if (!confirm("Rotate the secret? Receivers checking the old one will reject every delivery.")) return;
+        try { secretOut.textContent = (await jPost(`/admin/mailbox/${mbState.instId}/webhook-secret/rotate`, {})).secret; toast("rotated"); } catch (e) { toast(e.message, true); }
+      } }, "Rotate"))));
+}
+
+function mailAddresses(body, info) {
+  const base = `/admin/mailbox/${mbState.instId}`;
+  const list = h("div");
+  const local = h("input", { placeholder: "blank mints one" });
+  const label = h("input", { placeholder: "optional" });
+  async function load() {
+    list.innerHTML = "";
+    try {
+      const { addresses, cursor } = await jGet(`${base}/addresses?limit=100`);
+      if (!addresses.length) { list.append(h("div", { class: "empty" }, "No registered or disabled addresses. Any name receives mail unless the mailbox accepts registered names only.")); return; }
+      const tb = h("tbody");
+      for (const a of addresses) {
+        tb.append(h("tr", {},
+          h("td", { class: "mono" }, a.address || a.local),
+          h("td", {}, a.label || "—"),
+          h("td", {}, a.disabledAt ? "disabled" : a.registered ? "registered" : "—"),
+          h("td", {}, a.disabledAt ? null : h("button", { class: "btn danger sm", onclick: async () => {
+            try { await jDel(`${base}/addresses/${encodeURIComponent(a.local)}`); toast("disabled"); load(); } catch (e) { toast(e.message, true); }
+          } }, `Disable ${a.local}`))));
+      }
+      list.append(h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Address"), h("th", { scope: "col" }, "Label"), h("th", { scope: "col" }, "State"), h("th", { scope: "col" }, ""))), tb)));
+      if (cursor) list.append(h("p", { class: "muted" }, "First 100 shown."));
+    } catch (e) { list.append(errBox(e)); }
+  }
+  body.append(h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      const rec = await jPost(`${base}/addresses`, { local: local.value.trim() || null, label: label.value || null });
+      toast("registered " + (rec.address || rec.local)); local.value = ""; label.value = ""; load();
+    } catch (err) { toast(err.message, true); }
+  } }, h("div", { class: "row" }, field("Name", local), field("Label", label), h("div", { style: "align-self:end" }, h("button", { class: "btn", type: "submit" }, "Register")))), list);
+  load();
 }
 
 // ================= API KEYS =================

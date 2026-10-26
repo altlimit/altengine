@@ -72,6 +72,9 @@ func rateTarget(r *http.Request) (service, instance, plane, field string, ok boo
 	case "container":
 		// Hosted, only a launch is limited.
 		return service, instance, service, "rateLimit", len(segs) == 3 && r.Method == http.MethodPost
+	case "mailbox":
+		// A mailbox keeps its scalars under `settings`.
+		return service, instance, service, "settings.rateLimit", true
 	case "channel":
 		if len(segs) > 3 && segs[3] == "subscribe" {
 			return service, instance, "connect", "connectRateLimit", true
@@ -81,13 +84,22 @@ func rateTarget(r *http.Request) (service, instance, plane, field string, ok boo
 	return "", "", "", "", false
 }
 
+// configField reads a config value by name, one level of `parent.child` allowed.
+func configField(cfg map[string]any, field string) any {
+	if parent, child, ok := strings.Cut(field, "."); ok {
+		m, _ := cfg[parent].(map[string]any)
+		return m[child]
+	}
+	return cfg[field]
+}
+
 func rateMW(reg *control.Registry, l *limiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		service, name, plane, field, ok := rateTarget(r)
 		if ok {
 			// Never creates an instance: one that does not exist yet has no limit configured.
 			if in, _ := reg.ResolveAddressed(service, name); in != nil {
-				if rpm, set := common.Int(in.Config()[field]); set && rpm > 0 && !l.take(in.ID+":"+plane, rpm) {
+				if rpm, set := common.Int(configField(in.Config(), field)); set && rpm > 0 && !l.take(in.ID+":"+plane, rpm) {
 					common.WriteError(w, common.NewError(http.StatusTooManyRequests, "rate limit exceeded — slow down", "RATE_LIMITED"))
 					return
 				}

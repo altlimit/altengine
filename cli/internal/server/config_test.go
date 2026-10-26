@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -81,9 +82,11 @@ func TestConfigWritesAreValidated(t *testing.T) {
 			"identityField": "username", "fields": []any{map[string]any{"key": "username", "type": "string", "required": true}}}}},
 		{"auth", map[string]any{"access": map[string]any{"datastore:app": map[string]any{"level": "write",
 			"rules": map[string]any{"_default": map[string]any{"posts": map[string]any{"delete": "authenticated"}}}}}}},
+		{"mailbox", map[string]any{"settings": map[string]any{"retentionDays": 91}}},
+		{"mailbox", map[string]any{"routes": []any{map[string]any{"do": []any{map[string]any{"webhook": "http://insecure.example"}}}}}},
 	}
 	// The console has a config PUT for these; the rest are configured through MCP only.
-	hasPut := map[string]bool{"search": true, "datastore": true, "channel": true, "auth": true}
+	hasPut := map[string]bool{"search": true, "datastore": true, "channel": true, "auth": true, "mailbox": true}
 	for _, c := range bad {
 		name := "v-" + c.service
 		_, _ = mcpCall(t, srv, "create_instance", map[string]any{"service": c.service, "name": name})
@@ -108,11 +111,34 @@ func TestConfigWritesAreValidated(t *testing.T) {
 
 	// What a new instance starts with must itself pass — a console that echoes a config back
 	// unchanged cannot be refused.
-	for _, service := range []string{"search", "datastore", "channel", "blob", "container", "functions", "auth"} {
+	for _, service := range []string{"search", "datastore", "channel", "blob", "container", "functions", "auth", "mailbox"} {
 		if text, isErr := mcpCall(t, srv, "patch_instance_config", map[string]any{
 			"service": service, "instance": "v-" + service, "changes": map[string]any{}}); isErr {
 			t.Errorf("%s default config refused: %s", service, text)
 		}
+	}
+}
+
+// A mailbox config saved partially reads back whole, as hosted stores it: every setting named.
+// And its region is chosen at creation only.
+func TestMailboxConfigReadsBackWhole(t *testing.T) {
+	srv := newTestServer(t)
+	if _, isErr := mcpCall(t, srv, "create_instance", map[string]any{"service": "mailbox", "name": "desk", "region": "weur"}); isErr {
+		t.Fatal("create")
+	}
+	if text, isErr := mcpCall(t, srv, "patch_instance_config", map[string]any{"service": "mailbox", "instance": "desk",
+		"changes": map[string]any{"settings": map[string]any{"sendMode": "any", "region": "weur"}}}); isErr {
+		t.Fatal(text)
+	}
+	text, _ := mcpCall(t, srv, "get_instance_config", map[string]any{"service": "mailbox", "instance": "desk"})
+	for _, want := range []string{`"sendMode": "any"`, `"retentionDays": 7`, `"acceptMode": "any"`, `"region": "weur"`, `"routes": []`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("config is missing %s: %s", want, text)
+		}
+	}
+	if _, isErr := mcpCall(t, srv, "patch_instance_config", map[string]any{"service": "mailbox", "instance": "desk",
+		"changes": map[string]any{"settings": map[string]any{"region": "enam"}}}); !isErr {
+		t.Error("a mailbox's region changed after creation")
 	}
 }
 

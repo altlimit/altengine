@@ -77,6 +77,7 @@ func TestRateTargets(t *testing.T) {
 		{"GET", "/v1/channel/ch/subscribe", "channel", "ch", "connectRateLimit", true},
 		{"POST", "/v1/container/jobs", "container", "jobs", "rateLimit", true},
 		{"GET", "/v1/container/jobs", "", "", "", false},
+		{"GET", "/v1/mailbox/desk/messages", "mailbox", "desk", "settings.rateLimit", true},
 		{"GET", "/fn/api--v2/hello", "functions", "api--v2", "rateLimit", true},
 		{"OPTIONS", "/v1/datastore/app/ns", "", "", "", false},
 		{"GET", "/admin/datastore", "", "", "", false},
