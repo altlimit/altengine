@@ -105,7 +105,7 @@ type Registry struct {
 	path  string               // persistence file ("" = memory only)
 	drops map[string][]func(instanceID string)
 
-	validators map[string][]func(next, before map[string]any) error
+	validators map[string][]func(in *Instance, next, before map[string]any) error
 	saved      map[string][]func(in *Instance, before map[string]any)
 }
 
@@ -120,7 +120,7 @@ func New(dir string) (*Registry, error) {
 		insts:      map[string]*Instance{},
 		keys:       map[string]*APIKey{},
 		drops:      map[string][]func(string){},
-		validators: map[string][]func(next, before map[string]any) error{},
+		validators: map[string][]func(*Instance, map[string]any, map[string]any) error{},
 		saved:      map[string][]func(*Instance, map[string]any){},
 	}
 	if dir == "" {
@@ -222,7 +222,8 @@ func defaultConfig(service string) map[string]any {
 		return map[string]any{"presence": false, "publishRateLimit": nil, "connectRateLimit": nil}
 	case "functions":
 		// Stored versions kept per function; the active one is always kept on top of this.
-		return map[string]any{"keepVersions": 3}
+		// defaultFunction answers every path no function is named for; nil means those 404.
+		return map[string]any{"keepVersions": 3, "defaultFunction": nil}
 	case "blob":
 		// defaultPublic is FALSE on purpose: the failure mode of getting it wrong in the other
 		// direction is publishing something nobody meant to publish.
@@ -430,6 +431,12 @@ func (r *Registry) OnValidateConfig(service string, check func(cfg map[string]an
 // OnValidateConfigChange registers a check that also sees the config being replaced (`before`),
 // for a rule that holds only what a save changes — auth's grandfathered rule filters.
 func (r *Registry) OnValidateConfigChange(service string, check func(next, before map[string]any) error) {
+	r.OnValidateInstanceConfig(service, func(_ *Instance, next, before map[string]any) error { return check(next, before) })
+}
+
+// OnValidateInstanceConfig registers a check that needs to know WHICH instance is being saved —
+// a functions `defaultFunction` must name a function that instance has deployed.
+func (r *Registry) OnValidateInstanceConfig(service string, check func(in *Instance, next, before map[string]any) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.validators[service] = append(r.validators[service], check)
@@ -463,7 +470,7 @@ func (r *Registry) ReplaceConfig(in *Instance, cfg map[string]any) error {
 	}
 	before := r.ConfigSnapshot(in)
 	r.mu.RLock()
-	checks := append([]func(next, before map[string]any) error{}, r.validators[in.Service]...)
+	checks := append([]func(*Instance, map[string]any, map[string]any) error{}, r.validators[in.Service]...)
 	hooks := append([]func(*Instance, map[string]any){}, r.saved[in.Service]...)
 	r.mu.RUnlock()
 
@@ -472,7 +479,7 @@ func (r *Registry) ReplaceConfig(in *Instance, cfg map[string]any) error {
 		next[k] = v
 	}
 	for _, check := range checks {
-		if err := check(next, before); err != nil {
+		if err := check(in, next, before); err != nil {
 			return err
 		}
 	}

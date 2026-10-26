@@ -5,6 +5,7 @@
 package common
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -250,4 +251,20 @@ func DecodeListCursor(cursor string) (created int64, sort string, ok bool) {
 // newest-first order these listings use. Same comparison the hosted API makes in SQL.
 func AfterCursor(created int64, sort string, cCreated int64, cSort string) bool {
 	return created < cCreated || (created == cCreated && sort > cSort)
+}
+
+type triggerKey struct{}
+
+// WithTrigger marks an in-process request to a function as a platform trigger ("container",
+// "automation"). It rides the request context, which no caller over the network can set.
+func WithTrigger(r *http.Request, trigger string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), triggerKey{}, trigger))
+}
+
+// Trigger is what invoked a function request: the trigger WithTrigger set, else "http".
+func Trigger(r *http.Request) string {
+	if t, ok := r.Context().Value(triggerKey{}).(string); ok && t != "" {
+		return t
+	}
+	return "http"
 }

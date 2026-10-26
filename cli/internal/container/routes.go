@@ -177,7 +177,9 @@ func (h *Handler) invokeOnComplete(instanceID string, cfg Config, job *Job) {
 		"cost_usd":   job.CostUSD,
 		"error":      job.Error,
 	})
-	req := httptest.NewRequest(http.MethodPost, "/fn/"+fnInstance+"/"+fnName, bytes.NewReader(payload))
+	// Marked as a trigger: a completion addressed to a function that no longer exists must 404,
+	// not reach the instance's default function.
+	req := common.WithTrigger(httptest.NewRequest(http.MethodPost, "/fn/"+fnInstance+"/"+fnName, bytes.NewReader(payload)), "container")
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("authorization", "Bearer emulator-internal")
 	req.Header.Set("user-agent", "altengine-container")

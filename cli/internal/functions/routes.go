@@ -58,6 +58,13 @@ func NewHandler(reg *control.Registry, a *auth.Store, store *Store, mux http.Han
 	// Retention is part of the instance config, written by the console and by MCP's
 	// patch_instance_config. A bad value is refused at the write; lowering it prunes now.
 	reg.OnValidateConfig("functions", ValidateConfig)
+	// The default must name a function this instance has deployed, as hosted.
+	reg.OnValidateInstanceConfig("functions", func(in *control.Instance, next, _ map[string]any) error {
+		if name := DefaultFunction(next); name != "" && h.store.Config(in.ID).Find(name) == nil {
+			return common.BadRequest(fmt.Sprintf("config.defaultFunction '%s' is not a deployed function", name))
+		}
+		return nil
+	})
 	reg.OnConfigSaved("functions", func(in *control.Instance, before map[string]any) {
 		keep := KeepVersions(reg.ConfigSnapshot(in))
 		if keep < KeepVersions(before) && h.store.Prune(in.ID, keep) > 0 {
@@ -99,6 +106,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// function name reaches the handler, which is what a function's own router needs.
 	mux.HandleFunc("/fn/{instance}/{fn}/", common.Wrap(h.invoke))
 	mux.HandleFunc("/fn/{instance}/{fn}", common.Wrap(h.invoke))
+	// The instance root, which only a default function answers.
+	mux.HandleFunc("/fn/{instance}/{$}", common.Wrap(h.invoke))
+	mux.HandleFunc("/fn/{instance}", common.Wrap(h.invoke))
 }
 
 // resolve authenticates and finds the addressed instance.
@@ -143,7 +153,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) error {
 			"url":            fmt.Sprintf("/fn/%s/%s", in.Name, f.Name),
 		})
 	}
-	common.WriteJSON(w, 200, map[string]any{"instance": in.Name, "host": nil, "functions": out})
+	var defaultFn any // null when unset, as hosted
+	if name := DefaultFunction(h.reg.ConfigSnapshot(in)); name != "" {
+		defaultFn = name
+	}
+	common.WriteJSON(w, 200, map[string]any{"instance": in.Name, "host": nil, "default_function": defaultFn, "functions": out})
 	return nil
 }
 
@@ -242,6 +256,12 @@ func (h *Handler) deleteFunction(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	h.cache.drop(in.ID + ":" + name + ":")
+	// A default naming a deleted function would come back to life on the next deploy of that name.
+	if DefaultFunction(h.reg.ConfigSnapshot(in)) == name {
+		if err := h.reg.SaveConfig(in, map[string]any{"defaultFunction": nil}); err != nil {
+			return err
+		}
+	}
 	common.WriteJSON(w, 200, map[string]any{"name": name, "deleted": true, "versions_removed": removed})
 	return nil
 }
@@ -324,10 +344,17 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 		return common.NotFound(fmt.Sprintf("no functions instance '%s'", instName))
 	}
 	cfg := h.store.Config(in.ID)
-	fn := cfg.Find(fnName)
+	// The first segment names the function; anything else goes to the default function, for
+	// public HTTP only (see Config.Route).
+	trigger := common.Trigger(r)
+	fn := cfg.Route(fnName, DefaultFunction(h.reg.ConfigSnapshot(in)), trigger == "http")
 	if fn == nil {
+		if fnName == "" {
+			return common.NotFound("no function in path (expected /<function>)")
+		}
 		return common.NotFound(fmt.Sprintf("function '%s' not found", fnName))
 	}
+	fnName = fn.Name
 	var src string
 	if version != 0 && version != fn.ActiveVersion {
 		// A stored version other than the live one. Only the code is the old one: it runs with the
@@ -380,7 +407,7 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	requestID := common.UUID()
-	scrubbed.Header.Set("x-ae-trigger", "http")
+	scrubbed.Header.Set("x-ae-trigger", trigger)
 	scrubbed.Header.Set("x-ae-request-id", requestID)
 	scrubbed.Header.Set("x-ae-fn", fnName)
 	scrubbed.Header.Set("x-ae-version", strconv.Itoa(fn.ActiveVersion))

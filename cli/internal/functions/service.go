@@ -459,12 +459,47 @@ func KeepVersions(cfg map[string]any) int {
 	return DefaultKeepVersions
 }
 
+// DefaultFunction reads the function that answers every path no function is named for, or ""
+// for none. A value that is not a string reads as none, as hosted parses a stored setting.
+func DefaultFunction(cfg map[string]any) string {
+	s, _ := cfg["defaultFunction"].(string)
+	return s
+}
+
+// consoleCallSegments are the first path segments the default function never receives. They are
+// the prefixes the hosted console calls with relative URLs, and the emulator refuses them too so
+// a site developed here does not depend on a path it can never have when deployed.
+var consoleCallSegments = map[string]bool{"api": true, "admin": true, "v1": true}
+
+// Route picks the function a request answers to: the one its first path segment names, else the
+// default function — never for a console prefix, and never when allowDefault is false (a platform
+// trigger names its function exactly, and must not reach a different one).
+func (c *Config) Route(segment, defaultFn string, allowDefault bool) *Function {
+	if segment != "" {
+		if f := c.Find(segment); f != nil {
+			return f
+		}
+		if consoleCallSegments[segment] {
+			return nil
+		}
+	}
+	if !allowDefault || defaultFn == "" {
+		return nil
+	}
+	return c.Find(defaultFn)
+}
+
 // ValidateConfig refuses a functions config whose `keepVersions` is not an integer in 1..50, or
 // whose rate limit or region the hosted service would refuse.
 func ValidateConfig(cfg map[string]any) error {
 	if raw, present := cfg["keepVersions"]; present && raw != nil {
 		if _, ok := keepValue(raw); !ok {
 			return common.BadRequest(fmt.Sprintf("config.keepVersions must be an integer in 1..%d", MaxKeepVersions))
+		}
+	}
+	if raw := cfg["defaultFunction"]; raw != nil {
+		if _, ok := raw.(string); !ok {
+			return common.BadRequest("config.defaultFunction must be a function name or null")
 		}
 	}
 	return common.FirstErr(common.CheckRateLimit(cfg, "rateLimit"), common.CheckRegion(cfg))

@@ -716,7 +716,7 @@ func init() {
 		tool{
 			name:        "functions_list",
 			title:       "List functions",
-			description: "List the functions deployed to an instance: active version, granted access, schedules and public URL.",
+			description: "List the functions deployed to an instance: active version, granted access, schedules and public URL. `default_function` is the one that answers every path whose first segment names no function, including `/` — set it with patch_instance_config (`defaultFunction`), null for none.",
 			required:    []string{"instance"},
 			props:       map[string]any{"instance": instanceArg},
 			annotations: readOnly,
