@@ -155,7 +155,17 @@ Saturday" is genuinely two. A scheduled run arrives as POST with x-ae-trigger: c
 body of {"crons": [...], "scheduled_for": <epoch ms>}. A run still going when the next is
 due is SKIPPED, not queued, so a function never overlaps itself. Failures are not retried.
 
-Locally, ` + "`altengine dev`" + ` ticks the scheduler once a minute and prints each run.`
+URLs: a function is served at https://<slug>-fn.altengine.app/<name>/... and gets the full
+path. To serve a whole site from the root, make one function the instance's DEFAULT:
+patch_instance_config {"defaultFunction": "<name>"} (null turns it off). It then answers "/"
+and every path whose first segment names no other function, and routes the path itself — so
+link to "/about", not "/<name>/about". A named function still wins. /api, /admin and /v1
+never reach it (404), so put the site's own endpoints under another prefix. Schedules and
+completion callbacks never fall back to it. Deleting the function clears the setting.
+
+Locally, ` + "`altengine dev`" + ` ticks the scheduler once a minute and prints each run. A function
+is served at /fn/{instance}/{name}/..., a default function at /fn/{instance}/ and below, and
+the path it sees keeps the /fn/{instance} prefix.`
 
 type resource struct {
 	uri, name, title, description, text string
@@ -179,7 +189,7 @@ var resources = []resource{
 	},
 	{
 		uri: "docs://functions/starter", name: "functions-starter", title: "Writing a function",
-		description: "Handler shape, the env clients, grants, egress rules and schedules.",
+		description: "Handler shape, the env clients, grants, egress rules, schedules, and serving a whole site from the root with a default function.",
 		text:        functionStarterDoc,
 	},
 }

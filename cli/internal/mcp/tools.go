@@ -738,7 +738,7 @@ func init() {
 			required: []string{"instance", "name", "code"},
 			props: map[string]any{
 				"instance": instanceArg,
-				"name":     map[string]any{"type": "string", "description": "Function name; becomes the first path segment of its URL."},
+				"name":     map[string]any{"type": "string", "description": "Function name; becomes the first path segment of its URL. To serve a site from `/` instead, set the instance's `defaultFunction` to this name with patch_instance_config — see docs://functions/starter."},
 				"code":     map[string]any{"type": "string", "description": "A complete ES module: export default { async fetch(request, env) { ... } }"},
 				"grants": map[string]any{"type": "object",
 					"description": `What this function may reach, e.g. {"datastore:orders": "write"}. A service NOT granted is absent from env entirely. ` +
