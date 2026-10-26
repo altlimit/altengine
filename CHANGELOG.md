@@ -5,6 +5,54 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### SDKs
+
+No SDK has been published to a package registry yet; these are the changes since the first
+SDK commit that a release will carry.
+
+- All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
+- JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
+  `webSocket` option.
+- JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
+  completion webhook's signature and timestamp.
+- JS: a channel socket pings at least once a minute; a longer `pingIntervalMs` is capped at
+  60000, because the service closes a socket (4408) that goes 15 minutes without one.
+- Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
+- JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
+  `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
+  An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
+  types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.33 — 2026-10-26
+
+### Emulator
+
+- Mailbox service: `/v1/mailbox/{instance}`, the `mailbox_*` MCP tools and `env.mailbox`
+  (`info`, `list`, `get`, `send`, `reply`, `markRead`, `listAddresses`, `createAddress`,
+  `disableAddress`, `delete`). Addresses are `<instance>[.<name>]@mail.localhost`
+  (`--mail-domain` or `ALTENGINE_MAIL_DOMAIN`). Routes call functions, publish to channels and
+  POST signed webhooks. Nothing sent leaves the emulator: sends are recorded, and a send to a
+  local address is delivered into that mailbox (console toggle). The console's Mailbox tab
+  composes test mail, uploads `.eml` files and replays a message through the current routes.
+  `--smtp` starts an SMTP listener on `127.0.0.1:2525` (`--smtp-addr`, `--smtp-auth pass|none`).
+- A functions instance's `defaultFunction` answers `/fn/{instance}/` and every path whose first
+  segment names no other function, with the full path. A named function still wins, and `/api`,
+  `/admin` and `/v1` never reach it. It must name a deployed function, and deleting that function
+  clears it. `functions_list` and `GET /v1/functions/{instance}` return `default_function`.
+- A function called by a container job's completion sees `x-ae-trigger: container`.
+
+## v0.2.32 — 2026-10-20
+
+### Emulator
+
+- Channel subscribe takes its token from `Sec-WebSocket-Protocol: altengine.v1,
+  altengine.token.<token>` (answered with `altengine.v1`) or `Authorization: Bearer`, as hosted.
+  `?token=` still works, wins over a header, and is answered with `Deprecation`,
+  `Sunset: Sun, 31 Jan 2027` and a `rel="deprecation"` `Link`. Token mints return `ws_endpoint`
+  and `protocols` beside `ws_url`.
+
+## v0.2.31 — 2026-10-20
+
 ### CLI
 
 - `altengine login` / `altengine logout` save and remove an API key (stdin, no echo; `0600`
@@ -40,27 +88,8 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
   `.gitignore`.
 - A JSON body over 8 MiB is a 413; channel frames over 64 KiB close the socket; multipart parts
   are bounded by the reserved size and abandoned uploads are reaped after 6 hours.
-- Channel subscribe takes its token from `Sec-WebSocket-Protocol: altengine.v1,
-  altengine.token.<token>` (answered with `altengine.v1`) or `Authorization: Bearer`, as hosted.
-  `?token=` still works and is answered with `Deprecation`, `Sunset: Sun, 31 Jan 2027` and a
-  `rel="deprecation"` `Link`. Token mints return `ws_endpoint` and `protocols` beside `ws_url`.
-- Mailbox service: `/v1/mailbox/{instance}`, the `mailbox_*` MCP tools and `env.mailbox`.
-  Addresses are `<instance>[.<name>]@mail.localhost` (`--mail-domain` or
-  `ALTENGINE_MAIL_DOMAIN`). Routes call functions, publish to channels and POST signed webhooks.
-  Nothing sent leaves the emulator: sends are recorded, and a send to a local address is
-  delivered into that mailbox (console toggle). The console's Mailbox tab composes test mail,
-  uploads `.eml` files and replays a message through the current routes. `--smtp` starts an SMTP
-  listener on `127.0.0.1:2525` (`--smtp-addr`, `--smtp-auth pass|none`).
 
-### SDKs
+## Earlier
 
-- All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
-- JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
-  `webSocket` option.
-- JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
-  completion webhook's signature and timestamp.
-- Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
-- JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
-  `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
-  An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
-  types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+Releases before v0.2.31 are on the [releases page](https://github.com/altlimit/altengine/releases),
+each with a comparison of the commits it carried.
