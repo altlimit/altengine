@@ -192,9 +192,9 @@ var mailboxSendArgs = map[string]any{
 			"Set contentId to show a part inline, referenced from the HTML as cid:<contentId>.", mailbox.MaxSendAttachments),
 		"items": map[string]any{
 			"type":     "object",
-			"required": []string{"filename", "content"},
+			"required": []string{"content"},
 			"properties": map[string]any{
-				"filename":    map[string]any{"type": "string"},
+				"filename":    map[string]any{"type": "string", "description": "Defaults to attachment-<n>."},
 				"contentType": map[string]any{"type": "string", "description": "e.g. application/pdf. Defaults to application/octet-stream."},
 				"content":     map[string]any{"type": "string", "description": "The file's bytes, base64-encoded."},
 				"contentId":   map[string]any{"type": "string"},

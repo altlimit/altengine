@@ -42,7 +42,8 @@ SDK commit that a release will carry.
   control.
 - `GET /v1/mailbox/{instance}` and `mailbox_info` return `sendPaused`, always `null` locally.
 - Route matching is checked against `conformance/fixtures/mailbox-routes.json`, the cases the
-  hosted service asserts too.
+  hosted service asserts too. A route condition of only spaces is refused instead of saving as
+  "match anything".
 
 ## v0.2.33 — 2026-10-26
 

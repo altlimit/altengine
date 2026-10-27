@@ -341,6 +341,11 @@ func pattern(v any, what string) (string, error) {
 	if len(s) > maxPatternLength {
 		return "", common.BadRequest(fmt.Sprintf("%s is longer than %d characters", what, maxPatternLength))
 	}
+	// Only spaces would save as an empty condition, which reads back as "no condition" — a route
+	// meant for one name that catches every message. Refused, as hosted.
+	if strings.TrimSpace(s) == "" {
+		return "", common.BadRequest(what + " is blank; leave it out to match anything")
+	}
 	return strings.ToLower(strings.TrimSpace(s)), nil
 }
 

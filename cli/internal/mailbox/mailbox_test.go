@@ -204,6 +204,8 @@ func TestConfig(t *testing.T) {
 		{"routes": []any{map[string]any{"do": []any{map[string]any{"webhook": "http://x.example/h"}}}}},
 		{"routes": []any{map[string]any{"do": []any{map[string]any{"webhook": "https://u:p@x.example/h"}}}}},
 		{"routes": []any{map[string]any{"do": []any{map[string]any{"webhook": "https://x.example", "channel": "a/b"}}}}},
+		// A condition of only spaces would match every message.
+		{"routes": []any{map[string]any{"match": map[string]any{"to": "   "}, "do": []any{map[string]any{"channel": "rt/x"}}}}},
 	} {
 		if err := ValidateConfig(bad); err == nil {
 			t.Errorf("accepted %v", bad)
