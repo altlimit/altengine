@@ -85,6 +85,7 @@
       "send": "write",
       "reply": "write",
       "markRead": "write",
+      "keep": "write",
       "listAddresses": "read",
       "createAddress": "write",
       "disableAddress": "write",

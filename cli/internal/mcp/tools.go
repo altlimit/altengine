@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/mailbox"
@@ -169,13 +170,16 @@ func (h *Handler) serveInternal(r *http.Request, method, path string, body any) 
 		payload = b
 	}
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	// A tool that holds itself below the caller's level (mailbox_keep_message only extends)
+	// says so on its request's context.
+	req = req.WithContext(auth.CarryOnBehalf(r.Context(), req.Context()))
 	// Any bearer works: the emulator's auth store is dev-open. Carrying the caller's own
 	// header through keeps the local logs honest about who asked.
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		auth = "Bearer emulator-internal"
+	bearer := r.Header.Get("Authorization")
+	if bearer == "" {
+		bearer = "Bearer emulator-internal"
 	}
-	req.Header.Set("Authorization", auth)
+	req.Header.Set("Authorization", bearer)
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()

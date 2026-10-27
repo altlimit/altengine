@@ -143,6 +143,16 @@ func intIn(v any, lo, hi int64) (int64, bool) {
 
 const maxSafeInt = 1<<53 - 1
 
+// KeepUntil is when one message should now expire: `days` (1–MaxRetentionDays) from now. Every
+// surface that keeps a message longer or shorter goes through it, so none can keep one forever.
+func KeepUntil(days any, now int64) (int64, error) {
+	d, ok := intIn(days, 1, MaxRetentionDays)
+	if !ok {
+		return 0, common.BadRequest(fmt.Sprintf("days must be an integer from 1 to %d", MaxRetentionDays))
+	}
+	return now + d*86_400_000, nil
+}
+
 // ParseConfig reads an instance's stored config tolerantly: anything missing or malformed is the
 // default, and a route that no longer validates is dropped rather than half-applied.
 func ParseConfig(raw map[string]any) Config {

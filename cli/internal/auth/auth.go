@@ -7,6 +7,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
@@ -132,6 +133,37 @@ func (s *Store) Resolve(r *http.Request) (*Identity, error) {
 		return &Identity{OrgID: DevOrgID, Grants: g}, nil
 	}
 	return nil, common.Unauthenticated("invalid API key")
+}
+
+type onBehalfKey struct{}
+
+// WithOnBehalfGrants marks an in-process request as made for a caller whose grants are narrower
+// than the bearer it carries — a function's env.* binding, whose grants were checked before the
+// request was built. It rides the request context, so nothing outside the process can set it.
+func WithOnBehalfGrants(ctx context.Context, g Grants) context.Context {
+	return context.WithValue(ctx, onBehalfKey{}, g)
+}
+
+// CarryOnBehalf copies the on-behalf grants of `from`, if any, onto `to` — for a handler that
+// re-dispatches a request in process.
+func CarryOnBehalf(from, to context.Context) context.Context {
+	if g, ok := from.Value(onBehalfKey{}).(Grants); ok {
+		return WithOnBehalfGrants(to, g)
+	}
+	return to
+}
+
+// EffectiveLevel is the level a request really holds on (service, instance): the identity's
+// grant, narrowed by the grants of whoever it was made on behalf of. For a handler whose
+// OUTCOME depends on the level beyond the one Require already checked.
+func EffectiveLevel(r *http.Request, id *Identity, service, instance string) Level {
+	l := id.Grants.Effective(service, instance)
+	if g, ok := r.Context().Value(onBehalfKey{}).(Grants); ok {
+		if o := g.Effective(service, instance); o < l {
+			l = o
+		}
+	}
+	return l
 }
 
 // Require enforces that the identity's grant for (service, instance) meets need.

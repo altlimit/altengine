@@ -125,6 +125,52 @@ func TestMailboxToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMailboxAttachmentsKeepAndSendPaused(t *testing.T) {
+	h := newLiveHandler(t)
+	mustCreate(t, h, "mailbox", "acme")
+
+	info := runTool(t, h, "mailbox_info", map[string]any{"instance": "acme"})
+	if v, ok := info["sendPaused"]; !ok || v != nil {
+		t.Fatalf("info.sendPaused = %v (present %v)", v, ok)
+	}
+
+	injectMail(t, h, "acme", "inbox", "&authenticated=1", signupMail)
+	list := runTool(t, h, "mailbox_list_messages", map[string]any{"instance": "acme"})
+	id := list["messages"].([]any)[0].(map[string]any)["id"].(string)
+
+	reply := runTool(t, h, "mailbox_reply", map[string]any{"instance": "acme", "id": id, "text": "here", "attachments": []any{
+		map[string]any{"filename": "notes.txt", "contentType": "text/plain", "content": "bm90ZXM="},
+	}})
+	sent := reply["message"].(map[string]any)
+	if sent["attachmentCount"] != float64(1) {
+		t.Fatalf("reply = %v", sent)
+	}
+	if text, isErr := toolText(t, h, "mailbox_reply", map[string]any{"instance": "acme", "id": id, "text": "x", "attachments": []any{
+		map[string]any{"filename": "a", "content": "%%"},
+	}}); !isErr || !strings.Contains(text, "attachments[0].content must be base64") {
+		t.Fatalf("bad attachment: %v %s", isErr, text)
+	}
+
+	kept := runTool(t, h, "mailbox_keep_message", map[string]any{"instance": "acme", "id": id, "days": 90})
+	m := kept["message"].(map[string]any)
+	if m["id"] != id || m["expiresAt"].(float64) < float64(time.Now().Add(89*24*time.Hour).UnixMilli()) {
+		t.Fatalf("keep = %v", kept)
+	}
+	// Extends only, even for a credential that could delete.
+	if text, isErr := toolText(t, h, "mailbox_keep_message", map[string]any{"instance": "acme", "id": id, "days": 3}); !isErr || !strings.Contains(text, "'write' can only extend") {
+		t.Fatalf("keep shorter: %v %s", isErr, text)
+	}
+	if again := runTool(t, h, "mailbox_get_message", map[string]any{"instance": "acme", "id": id}); again["expiresAt"] != m["expiresAt"] {
+		t.Fatalf("a refused keep moved the expiry: %v", again["expiresAt"])
+	}
+	if text, isErr := toolText(t, h, "mailbox_keep_message", map[string]any{"instance": "acme", "id": id, "days": 0}); !isErr || !strings.Contains(text, "days must be an integer from 1 to 90") {
+		t.Fatalf("keep 0: %v %s", isErr, text)
+	}
+	if text, isErr := toolText(t, h, "mailbox_keep_message", map[string]any{"instance": "acme", "id": "nope", "days": 3}); !isErr || !strings.Contains(text, "message not found") {
+		t.Fatalf("keep unknown: %v %s", isErr, text)
+	}
+}
+
 func TestVerificationExtraction(t *testing.T) {
 	if got := ExtractCodes("Your code", "Use 482913 to sign in. © 2026. Ref AB12CD."); !reflect.DeepEqual(got, []string{"482913", "AB12CD"}) {
 		t.Errorf("codes = %v", got)

@@ -220,6 +220,8 @@ type OutAttachment struct {
 	Filename    string
 	ContentType string
 	Content     []byte
+	// ContentID, when set, makes the part inline, referenced from the HTML as cid:<ContentID>.
+	ContentID string
 }
 
 // OutMessage is everything BuildMessage writes.
@@ -358,7 +360,12 @@ func BuildMessage(m OutMessage) []byte {
 			typ = mime.FormatMediaType("application/octet-stream", map[string]string{"name": name})
 		}
 		ph.Set("Content-Type", typ)
-		ph.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		disp := "attachment"
+		if a.ContentID != "" {
+			disp = "inline"
+			ph.Set("Content-Id", "<"+headerSafe(a.ContentID)+">")
+		}
+		ph.Set("Content-Disposition", mime.FormatMediaType(disp, map[string]string{"filename": name}))
 		ph.Set("Content-Transfer-Encoding", "base64")
 		pw, _ := mixed.CreatePart(ph)
 		enc := base64.StdEncoding.EncodeToString(a.Content)

@@ -5,6 +5,22 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- Mailbox sends and replies take `attachments` (up to 32; `{ filename, contentType, content,
+  contentId }`, `content` base64 — or bytes from a function) on `/v1`, `env.mailbox.send` /
+  `reply`, `mailbox_send` / `mailbox_reply` and the console's new Send tab and Reply form. A
+  message over 5 MB once encoded is refused with 413 before it counts against a send cap; a
+  send or reply body over 8 MB is 413. The sent message lists its attachments and they
+  download like received ones; a send looped back to a local mailbox carries them.
+- `POST /v1/mailbox/{instance}/messages/{id}/keep` `{ "days": 1–90 }`, `env.mailbox.keep` and
+  the `mailbox_keep_message` tool set one message's expiry. `write` extends; an earlier date
+  needs `full`; the MCP tool only extends. The console's message view has a "Deleted after"
+  control.
+- `GET /v1/mailbox/{instance}` and `mailbox_info` return `sendPaused`, always `null` locally.
+- Route matching is checked against `conformance/fixtures/mailbox-routes.json`, the cases the
+  hosted service asserts too.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -18,6 +34,9 @@ SDK commit that a release will carry.
 - JS: a channel socket pings at least once a minute; a longer `pingIntervalMs` is capped at
   60000, because the service closes a socket (4408) that goes 15 minutes without one.
 - Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
+- JS: `ae.mailbox(instance)` — `info`, `list`, `wait`, `get`, `raw`, `attachment`, `markRead`,
+  `send`, `reply`, `keep`, `delete` and `addresses.list` / `create` / `disable`. Attachment
+  `content` may be base64 text, a `Uint8Array`, an `ArrayBuffer` or a `Blob`.
 - JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response

@@ -26,6 +26,7 @@ import (
 //	GET    /messages/{id}/attachments/{idx}   a short-lived download URL for one attachment
 //	POST   /messages/{id}/read                mark read
 //	POST   /messages/{id}/reply               reply, threaded
+//	POST   /messages/{id}/keep                keep one message `days` (1–90) from now
 //	DELETE /messages/{id}                     delete now rather than at expiry
 //	POST   /send                              send a new message
 //	GET    /addresses                         addresses that carry a setting
@@ -61,6 +62,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+p+"/messages/{id}/attachments/{idx}", common.Wrap(h.attachment))
 	mux.HandleFunc("POST "+p+"/messages/{id}/read", common.Wrap(h.markRead))
 	mux.HandleFunc("POST "+p+"/messages/{id}/reply", common.Wrap(h.reply))
+	mux.HandleFunc("POST "+p+"/messages/{id}/keep", common.Wrap(h.keep))
 	mux.HandleFunc("DELETE "+p+"/messages/{id}", common.Wrap(h.remove))
 	mux.HandleFunc("POST "+p+"/send", common.Wrap(h.send))
 	mux.HandleFunc("GET "+p+"/addresses", common.Wrap(h.listAddresses))
@@ -149,6 +151,9 @@ func (h *Handler) info(w http.ResponseWriter, r *http.Request) error {
 	out["acceptMode"] = st.AcceptMode
 	out["sendMode"] = st.SendMode
 	out["retentionDays"] = st.RetentionDays
+	// Hosted, this is set when the mailbox's sending was paused for mailing too many addresses
+	// that bounced or complained. Locally nothing bounces — no mail leaves — so it is always null.
+	out["sendPaused"] = nil
 	common.WriteJSON(w, 200, out)
 	return nil
 }
@@ -300,12 +305,25 @@ func readBody(r *http.Request) (map[string]any, error) {
 	return body, nil
 }
 
+// readSendBody reads a send or reply: attachments ride base64 in it, so its cap is the largest
+// message base64'd into JSON.
+func readSendBody(r *http.Request) (map[string]any, error) {
+	body := map[string]any{}
+	if err := common.ReadJSONLimited(r, &body, MaxSendRequestBytes); err != nil {
+		return nil, err
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	return body, nil
+}
+
 func (h *Handler) reply(w http.ResponseWriter, r *http.Request) error {
 	inst, err := h.resolve(r, auth.Write)
 	if err != nil {
 		return err
 	}
-	body, err := readBody(r)
+	body, err := readSendBody(r)
 	if err != nil {
 		return err
 	}
@@ -315,6 +333,51 @@ func (h *Handler) reply(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 201, map[string]any{"message": m})
+	return nil
+}
+
+// Keep is the one per-message expiry change: /v1, MCP, the function binding and the console.
+// Extending needs `write`; moving the expiry EARLIER is a deferred delete, so only a caller that
+// could delete (canShorten: `full`, or the console) may.
+func (s *Service) Keep(inst *control.Instance, id string, days any, canShorten bool) (*Summary, error) {
+	at, err := KeepUntil(days, s.now())
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.store.SetExpiry(inst.ID, id, at, canShorten)
+	if errors.Is(err, ErrShortenNeedsFull) {
+		return nil, common.PermissionDenied("keeping a message for less time than it already has left deletes it sooner, which needs 'full' access; 'write' can only extend")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, common.NotFound("message not found")
+	}
+	return m, nil
+}
+
+// keep needs `write` to be called at all; whether it may shorten is the caller's real level on
+// this instance — a function's grant, when a function made the call.
+func (h *Handler) keep(w http.ResponseWriter, r *http.Request) error {
+	inst, err := h.resolve(r, auth.Write)
+	if err != nil {
+		return err
+	}
+	id, err := h.auth.Resolve(r)
+	if err != nil {
+		return err
+	}
+	canShorten := auth.EffectiveLevel(r, id, "mailbox", r.PathValue("instance")) >= auth.Full
+	body, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	m, err := h.svc.Keep(inst, r.PathValue("id"), body["days"], canShorten)
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"message": m})
 	return nil
 }
 
@@ -339,7 +402,7 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	body, err := readBody(r)
+	body, err := readSendBody(r)
 	if err != nil {
 		return err
 	}
@@ -569,6 +632,7 @@ func (h *Handler) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE "+a+"/messages/{mid}", common.Wrap(h.adminDelete))
 	mux.HandleFunc("POST "+a+"/messages/{mid}/replay", common.Wrap(h.adminReplay))
 	mux.HandleFunc("POST "+a+"/messages/{mid}/reply", common.Wrap(h.adminReply))
+	mux.HandleFunc("POST "+a+"/messages/{mid}/keep", common.Wrap(h.adminKeep))
 	mux.HandleFunc("POST "+a+"/send", common.Wrap(h.adminSend))
 	mux.HandleFunc("POST "+a+"/compose", common.Wrap(h.adminCompose))
 	mux.HandleFunc("POST "+a+"/eml", common.Wrap(h.adminEml))
@@ -608,6 +672,7 @@ func (h *Handler) adminInfo(w http.ResponseWriter, r *http.Request) error {
 	out["message_count"], out["stored_bytes"] = n, b
 	out["loopback"] = h.svc.Loopback()
 	out["org_sends_per_day"] = OrgSendsPerDay
+	out["send_paused"] = nil // never locally: see info
 	common.WriteJSON(w, 200, out)
 	return nil
 }
@@ -712,7 +777,7 @@ func (h *Handler) adminReply(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	body, err := readBody(r)
+	body, err := readSendBody(r)
 	if err != nil {
 		return err
 	}
@@ -725,12 +790,30 @@ func (h *Handler) adminReply(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) adminSend(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) adminKeep(w http.ResponseWriter, r *http.Request) error {
 	inst, err := h.adminInst(r)
 	if err != nil {
 		return err
 	}
 	body, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	// The console is the owner's: it may shorten, as hosted.
+	m, err := h.svc.Keep(inst, r.PathValue("mid"), body["days"], true)
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"message": m})
+	return nil
+}
+
+func (h *Handler) adminSend(w http.ResponseWriter, r *http.Request) error {
+	inst, err := h.adminInst(r)
+	if err != nil {
+		return err
+	}
+	body, err := readSendBody(r)
 	if err != nil {
 		return err
 	}

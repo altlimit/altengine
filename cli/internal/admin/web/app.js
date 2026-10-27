@@ -583,7 +583,7 @@ async function renderMailbox() {
     ),
     h("div", { style: "margin-top:8px" }, loop.el)));
 
-  const names = ["Inbox", "Sent", "Compose", "Upload .eml", "Settings & routes", "Addresses"];
+  const names = ["Inbox", "Sent", "Send", "Compose", "Upload .eml", "Settings & routes", "Addresses"];
   const sub = subtabs(names, (name) => { mbState.tab = name; mbState.open = null; renderMailboxTab(name, holder, info); });
   holder.append(sub.bar, sub.body);
   renderMailboxTab("Inbox", holder, info);
@@ -594,6 +594,7 @@ function renderMailboxTab(name, holder, info) {
   const body = holder.querySelector(".subtab-body"); body.innerHTML = "";
   if (name === "Inbox") return mailList(body, info, "in");
   if (name === "Sent") return mailList(body, info, "out");
+  if (name === "Send") return body.append(mailSendForm(null, (sent) => { mbState.pendingOpen = sent.id; openTab("Sent"); }));
   if (name === "Compose") return mailCompose(body, info);
   if (name === "Upload .eml") return mailUpload(body, info);
   if (name === "Settings & routes") return mailSettings(body, info);
@@ -705,6 +706,30 @@ async function renderMessage(view, id, direction, reload) {
     catch (e) { toast(e.message, true); }
   } }, "Delete"));
 
+  // Keep this one message longer or shorter than the mailbox's retention: 1–90 days from now.
+  const expiresOut = h("span", {}, fmtTime(m.expiresAt));
+  const keepSel = h("select", { id: nid("keep"), style: "width:auto" },
+    ...[1, 7, 30, 90].map((d) => h("option", { value: String(d), ...(d === 30 ? { selected: "" } : {}) }, `${d} day${d === 1 ? "" : "s"} from now`)));
+  const keepBtn = h("button", { class: "btn ghost sm", type: "button", onclick: async () => {
+    keepBtn.disabled = true;
+    try {
+      const r = await jPost(`${base}/messages/${encodeURIComponent(id)}/keep`, { days: Number(keepSel.value) });
+      m.expiresAt = r.message.expiresAt;
+      expiresOut.textContent = fmtTime(m.expiresAt);
+      toast(`kept until ${fmtTime(m.expiresAt)}`);
+    } catch (e) { toast(e.message, true); } finally { keepBtn.disabled = false; }
+  } }, "Change");
+  const replyBox = h("div");
+  if (direction === "in") {
+    const replyBtn = h("button", { class: "btn sm", type: "button", "aria-expanded": "false", onclick: () => {
+      if (replyBox.firstChild) { replyBox.innerHTML = ""; replyBtn.setAttribute("aria-expanded", "false"); replyBtn.focus(); return; }
+      replyBtn.setAttribute("aria-expanded", "true");
+      replyBox.append(mailSendForm(m, () => { replyBox.innerHTML = ""; replyBtn.setAttribute("aria-expanded", "false"); reload(); }));
+      const first = replyBox.querySelector("textarea"); if (first) first.focus();
+    } }, "Reply");
+    actions.prepend(replyBtn);
+  }
+
   const addr = (a) => (a.name ? `${a.name} <${a.address}>` : a.address);
   const card = h("div", { class: "card" }, heading,
     h("div", { class: "kv", style: "font-size:13px" },
@@ -714,11 +739,11 @@ async function renderMessage(view, id, direction, reload) {
       h("span", { class: "muted" }, "Name"), h("span", { class: "mono" }, m.local + (m.plusTag ? " (tag " + m.plusTag + ")" : "")),
       h("span", { class: "muted" }, "Sender"), h("span", {}, m.direction === "out" ? "this mailbox" : (m.verified ? "authenticated" : "not authenticated — reply mode will not answer it")),
       h("span", { class: "muted" }, "Status"), h("span", {}, m.status),
-      h("span", { class: "muted" }, "Received"), h("span", {}, fmtTime(m.receivedAt)),
-      h("span", { class: "muted" }, "Expires"), h("span", {}, fmtTime(m.expiresAt)),
+      h("span", { class: "muted" }, m.direction === "in" ? "Received" : "Sent"), h("span", {}, fmtTime(m.receivedAt)),
+      h("label", { class: "muted", for: keepSel.id }, "Deleted after"), h("span", { class: "row", style: "gap:6px;flex-wrap:wrap" }, expiresOut, keepSel, keepBtn),
       ...(m.messageId ? [h("span", { class: "muted" }, "Message-ID"), h("span", { class: "mono" }, m.messageId)] : []),
     ),
-    actions, bodyBox);
+    actions, replyBox, bodyBox);
   if ((m.textTruncated || m.htmlTruncated)) card.append(h("p", { class: "muted" }, "A body was cut at 512 KB; the full message is in the .eml."));
 
   if (m.attachments.length) {
@@ -754,6 +779,74 @@ async function renderMessage(view, id, direction, reload) {
   view.append(card);
   showText();
   heading.focus();
+}
+
+// Send from this mailbox, or reply to `replyTo` — through the same path as /v1, so the send mode,
+// the reply rule, the caps and the attachment limits apply. Nothing leaves the emulator.
+// The whole message must stay under 5 MB once encoded, and base64 makes a file a third larger.
+const MAIL_MAX_FILES = 32;
+const MAIL_MAX_FILE_BYTES = Math.floor((5 * 1024 * 1024 - 64 * 1024) * 0.73);
+function mailSendForm(replyTo, onSent) {
+  const from = h("input", { value: replyTo ? replyTo.local : "inbox", autocomplete: "off" });
+  const to = h("input", { value: replyTo ? (replyTo.replyTo[0] || replyTo.from).address : "", autocomplete: "off", placeholder: "a@example.com, b@example.com" });
+  const cc = h("input", { autocomplete: "off", placeholder: "optional" });
+  const subject = h("input", { value: replyTo ? (/^re:/i.test(replyTo.subject) ? replyTo.subject : "Re: " + replyTo.subject) : "" });
+  const text = h("textarea", { placeholder: "Plain-text body" });
+  const hintId = nid("files-hint");
+  const files = h("input", { type: "file", multiple: "", "aria-describedby": hintId });
+  const hint = h("div", { id: hintId, class: "muted", style: "font-size:12px" });
+  const fileList = h("ul", { style: "margin:6px 0 0" });
+  const picked = [];
+  const result = h("div", { role: "status", "aria-live": "polite" });
+  const send = h("button", { class: "btn", type: "submit" }, replyTo ? "Send reply" : "Send");
+  const total = () => picked.reduce((n, f) => n + f.size, 0);
+  function drawFiles() {
+    const over = total() > MAIL_MAX_FILE_BYTES;
+    hint.textContent = `${fmtBytes(total())} of ${fmtBytes(MAIL_MAX_FILE_BYTES)}` + (over ? " — too large to send" : "");
+    hint.style.color = over ? "var(--err)" : "";
+    files.setAttribute("aria-invalid", over ? "true" : "false");
+    send.disabled = over;
+    fileList.innerHTML = "";
+    picked.forEach((f, i) => fileList.append(h("li", { class: "row", style: "gap:8px" },
+      h("span", { class: "mono" }, f.filename, h("span", { class: "muted" }, ` (${fmtBytes(f.size)})`)),
+      h("button", { class: "btn ghost sm", type: "button", "aria-label": `Remove ${f.filename}`, onclick: () => { picked.splice(i, 1); drawFiles(); files.focus(); } }, "Remove"))));
+  }
+  files.addEventListener("change", async () => {
+    for (const f of files.files) {
+      if (picked.length >= MAIL_MAX_FILES) { result.innerHTML = ""; result.append(h("p", { role: "alert" }, `At most ${MAIL_MAX_FILES} attachments.`)); break; }
+      picked.push({ filename: f.name, contentType: f.type || "application/octet-stream", size: f.size, content: await fileToBase64(f) });
+    }
+    files.value = "";
+    drawFiles();
+  });
+  const split = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  const form = h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    result.innerHTML = "";
+    send.disabled = true;
+    try {
+      const body = { from: from.value.trim() || "inbox", to: split(to.value), cc: split(cc.value), subject: subject.value, text: text.value };
+      if (picked.length) body.attachments = picked.map(({ filename, contentType, content }) => ({ filename, contentType, content }));
+      const base = `/admin/mailbox/${mbState.instId}`;
+      const res = replyTo
+        ? await jPost(`${base}/messages/${encodeURIComponent(replyTo.id)}/reply`, body)
+        : await jPost(`${base}/send`, body);
+      toast("sent");
+      onSent(res.message);
+    } catch (err) {
+      result.append(errBox(err));
+    } finally { send.disabled = total() > MAIL_MAX_FILE_BYTES; }
+  } },
+    replyTo ? null : h("p", { class: "muted", style: "margin-top:0" }, "Sends through the same rules as the API. Nothing leaves your machine: with loopback on, mail to a local address arrives in that mailbox."),
+    h("div", { class: "row" }, field("From (a name on this mailbox)", from), field("To", to)),
+    field("Cc", cc, ""),
+    field("Subject", subject, ""),
+    field("Text", text, ""),
+    field("Attachments", files, ""), hint, fileList,
+    h("div", { class: "row", style: "margin-top:10px" }, send),
+    result);
+  drawFiles();
+  return form;
 }
 
 // Compose a test email: a real MIME message, delivered through the inbound path.

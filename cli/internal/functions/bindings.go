@@ -26,6 +26,8 @@ package functions
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -165,6 +167,10 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 	}
 
 	req := httptest.NewRequest(m.method, path, bytes.NewReader(payload))
+	// The bearer is dev-open and holds everything; the function's own grants ride along, for the
+	// routes whose outcome depends on the level beyond the one checked above (mailbox keep: only
+	// `full` may move an expiry earlier).
+	req = req.WithContext(auth.WithOnBehalfGrants(req.Context(), auth.Grants(grants)))
 	b.stampHost(req)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	req.Header.Set("Content-Type", "application/json")
@@ -339,6 +345,45 @@ func readBytes(v goja.Value) ([]byte, error) {
 		return x.Bytes(), nil
 	}
 	return nil, fmt.Errorf("content must be a string, an ArrayBuffer, or a typed array")
+}
+
+// mailBody is a send or reply's message argument, with each attachment's `content` turned into
+// the base64 text the HTTP route takes. A function may hand bytes — an ArrayBuffer, a Uint8Array
+// or another typed array (read in the platform's little-endian byte order) — or base64 text, as
+// hosted. A DataView carries no bytes across this runtime's export, so it reaches the route as an
+// object and is refused there with the hosted message; wrap its buffer in a Uint8Array instead.
+func mailBody(v any) map[string]any {
+	o, _ := v.(map[string]any)
+	if o == nil {
+		return map[string]any{}
+	}
+	list, ok := o["attachments"].([]any)
+	if !ok {
+		return o
+	}
+	for _, item := range list {
+		a, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		var b []byte
+		switch x := a["content"].(type) {
+		case []byte:
+			b = x
+		case goja.ArrayBuffer:
+			b = x.Bytes()
+		case []int8, []uint16, []int16, []uint32, []int32, []float32, []float64, []int64, []uint64:
+			var buf bytes.Buffer
+			if binary.Write(&buf, binary.LittleEndian, x) != nil {
+				continue
+			}
+			b = buf.Bytes()
+		default:
+			continue
+		}
+		a["content"] = base64.StdEncoding.EncodeToString(b)
+	}
+	return o
 }
 
 // optField reads one field out of an options OBJECT argument, or nil when the argument or the
@@ -852,14 +897,9 @@ var serviceMethods = map[string]map[string]call{
 				return fmt.Sprintf("/v1/mailbox/%s/send", esc(t.instance)), nil
 			},
 			body: func(a []goja.Value) (any, error) {
-				o, _ := argAny(a, 1).(map[string]any)
-				out := map[string]any{}
-				for k, v := range o {
-					if k != "replyToMessageId" {
-						out[k] = v
-					}
-				}
-				return out, nil
+				o := mailBody(argAny(a, 1))
+				delete(o, "replyToMessageId")
+				return o, nil
 			},
 		},
 		"reply": {
@@ -868,11 +908,17 @@ var serviceMethods = map[string]map[string]call{
 				return fmt.Sprintf("/v1/mailbox/%s/messages/%s/reply", esc(t.instance), esc(argStr(a, 1))), nil
 			},
 			body: func(a []goja.Value) (any, error) {
-				o, _ := argAny(a, 2).(map[string]any)
-				if o == nil {
-					o = map[string]any{}
-				}
-				return o, nil
+				return mailBody(argAny(a, 2)), nil
+			},
+		},
+		// Keep one message `days` (1–90) from now; returns its summary.
+		"keep": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "message",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/mailbox/%s/messages/%s/keep", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				return map[string]any{"days": argAny(a, 2)}, nil
 			},
 		},
 		"markRead": {

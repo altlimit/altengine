@@ -1,0 +1,125 @@
+{
+  "_comment": [
+    "WHICH ROUTE A MESSAGE TAKES, shared by the hosted service and the CLI emulator.",
+    "",
+    "Each side validates `routes` as a mailbox config would (patterns are trimmed and lowercased",
+    "there), then matches `message` against them. `expect` is the index of the first route that",
+    "matches, or null when none does. `globs` pins the pattern language on its own: `*` is any run,",
+    "`?` one character, everything else literal, case-insensitive, and it must match the WHOLE value.",
+    "",
+    "Both sides assert against this file, byte for byte the same in both repositories. A message that",
+    "takes route 1 locally and route 2 in production runs a different function — edit this file",
+    "first, then both matchers."
+  ],
+  "globs": [
+    { "pattern": "support", "value": "support", "match": true },
+    { "pattern": "support", "value": "support-1", "match": false },
+    { "pattern": "support*", "value": "support-1", "match": true },
+    { "pattern": "support*", "value": "support", "match": true },
+    { "pattern": "*support", "value": "eu-support", "match": true },
+    { "pattern": "*port*", "value": "support-team", "match": true },
+    { "pattern": "s?pport", "value": "support", "match": true },
+    { "pattern": "s?pport", "value": "spport", "match": false },
+    { "pattern": "SUPPORT", "value": "support", "match": true },
+    { "pattern": "*@vendor.com", "value": "billing@vendor.com", "match": true },
+    { "pattern": "*@vendor.com", "value": "billing@vendor.com.evil.io", "match": false },
+    { "pattern": "*@*.vendor.com", "value": "a@mail.vendor.com", "match": true },
+    { "pattern": "a*b*c", "value": "abc", "match": true },
+    { "pattern": "a*b*c", "value": "aXbYcZ", "match": false },
+    { "pattern": "*", "value": "", "match": true },
+    { "pattern": "?", "value": "", "match": false },
+    { "pattern": "orders.eu", "value": "orders-eu", "match": false }
+  ],
+  "cases": [
+    {
+      "name": "no routes: stored only",
+      "routes": [],
+      "message": { "local": "support", "from": "jane@example.com", "subject": "Hi", "attachmentCount": 0 },
+      "expect": null
+    },
+    {
+      "name": "an empty match takes everything",
+      "routes": [{ "match": {}, "do": [{ "channel": "rt/all" }] }],
+      "message": { "local": "anything", "from": "jane@example.com", "subject": "", "attachmentCount": 0 },
+      "expect": 0
+    },
+    {
+      "name": "the FIRST matching route wins, not the most specific",
+      "routes": [
+        { "match": {}, "do": [{ "channel": "rt/all" }] },
+        { "match": { "to": "support" }, "do": [{ "function": "fns/support" }] }
+      ],
+      "message": { "local": "support", "from": "jane@example.com", "subject": "Hi", "attachmentCount": 0 },
+      "expect": 0
+    },
+    {
+      "name": "every condition of a route must hold",
+      "routes": [
+        { "match": { "to": "support*", "from": "*@vendor.com" }, "do": [{ "function": "fns/vendor" }] },
+        { "match": { "to": "support*" }, "do": [{ "function": "fns/support" }] }
+      ],
+      "message": { "local": "support-eu", "from": "jane@example.com", "subject": "Hi", "attachmentCount": 0 },
+      "expect": 1
+    },
+    {
+      "name": "patterns are saved lowercased and trimmed, and match case-insensitively",
+      "routes": [{ "match": { "to": "  Orders*  ", "from": "*@VENDOR.com" }, "do": [{ "function": "fns/orders" }] }],
+      "message": { "local": "orders-eu", "from": "Billing@Vendor.COM", "subject": "Invoice", "attachmentCount": 0 },
+      "expect": 0
+    },
+    {
+      "name": "subject is a case-insensitive substring, not a glob",
+      "routes": [
+        { "match": { "subject": "INVOICE" }, "do": [{ "function": "fns/invoice" }] },
+        { "match": { "subject": "inv*" }, "do": [{ "function": "fns/glob" }] }
+      ],
+      "message": { "local": "inbox", "from": "a@b.com", "subject": "Your Invoice #42", "attachmentCount": 0 },
+      "expect": 0
+    },
+    {
+      "name": "a star in a subject condition is a literal star",
+      "routes": [{ "match": { "subject": "inv*" }, "do": [{ "function": "fns/glob" }] }],
+      "message": { "local": "inbox", "from": "a@b.com", "subject": "Your Invoice #42", "attachmentCount": 0 },
+      "expect": null
+    },
+    {
+      "name": "hasAttachment true needs a stored attachment",
+      "routes": [
+        { "match": { "hasAttachment": true }, "do": [{ "function": "fns/files" }] },
+        { "match": {}, "do": [{ "channel": "rt/all" }] }
+      ],
+      "message": { "local": "inbox", "from": "a@b.com", "subject": "", "attachmentCount": 0 },
+      "expect": 1
+    },
+    {
+      "name": "hasAttachment false skips mail that carries one",
+      "routes": [
+        { "match": { "hasAttachment": false }, "do": [{ "function": "fns/plain" }] },
+        { "match": { "hasAttachment": true }, "do": [{ "function": "fns/files" }] }
+      ],
+      "message": { "local": "inbox", "from": "a@b.com", "subject": "", "attachmentCount": 2 },
+      "expect": 1
+    },
+    {
+      "name": "to matches the name, never the plus tag or the address",
+      "routes": [
+        { "match": { "to": "orders+eu" }, "do": [{ "function": "fns/tagged" }] },
+        { "match": { "to": "orders" }, "do": [{ "function": "fns/orders" }] }
+      ],
+      "message": { "local": "orders", "from": "a@b.com", "subject": "", "attachmentCount": 0 },
+      "expect": 1
+    },
+    {
+      "name": "the main address is the name inbox",
+      "routes": [{ "match": { "to": "inbox" }, "do": [{ "channel": "rt/main" }] }],
+      "message": { "local": "inbox", "from": "a@b.com", "subject": "", "attachmentCount": 0 },
+      "expect": 0
+    },
+    {
+      "name": "from must match the whole address",
+      "routes": [{ "match": { "from": "*@vendor.com" }, "do": [{ "function": "fns/vendor" }] }],
+      "message": { "local": "inbox", "from": "billing@vendor.com.evil.io", "subject": "", "attachmentCount": 0 },
+      "expect": null
+    }
+  ]
+}

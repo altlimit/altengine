@@ -27,6 +27,7 @@ import (
 type world struct {
 	reg  *control.Registry
 	svc  *Service
+	auth *auth.Store
 	mux  *http.ServeMux
 	hub  *channel.Hub
 	mu   sync.Mutex
@@ -60,7 +61,8 @@ func newWorld(t *testing.T, dir string) *world {
 		rw.WriteHeader(status)
 	})
 	w.svc = NewService(reg, NewStore(dir), w.mux, w.hub, Options{})
-	NewHandler(reg, auth.NewStore(true), w.svc).Register(w.mux)
+	w.auth = auth.NewStore(true)
+	NewHandler(reg, w.auth, w.svc).Register(w.mux)
 	reg.OnDelete("mailbox", w.svc.Drop)
 	return w
 }
@@ -89,8 +91,13 @@ func mimeMsg(from, subject, body string, attach map[string][]byte) []byte {
 
 func (w *world) do(t *testing.T, method, path string, body io.Reader) (int, map[string]any) {
 	t.Helper()
+	return w.doAs(t, "dev", method, path, body)
+}
+
+func (w *world) doAs(t *testing.T, key, method, path string, body io.Reader) (int, map[string]any) {
+	t.Helper()
 	req := httptest.NewRequest(method, path, body)
-	req.Header.Set("Authorization", "Bearer dev")
+	req.Header.Set("Authorization", "Bearer "+key)
 	rec := httptest.NewRecorder()
 	w.mux.ServeHTTP(rec, req)
 	out := map[string]any{}

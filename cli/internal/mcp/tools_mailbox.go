@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/altlimit/altengine/cli/internal/auth"
 	"github.com/altlimit/altengine/cli/internal/mailbox"
 )
 
@@ -185,11 +186,26 @@ var mailboxSendArgs = map[string]any{
 	"subject":  map[string]any{"type": "string"},
 	"text":     map[string]any{"type": "string"},
 	"html":     map[string]any{"type": "string"},
+	"attachments": map[string]any{
+		"type": "array",
+		"description": fmt.Sprintf("Files to attach, up to %d. The whole message must stay under 5 MB once encoded, which is about 3.6 MB of files. "+
+			"Set contentId to show a part inline, referenced from the HTML as cid:<contentId>.", mailbox.MaxSendAttachments),
+		"items": map[string]any{
+			"type":     "object",
+			"required": []string{"filename", "content"},
+			"properties": map[string]any{
+				"filename":    map[string]any{"type": "string"},
+				"contentType": map[string]any{"type": "string", "description": "e.g. application/pdf. Defaults to application/octet-stream."},
+				"content":     map[string]any{"type": "string", "description": "The file's bytes, base64-encoded."},
+				"contentId":   map[string]any{"type": "string"},
+			},
+		},
+	},
 }
 
 func sendBody(args map[string]any) map[string]any {
 	body := map[string]any{}
-	copyIfPresent(body, args, "from", "fromName", "to", "cc", "subject", "text", "html")
+	copyIfPresent(body, args, "from", "fromName", "to", "cc", "subject", "text", "html", "attachments")
 	return body
 }
 
@@ -215,6 +231,9 @@ func init() {
 				return map[string]any{
 					"instance": res["name"], "domain": res["domain"], "address": res["address"], "pattern": res["pattern"],
 					"acceptMode": res["acceptMode"], "sendMode": res["sendMode"], "retentionDays": res["retentionDays"],
+					// Always null locally: the hosted send cut-off reacts to bounces and complaints,
+					// and no mail leaves the emulator.
+					"sendPaused": res["sendPaused"],
 				}, nil
 			},
 		},
@@ -445,6 +464,30 @@ func init() {
 					return nil, err
 				}
 				return h.serveInternal(r, http.MethodPost, p, sendBody(args))
+			},
+		},
+		tool{
+			name:  "mailbox_keep_message",
+			title: "Keep a message longer",
+			description: fmt.Sprintf("Keep one message until `days` (1–%d) from now, overriding the mailbox's retention for that message alone; its attachments stay with it. "+
+				"Only extends: a date earlier than the current expiry is refused — delete with mailbox_delete_message instead.", mailbox.MaxRetentionDays),
+			required: []string{"instance", "id", "days"},
+			props: map[string]any{
+				"instance": instanceArg,
+				"id":       map[string]any{"type": "string"},
+				"days":     map[string]any{"type": "integer", "minimum": 1, "maximum": mailbox.MaxRetentionDays},
+			},
+			annotations: map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
+				p, err := h.mailboxPath(args, "/messages/"+url.PathEscape(argString(args, "id"))+"/keep")
+				if err != nil {
+					return nil, err
+				}
+				// Extends only, whatever the credential holds: an earlier expiry is a deferred delete,
+				// and a delete over MCP goes through mailbox_delete_message, which asks for confirm.
+				// Held to `write` for this one request, which /keep reads as "may not shorten".
+				r = r.WithContext(auth.WithOnBehalfGrants(r.Context(), auth.Grants{"mailbox": "write"}))
+				return h.serveInternal(r, http.MethodPost, p, map[string]any{"days": args["days"]})
 			},
 		},
 		tool{

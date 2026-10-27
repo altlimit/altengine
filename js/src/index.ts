@@ -37,6 +37,7 @@ import { AuthClient } from "./auth/client.js";
 import { AutomationClient } from "./automation/client.js";
 import { BlobClient } from "./blob/client.js";
 import { ContainerClient } from "./container/client.js";
+import { MailboxClient } from "./mailbox/client.js";
 
 export class AltEngine {
   private readonly http: Http;
@@ -78,6 +79,12 @@ export class AltEngine {
    * automation, because access rules bound what a user may read, not what they may spend. */
   container(instance: string): ContainerClient {
     return new ContainerClient(this.http, instance);
+  }
+
+  /** Server-side client for a mailbox instance — email addresses an app or agent owns: read
+   * what arrives, wait for the next message, send and reply. Organization API key only. */
+  mailbox(instance: string): MailboxClient {
+    return new MailboxClient(this.http, instance);
   }
 
   /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
@@ -125,6 +132,9 @@ export * from "./blob/types.js";
 
 export { ContainerClient } from "./container/client.js";
 export * from "./container/types.js";
+
+export { MailboxClient, attachmentBase64, MAX_WAIT_SECONDS } from "./mailbox/client.js";
+export * from "./mailbox/types.js";
 
 export { ChannelClient } from "./channel/client.js";
 export * from "./channel/types.js";

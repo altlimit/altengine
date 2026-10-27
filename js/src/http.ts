@@ -61,6 +61,9 @@ export interface RequestOptions {
   /** Override the client retry policy; `false` disables retries for this call
    * (used for non-idempotent endpoints: transaction, publish). */
   retry?: RetryOptions | false;
+  /** Override the client's request timeout for this call (a long-poll holds the request open
+   * for longer than an ordinary call takes). */
+  timeoutMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -168,7 +171,7 @@ export class Http {
     }
 
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? this.timeoutMs);
     let res: Response;
     try {
       res = await this.fetchImpl(this.url(path, opts.query), { method, headers, body, signal: ctrl.signal });

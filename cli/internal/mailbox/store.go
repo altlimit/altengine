@@ -730,6 +730,35 @@ func (s *Store) MarkRead(instanceID, id string, now int64) (bool, error) {
 	return n > 0, nil
 }
 
+// ErrShortenNeedsFull is SetExpiry refusing to move an expiry earlier for a caller that may not.
+var ErrShortenNeedsFull = errors.New("shortening an expiry needs full access")
+
+// SetExpiry moves one message's expiry. The caller bounds expiresAt (KeepUntil). Unless
+// allowShorten, an expiresAt earlier than the current one is refused with ErrShortenNeedsFull and
+// nothing changes — the check and the write are one statement. nil when there is no such message.
+func (s *Store) SetExpiry(instanceID, id string, expiresAt int64, allowShorten bool) (*Summary, error) {
+	db, err := s.db(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	res, err := db.Exec(`UPDATE message SET expires_at = ? WHERE id = ? AND (? OR expires_at <= ?)`, expiresAt, id, allowShorten, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	sum, err := s.summary(db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrShortenNeedsFull
+	}
+	return &sum, nil
+}
+
 // Remove deletes messages: bytes first, then rows. Returns how many were removed.
 func (s *Store) Remove(instanceID string, ids []string) (int, error) {
 	db, err := s.db(instanceID)

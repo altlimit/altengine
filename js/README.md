@@ -1,8 +1,8 @@
 # @altengine/sdk
 
 Official JavaScript/TypeScript SDK for [altengine](https://www.altengine.net) —
-managed **datastore**, **search**, realtime **channels**, **blob** storage and
-**containers** behind one API key. Zero dependencies, fetch-based, works in
+managed **datastore**, **search**, realtime **channels**, **blob** storage,
+**containers** and **mailboxes** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
 **Not published to npm yet** — `npm i @altengine/sdk` 404s today. Use it from a clone of this
@@ -267,15 +267,50 @@ the pages for you.
 
 Organization API key only, like automation.
 
+## Mailbox
+
+Email addresses an app or agent owns. Any name works: `<slug>.<anything>@<domain>`
+receives mail with no call needed.
+
+```ts
+const mb = ae.mailbox("acme");
+
+// Start waiting BEFORE handing the address out, so older mail is not mistaken for it.
+const { messages } = await mb.wait({ after: "now", to: "signup", timeoutSeconds: 30 });
+const msg = await mb.get(messages[0].id);
+
+await mb.reply(msg.id, {
+  text: "Invoice attached.",
+  attachments: [{ filename: "invoice.pdf", contentType: "application/pdf", content: pdfBytes }],
+});
+await mb.send({ from: "billing", to: ["jane@example.com"], subject: "Receipt", text: "…" });
+
+const { url } = await mb.attachment(msg.id, 0); // short-lived; no key needed to fetch it
+await mb.keep(msg.id, 90);                      // 1–90 days from now
+await mb.markRead(msg.id);
+
+const page = await mb.list({ direction: "in", unread: true, limit: 25 }); // pass page.cursor back
+await mb.addresses.create({ local: "billing", label: "receipts" });
+```
+
+`content` is base64 text, or a `Uint8Array`, `ArrayBuffer` or `Blob` that the SDK
+encodes. Up to 32 attachments; the whole message must stay under 5 MB once encoded
+(about 3.6 MB of files), or the send fails with 413. `send` and `reply` are never
+retried. In the default `reply` send mode, a recipient must have written to the
+mailbox first, in authenticated mail.
+
+`wait` returns `{ messages, cursor }` and is empty on timeout; call it again from
+`cursor`. Organization API key only.
+
 ### Levels
 
 A grant level is a ceiling, and they are cumulative: `read` < `write` < `full`.
 
-| Level | Blob | Container |
-|---|---|---|
-| `read` | `get`, `bytes`, `list` | `get`, `list`, `logs`, `sizes` |
-| `write` | `put`, `uploadUrl`, `setPublic` | `run`, `cancel` |
-| `full` | `delete` | — |
+| Level | Blob | Container | Mailbox |
+|---|---|---|---|
+| `read` | `get`, `bytes`, `list` | `get`, `list`, `logs`, `sizes` | `info`, `list`, `wait`, `get`, `raw`, `attachment`, `addresses.list` |
+| `write` | `put`, `uploadUrl`, `setPublic` | `run`, `cancel` | `send`, `reply`, `markRead`, `keep` (later date only), `addresses.create`, `addresses.disable` |
+| `full` | `delete` | — | `delete`, `keep` to an earlier date |
 
 ## Auth
 

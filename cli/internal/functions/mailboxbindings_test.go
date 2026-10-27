@@ -103,3 +103,91 @@ func TestMailboxBindingGrants(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A function attaches bytes or base64 text, and keeps a message longer — on a write grant only.
+func TestMailboxBindingAttachmentsAndKeep(t *testing.T) {
+	mux, reg, svc := newMailboxServer(t)
+	in, err := reg.Create("mailbox", "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SaveConfig(in, map[string]any{"settings": map[string]any{"sendMode": "any"}}); err != nil {
+		t.Fatal(err)
+	}
+	deployFn(t, mux, "mailer", `export default { async fetch(request, env) {
+		const desk = { instance: "desk" };
+		const sent = await env.mailbox.send(desk, { to: ["a@example.com"], subject: "Files", text: "see attached", attachments: [
+			{ filename: "u8.txt", contentType: "text/plain", content: new TextEncoder().encode("from bytes") },
+			{ filename: "ab.bin", content: new Uint8Array([1, 2, 3]).buffer },
+			{ filename: "b64.txt", content: "YmFzZTY0" },
+			{ filename: "u16.bin", content: new Uint16Array([0x0201]) },
+		] });
+		let bad = "";
+		try { await env.mailbox.send(desk, { to: ["a@example.com"], subject: "s", text: "t", attachments: [{ content: "%%%" }] }); } catch (e) { bad = String(e); }
+		const kept = await env.mailbox.keep(desk, sent.id, 30);
+		let badDays = "";
+		try { await env.mailbox.keep(desk, sent.id, 91); } catch (e) { badDays = String(e); }
+		let missing = "";
+		try { await env.mailbox.keep(desk, "nope", 3); } catch (e) { missing = String(e); }
+		let shorter = "";
+		try { await env.mailbox.keep(desk, sent.id, 7); } catch (e) { shorter = String(e); }
+		return new Response(JSON.stringify({ id: sent.id, count: sent.attachmentCount, kept: kept.expiresAt, bad, badDays, missing, shorter }));
+	} };`, map[string]string{"mailbox:desk": "write"})
+	rec := invoke(t, mux, "/fn/main/mailer")
+	if rec.Code != 200 {
+		t.Fatalf("invoke: %d %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		ID      string `json:"id"`
+		Count   int    `json:"count"`
+		Kept    int64  `json:"kept"`
+		Bad     string `json:"bad"`
+		BadDays string `json:"badDays"`
+		Missing string `json:"missing"`
+		Shorter string `json:"shorter"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	// A write grant extends; moving the date earlier is refused, though the bearer the binding
+	// carries internally could do it.
+	if got.Count != 4 || !strings.Contains(got.Bad, "attachments[0].content must be base64") ||
+		!strings.Contains(got.BadDays, "days must be an integer from 1 to 90") || !strings.Contains(got.Missing, "message not found") ||
+		!strings.Contains(got.Shorter, "PERMISSION_DENIED: keeping a message for less time than it already has left deletes it sooner") {
+		t.Fatalf("got %+v", got)
+	}
+	m, _ := svc.Store().Get(in.ID, got.ID)
+	if m.ExpiresAt != got.Kept || got.Kept < m.ReceivedAt+30*86_400_000-60_000 {
+		t.Fatalf("kept until %d, stored %d (received %d)", got.Kept, m.ExpiresAt, m.ReceivedAt)
+	}
+	want := []string{"from bytes", "\x01\x02\x03", "base64", "\x01\x02"}
+	for i, w := range want {
+		b, _ := svc.Store().Bytes(in.ID, m.Attachments[i].Key)
+		if string(b) != w {
+			t.Errorf("attachment %d = %q, want %q", i, b, w)
+		}
+	}
+
+	// keep is a write: a read grant is refused before anything moves.
+	deployFn(t, mux, "keeper", `export default { async fetch(request, env) {
+		try { await env.mailbox.keep({ instance: "desk" }, "`+got.ID+`", 1); return new Response("kept"); } catch (e) { return new Response(String(e)); }
+	} };`, map[string]string{"mailbox:desk": "read"})
+	if rec := invoke(t, mux, "/fn/main/keeper"); !strings.Contains(rec.Body.String(), "insufficient grant") {
+		t.Fatalf("keep on a read grant: %s", rec.Body.String())
+	}
+	if m2, _ := svc.Store().Get(in.ID, got.ID); m2.ExpiresAt != got.Kept {
+		t.Fatal("a refused keep moved the expiry")
+	}
+
+	// A full grant may shorten.
+	deployFn(t, mux, "owner", `export default { async fetch(request, env) {
+		const m = await env.mailbox.keep({ instance: "desk" }, "`+got.ID+`", 1);
+		return new Response(String(m.expiresAt));
+	} };`, map[string]string{"mailbox:desk": "full"})
+	if rec := invoke(t, mux, "/fn/main/owner"); rec.Code != 200 {
+		t.Fatalf("keep on a full grant: %d %s", rec.Code, rec.Body.String())
+	}
+	if m3, _ := svc.Store().Get(in.ID, got.ID); m3.ExpiresAt >= got.Kept {
+		t.Fatalf("full did not shorten: %d", m3.ExpiresAt)
+	}
+}
