@@ -5,22 +5,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- Mailbox sends and replies take `attachments` (up to 32; `{ filename, contentType, content,
-  contentId }`, `content` base64 — or bytes from a function) on `/v1`, `env.mailbox.send` /
-  `reply`, `mailbox_send` / `mailbox_reply` and the console's new Send tab and Reply form. A
-  message over 5 MB once encoded is refused with 413 before it counts against a send cap; a
-  send or reply body over 8 MB is 413. The sent message lists its attachments and they
-  download like received ones; a send looped back to a local mailbox carries them.
-- `POST /v1/mailbox/{instance}/messages/{id}/keep` `{ "days": 1–90 }`, `env.mailbox.keep` and
-  the `mailbox_keep_message` tool set one message's expiry. `write` extends; an earlier date
-  needs `full`; the MCP tool only extends. The console's message view has a "Deleted after"
-  control.
-- `GET /v1/mailbox/{instance}` and `mailbox_info` return `sendPaused`, always `null` locally.
-- Route matching is checked against `conformance/fixtures/mailbox-routes.json`, the cases the
-  hosted service asserts too.
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -41,6 +25,24 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.34 — 2026-10-27
+
+### Emulator
+
+- Mailbox sends and replies take `attachments` (up to 32; `{ filename, contentType, content,
+  contentId }`, `content` base64 — or bytes from a function) on `/v1`, `env.mailbox.send` /
+  `reply`, `mailbox_send` / `mailbox_reply` and the console's new Send tab and Reply form. A
+  message over 5 MB once encoded is refused with 413 before it counts against a send cap; a
+  send or reply body over 8 MB is 413. The sent message lists its attachments and they
+  download like received ones; a send looped back to a local mailbox carries them.
+- `POST /v1/mailbox/{instance}/messages/{id}/keep` `{ "days": 1–90 }`, `env.mailbox.keep` and
+  the `mailbox_keep_message` tool set one message's expiry. `write` extends; an earlier date
+  needs `full`; the MCP tool only extends. The console's message view has a "Deleted after"
+  control.
+- `GET /v1/mailbox/{instance}` and `mailbox_info` return `sendPaused`, always `null` locally.
+- Route matching is checked against `conformance/fixtures/mailbox-routes.json`, the cases the
+  hosted service asserts too.
 
 ## v0.2.33 — 2026-10-26
 
