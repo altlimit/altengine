@@ -420,7 +420,8 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request) error {
 		cacheKey:     fmt.Sprintf("%s:%s:%d", in.ID, fnName, fn.ActiveVersion),
 		req:          scrubbed,
 		body:         body,
-		bindings:     h.binder,
+		// A function a triggered task runs carries the task's depth into every call it makes.
+		bindings: h.binder.forInvocation(common.TriggerDepth(r.Context())),
 		logf: func(level, msg string) {
 			// The local equivalent of the hosted live tail. Hosted this is streamed to
 			// the console only while someone is watching, and never stored.

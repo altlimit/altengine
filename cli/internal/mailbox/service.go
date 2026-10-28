@@ -40,6 +40,8 @@ type Service struct {
 	base   string
 	sig    *signer
 	client *http.Client
+	// queues lets a route hand mail to a task queue (nil = no tasks service).
+	queues QueueSink
 
 	loopback atomic.Bool
 

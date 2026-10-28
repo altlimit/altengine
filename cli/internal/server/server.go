@@ -1,6 +1,6 @@
 // Package server wires the emulator's HTTP surface: the data planes (/v1/search,
-// /v1/datastore, /v1/channel, /v1/auth, /v1/functions, /v1/blob, /v1/container, /v1/mailbox
-// and the public /fn and /blob paths), the control-plane admin API (/admin), MCP, and the embedded
+// /v1/datastore, /v1/channel, /v1/auth, /v1/functions, /v1/blob, /v1/container, /v1/mailbox,
+// /v1/tasks and the public /fn and /blob paths), the control-plane admin API (/admin), MCP, and the embedded
 // admin console — mounted in the same order as the hosted platform (data plane, then admin,
 // then static assets).
 package server
@@ -29,6 +29,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/mailbox"
 	"github.com/altlimit/altengine/cli/internal/mcp"
 	"github.com/altlimit/altengine/cli/internal/search"
+	"github.com/altlimit/altengine/cli/internal/tasks"
 )
 
 // Options configures the emulator.
@@ -70,6 +71,7 @@ type Server struct {
 	blob *blob.Store
 	mail *mailbox.Service
 	smtp *mailbox.SMTPServer
+	task *tasks.Service
 
 	site   *devsite.Server
 	siteLn net.Listener
@@ -90,11 +92,16 @@ func New(opts Options) (*Server, error) {
 	hub := channel.NewHub()
 	idSvc := identity.NewService(reg, idMgr, opts.DevOpen)
 
+	// Tasks, built first because the datastore, blob and mailbox planes fire triggers into it.
+	// Its own routes are mounted after functions, which it dispatches into at delivery time.
+	taskSvc := tasks.NewService(reg, tasks.NewStore(opts.DataDir), mux, hub)
+
 	// Data planes first. The datastore and channel planes also accept END-USER identity
 	// tokens minted by the auth plane: the datastore enforces row rules on them, and the
 	// channel token mint scopes them to the auth instance's channel patterns. The
-	// datastore's live bridge publishes committed changes straight into the hub.
-	datastore.NewHandler(reg, a, dsMgr).WithIdentity(idSvc).WithLive(hub).Register(mux)
+	// datastore's live bridge publishes committed changes straight into the hub, and its write
+	// triggers hand them to a task queue.
+	datastore.NewHandler(reg, a, dsMgr).WithIdentity(idSvc).WithLive(hub).WithTriggers(taskSvc).Register(mux)
 	search.NewHandler(reg, a, srMgr).Register(mux)
 	channel.NewHandler(reg, a, hub).WithIdentity(idSvc).Register(mux)
 	identity.NewHandler(reg, idSvc).Register(mux)
@@ -103,7 +110,7 @@ func New(opts Options) (*Server, error) {
 	// databases — a blobkey stored in a local datastore document has to still resolve after a
 	// restart, or the local app breaks in a way the hosted one does not.
 	blobStore := blob.NewStore(opts.DataDir)
-	blob.NewHandler(reg, a, blobStore).Register(mux)
+	blob.NewHandler(reg, a, blobStore).WithTriggers(taskSvc).Register(mux)
 
 	// Functions. The stubs a function gets (env.datastore, env.search, ...) dispatch
 	// IN-PROCESS into this same mux, so a call from a function goes through the very
@@ -129,8 +136,12 @@ func New(opts Options) (*Server, error) {
 	mailSvc := mailbox.NewService(reg, mailbox.NewStore(opts.DataDir), mux, hub, mailbox.Options{
 		Domain: opts.MailDomain,
 		Base:   "http://" + opts.Addr,
-	})
+	}).WithQueues(taskSvc)
 	mailbox.NewHandler(reg, a, mailSvc).Register(mux)
+
+	// Tasks, after functions and channels: a queue delivers to a function (dispatched into this
+	// same mux), publishes into the hub, or POSTs a signed webhook.
+	tasks.NewHandler(reg, a, taskSvc).Register(mux)
 
 	// Deleting an instance drops its data, and each service says how. One teardown path for
 	// the console and for MCP's delete_instance — a delete that leaves a database behind is a
@@ -149,12 +160,27 @@ func New(opts Options) (*Server, error) {
 	reg.OnConfigSaved("mailbox", func(in *control.Instance, _ map[string]any) {
 		reg.SetConfig(in, mailbox.NormalizedConfigMap(in.Config()))
 	})
+	reg.OnValidateConfig("tasks", tasks.ValidateConfig)
+	// Triggers name a queue, which must exist when the rule is saved — the shape of each list is
+	// the tasks service's to check, and so is the queue.
+	reg.OnValidateConfig("datastore", taskSvc.ValidateDatastoreConfig)
+	reg.OnValidateConfig("blob", taskSvc.ValidateBlobConfig)
+	reg.OnValidateConfig("mailbox", taskSvc.ValidateMailboxConfig)
+	for _, svc := range []string{"datastore", "blob"} {
+		s := svc
+		reg.OnConfigSaved(s, func(in *control.Instance, _ map[string]any) {
+			if t, ok := tasks.NormalizedTriggers(s, in.Config()); ok {
+				reg.SetConfig(in, map[string]any{"triggers": t})
+			}
+		})
+	}
 
 	reg.OnDelete("datastore", dsMgr.DropInstance)
 	reg.OnDelete("search", srMgr.DropInstance)
 	reg.OnDelete("auth", idMgr.Drop)
 	reg.OnDelete("blob", blobStore.Drop)
 	reg.OnDelete("mailbox", mailSvc.Drop)
+	reg.OnDelete("tasks", taskSvc.Drop)
 
 	// Admin before MCP: MCP's tools dispatch into this same mux, and some of them (the
 	// datastore collection listing) reach an /admin route, so those must already be mounted.
@@ -182,7 +208,7 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/v1/static", staticStub)
 	mux.HandleFunc("/v1/static/", staticStub)
 
-	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore, mail: mailSvc}
+	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore, mail: mailSvc, task: taskSvc}
 
 	if opts.SMTPAddr != "" {
 		// Bound here, like the site listener, so a port in use is a startup error.
@@ -245,6 +271,7 @@ func (s *Server) ListenAndServe() error {
 	s.fn.StartScheduler(context.Background())
 	s.blob.StartReaper(context.Background())
 	s.mail.Run(context.Background())
+	s.task.Run(context.Background())
 	log.Printf("altengine listening on http://%s", s.opts.Addr)
 	log.Printf("  admin console:  http://%s/", s.opts.Addr)
 	log.Printf("  data:           %s", dataLabel(s.opts.DataDir))
@@ -254,6 +281,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("  blob:           /v1/blob/{instance} — public objects at /blob/{instance}/{name}/{id}")
 	log.Printf("  containers:     /v1/container/{instance} — jobs run on your local Docker daemon")
 	log.Printf("  mailbox:        /v1/mailbox/{instance} — addresses <instance>[.<name>]@%s; nothing sent leaves the emulator", s.mail.Domain())
+	log.Printf("  tasks:          /v1/tasks/{instance} — queues deliver to functions, channels and webhooks; each attempt is logged here")
 	if s.smtp != nil {
 		log.Printf("  smtp:           %s — delivers into local mailboxes", s.smtp.Addr())
 		go s.smtp.Serve()

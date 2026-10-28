@@ -246,12 +246,51 @@ func (s *Service) postWebhook(inst *control.Instance, target string, m *Record) 
 	return outcome{why: fmt.Sprintf("receiver answered %d", res.StatusCode)}
 }
 
+// QueueSink is the tasks service as a route sees it: hand a message to `<tasks-instance>/<queue>`.
+// payload is what a function would receive; summary is what is sent instead when payload is too
+// large for a task. A narrow interface, so the mailbox does not depend on the tasks service.
+type QueueSink interface {
+	EnqueueMail(ref, messageID string, payload, summary []byte) (status, why string, permanent bool)
+}
+
+// WithQueues lets routes hand mail to a task queue.
+func (s *Service) WithQueues(q QueueSink) *Service { s.queues = q; return s }
+
+// enqueue hands a message to a queue as a task: exactly what a function would receive, or — for a
+// message too large for a task — its summary and attachment list, to be read in full by id.
+func (s *Service) enqueue(inst *control.Instance, ref string, m *Record) outcome {
+	if s.queues == nil {
+		return outcome{why: "task queues are not served here", permanent: true}
+	}
+	payload, _ := json.Marshal(s.FunctionPayload(inst, m))
+	sum := summaryPayload(inst.Name, m)
+	atts := []map[string]any{}
+	for _, a := range m.Attachments {
+		if a.Rejected != nil {
+			continue
+		}
+		atts = append(atts, map[string]any{"idx": a.Idx, "filename": a.Filename, "contentType": a.ContentType, "size": a.Size})
+	}
+	sum["attachments"] = atts
+	sum["bodiesOmitted"] = true
+	summary, _ := json.Marshal(sum)
+	status, why, permanent := s.queues.EnqueueMail(ref, m.ID, payload, summary)
+	if why != "" {
+		return outcome{why: why, permanent: permanent}
+	}
+	return outcome{ok: true, status: status}
+}
+
 func (s *Service) runAction(inst *control.Instance, a Action, m *Record) outcome {
 	switch {
 	case a.Function != "":
 		return s.callFunction(inst, a.Function, m)
 	case a.Webhook != "":
 		return s.postWebhook(inst, a.Webhook, m)
+	case a.Queue != "":
+		// A queue receives exactly what a function would, as a task. Named per message and route,
+		// so a retried delivery is refused as a duplicate instead of adding the task twice.
+		return s.enqueue(inst, a.Queue, m)
 	}
 	return s.publish(a.Channel, a.IncludeText, m, inst.Name)
 }

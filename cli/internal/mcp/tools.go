@@ -160,7 +160,10 @@ func toolResult(v any) map[string]any {
 // serve issues a request against the emulator's own routes, in process. Same technique the
 // function stubs use: no socket, no network, and therefore no chance of a tool behaving
 // differently from the REST call it maps to.
-func (h *Handler) serveInternal(r *http.Request, method, path string, body any) (map[string]any, error) {
+//
+// accept lists error statuses whose body is still the answer — an add whose every task name
+// was taken is a 409 carrying the per-task results.
+func (h *Handler) serveInternal(r *http.Request, method, path string, body any, accept ...int) (map[string]any, error) {
 	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -171,8 +174,9 @@ func (h *Handler) serveInternal(r *http.Request, method, path string, body any) 
 	}
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
 	// A tool that holds itself below the caller's level (mailbox_keep_message only extends)
-	// says so on its request's context.
-	req = req.WithContext(auth.CarryOnBehalf(r.Context(), req.Context()))
+	// says so on its request's context. The request is marked as MCP's: a task records the
+	// surface it was added from.
+	req = req.WithContext(common.WithCaller(auth.CarryOnBehalf(r.Context(), req.Context()), "mcp"))
 	// Any bearer works: the emulator's auth store is dev-open. Carrying the caller's own
 	// header through keeps the local logs honest about who asked.
 	bearer := r.Header.Get("Authorization")
@@ -193,7 +197,11 @@ func (h *Handler) serveInternal(r *http.Request, method, path string, body any) 
 			return nil, fmt.Errorf("no such endpoint %s %s (the emulator returned a non-JSON response)", method, path)
 		}
 	}
-	if rec.Code >= 400 {
+	accepted := false
+	for _, c := range accept {
+		accepted = accepted || rec.Code == c
+	}
+	if rec.Code >= 400 && !accepted {
 		return nil, fmt.Errorf("%s", errMessage(decoded, rec.Code))
 	}
 	return decoded, nil
@@ -324,7 +332,7 @@ func init() {
 		tool{
 			name:  "list_instances",
 			title: "List instances",
-			description: "List every service instance (search, datastore, channel, auth, functions, blob, container, mailbox) with its id, name and creation time. " +
+			description: "List every service instance (search, datastore, channel, auth, functions, blob, container, mailbox, tasks) with its id, name and creation time. " +
 				"Start here: instance NAMES from this call are accepted anywhere a tool asks for an instance. A mailbox also carries `slug`, the first part of " +
 				"every address, `<slug>.<anything>@<domain>` (locally the slug is the instance name).",
 			props: map[string]any{
@@ -371,7 +379,7 @@ func init() {
 				"name":    map[string]any{"type": "string", "description": "Unique within this service. Lowercase, descriptive, e.g. 'orders'."},
 				"region": map[string]any{
 					"type": "string", "enum": common.Regions,
-					"description": "auth, blob, container and mailbox only: where the instance's data (container: its job watcher) is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
+					"description": "auth, blob, container, mailbox and tasks only: where the instance's data (container: its job watcher) is stored. CANNOT be changed later. Default 'auto' (near first use). Other services set region with patch_instance_config.",
 				},
 			},
 			annotations: writes,

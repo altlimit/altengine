@@ -48,12 +48,14 @@ type RouteMatch struct {
 	HasAttachment *bool  `json:"hasAttachment,omitempty"`
 }
 
-// Action is one thing a route does: exactly one of Function, Channel or Webhook is set.
+// Action is one thing a route does: exactly one of Function, Channel, Webhook or Queue is set.
 type Action struct {
 	Function    string `json:"function,omitempty"`
 	Channel     string `json:"channel,omitempty"`
 	IncludeText bool   `json:"includeText,omitempty"`
 	Webhook     string `json:"webhook,omitempty"`
+	// Queue is `<tasks-instance>/<queue>`: the message becomes a task there.
+	Queue string `json:"queue,omitempty"`
 }
 
 // Route is one entry of the ordered trigger list.
@@ -305,6 +307,13 @@ func functionName(name string) error {
 	return nil
 }
 
+func queueName(name string) error {
+	if !fnNameRe.MatchString(name) {
+		return fmt.Errorf("queue name must be 1-63 chars of [a-z0-9_-], starting alphanumeric")
+	}
+	return nil
+}
+
 // ValidateWebhookURL: an https URL with no credentials in it. Kept exactly as hosted — locally
 // too, so a route that saves here saves there; point it at an https tunnel to reach a local
 // receiver.
@@ -414,13 +423,13 @@ func ValidateRoutes(input any) ([]Route, error) {
 				return nil, common.BadRequest(aw + " must be an object")
 			}
 			kinds := 0
-			for _, k := range []string{"function", "channel", "webhook"} {
+			for _, k := range []string{"function", "channel", "webhook", "queue"} {
 				if ao[k] != nil {
 					kinds++
 				}
 			}
 			if kinds != 1 {
-				return nil, common.BadRequest(aw + " must have exactly one of 'function', 'channel' or 'webhook'")
+				return nil, common.BadRequest(aw + " must have exactly one of 'function', 'channel', 'webhook' or 'queue'")
 			}
 			switch {
 			case ao["function"] != nil:
@@ -435,6 +444,12 @@ func ValidateRoutes(input any) ([]Route, error) {
 					return nil, err
 				}
 				route.Do = append(route.Do, Action{Webhook: u})
+			case ao["queue"] != nil:
+				t, err := target(ao["queue"], aw+".queue", queueName)
+				if err != nil {
+					return nil, err
+				}
+				route.Do = append(route.Do, Action{Queue: t})
 			default:
 				if v := ao["includeText"]; v != nil {
 					if _, ok := v.(bool); !ok {
@@ -522,6 +537,8 @@ func ActionKey(a Action) string {
 		return "function:" + a.Function
 	case a.Webhook != "":
 		return "webhook:" + a.Webhook
+	case a.Queue != "":
+		return "queue:" + a.Queue
 	case a.IncludeText:
 		return "channel+text:" + a.Channel
 	}
@@ -545,6 +562,8 @@ func ParseActionKey(key string) (Action, bool) {
 		return Action{Channel: rest, IncludeText: true}, true
 	case "webhook":
 		return Action{Webhook: rest}, true
+	case "queue":
+		return Action{Queue: rest}, true
 	}
 	return Action{}, false
 }

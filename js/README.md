@@ -2,7 +2,7 @@
 
 Official JavaScript/TypeScript SDK for [altengine](https://www.altengine.net) —
 managed **datastore**, **search**, realtime **channels**, **blob** storage,
-**containers** and **mailboxes** behind one API key. Zero dependencies, fetch-based, works in
+**containers**, **mailboxes** and **task queues** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
 **Not published to npm yet** — `npm i @altengine/sdk` 404s today. Use it from a clone of this
@@ -302,15 +302,55 @@ mailbox first, in authenticated mail.
 `wait` returns `{ messages, cursor }` and is empty on timeout; call it again from
 `cursor`. Organization API key only.
 
+## Tasks
+
+Queues of work. A push queue delivers each task to a function, a channel or a signed
+webhook, retrying with backoff until it is accepted; a pull queue holds tasks for workers.
+
+```ts
+const tq = ae.tasks("jobs");
+
+await tq.createQueue("emails", { target: { function: "app/send-email" }, ratePerSecond: 5 });
+await tq.add("emails", { name: "welcome-42", payload: { userId: 42 }, delay: 60 });
+
+// A pull queue: lease, work, ack — or give it back.
+await tq.createQueue("reports", { mode: "pull" });
+for (const t of await tq.lease("reports", { count: 10, leaseSeconds: 120 })) {
+  try {
+    await tq.ack(t.id, t.leaseId, await build(t.payload));
+  } catch (e) {
+    await tq.release(t.id, t.leaseId, { error: String(e), delaySeconds: 30 });
+  }
+}
+
+for await (const t of tq.listAll("emails", { state: "failed" })) await tq.run(t.id); // retry
+```
+
+A task with a `name` is added once: a name already taken comes back as `{ ok: false,
+code: "TASK_EXISTS" }`, not a throw, while the finished task's record is kept (the
+instance's `retentionDays`). An add is retried on a transient failure only when every task
+in it is named.
+
+A function or webhook target receives `TaskDelivery` — `{ task, payload }` — and must
+answer 2xx before `task.deadlineAt` — the queue's `deadlineSeconds` (15–840, default 600),
+or the task's own. A timeout, 408, 429 or 5xx is retried; any other 4xx fails the task at
+once. A target past its deadline is not stopped, so delivery is at least once, so handle `task.id` idempotently. The answer may steer the
+retry with `Retry-After`, `x-task-retry: never | retry | defer` and
+`x-task-max-attempts` (`TASK_RETRY_HEADER` and friends). Webhook deliveries are signed
+like automation's: check them with `verifyWebhook`. Organization API key only.
+
 ### Levels
 
 A grant level is a ceiling, and they are cumulative: `read` < `write` < `full`.
 
-| Level | Blob | Container | Mailbox |
-|---|---|---|---|
-| `read` | `get`, `bytes`, `list` | `get`, `list`, `logs`, `sizes` | `info`, `list`, `wait`, `get`, `raw`, `attachment`, `addresses.list` |
-| `write` | `put`, `uploadUrl`, `setPublic` | `run`, `cancel` | `send`, `reply`, `markRead`, `keep` (later date only), `addresses.create`, `addresses.disable` |
-| `full` | `delete` | — | `delete`, `keep` to an earlier date |
+| Level | Blob | Container | Mailbox | Tasks |
+|---|---|---|---|---|
+| `read` | `get`, `bytes`, `list` | `get`, `list`, `logs`, `sizes` | `info`, `list`, `wait`, `get`, `raw`, `attachment`, `addresses.list` | `info`, `queues`, `queue`, `list`, `get` |
+| `write` | `put`, `uploadUrl`, `setPublic` | `run`, `cancel` | `send`, `reply`, `markRead`, `keep` (later date only), `addresses.create`, `addresses.disable` | `add`, `run`, `cancel`, `lease`, `ack`, `extend`, `release` |
+| `full` | `delete` | — | `delete`, `keep` to an earlier date | `createQueue`, `updateQueue`, `pauseQueue`, `resumeQueue`, `purgeQueue`, `deleteQueue` |
+
+A channel target is a publish: naming one, on a queue or a task, also takes `write` on
+that channel instance.
 
 ## Auth
 

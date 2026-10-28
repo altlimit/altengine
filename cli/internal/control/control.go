@@ -187,7 +187,7 @@ func (r *Registry) save() error {
 // copy of this list, and when the container service landed nobody added it there — so every
 // container call in the emulator's DEFAULT mode answered 403, which reads as a broken emulator
 // rather than a missing line in an auth file. A test asserts dev-open covers all of these.
-var Services = []string{"search", "datastore", "channel", "auth", "functions", "blob", "container", "mailbox"}
+var Services = []string{"search", "datastore", "channel", "auth", "functions", "blob", "container", "mailbox", "tasks"}
 
 // needsSecret reports whether a service signs tokens with a per-instance secret: channel
 // subscriber tokens and auth end-user identity tokens.
@@ -237,6 +237,10 @@ func defaultConfig(service string) map[string]any {
 			"maxConcurrent": 2,
 			"maxJobCostUsd": 1,
 		}
+	case "tasks":
+		// Queues are not config: they are created and changed through their own routes. A finished
+		// task's record — and with it its name — is kept seven days.
+		return map[string]any{"rateLimit": nil, "region": "auto", "retentionDays": 7}
 	case "mailbox":
 		// `{settings, routes}`, fully defaulted as hosted returns it (internal/mailbox owns the
 		// rules; this is only the seed). Every address is accepted, mail is sent only in reply
@@ -337,7 +341,7 @@ func (r *Registry) Create(service, name string) (*Instance, error) {
 // there at creation (a container's job watcher, by its first job) — and the config field that
 // holds it. Locally a region changes nothing; the rule is kept so a config that saves here
 // saves there.
-var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region", "container": "config.region", "mailbox": "settings.region"}
+var placedRegion = map[string]string{"auth": "settings.region", "blob": "config.region", "container": "config.region", "mailbox": "settings.region", "tasks": "region"}
 
 // RegionAtCreate reports whether service takes its region at creation (and only then).
 func RegionAtCreate(service string) bool { return placedRegion[service] != "" }

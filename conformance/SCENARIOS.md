@@ -107,6 +107,40 @@ auth instance scope what that user can reach.
 - [ ] live bridge: a committed datastore write publishes `{op, keys}` on
       `<collection>.<keyBy-value>` to the bound channel instance
 
+## Tasks
+
+Org API keys only. Every instance has a `default` queue.
+
+- [ ] queues: create, PATCH (only the fields sent change), pause/resume, purge, delete;
+      `default` cannot be deleted; a dead-letter queue in use cannot be deleted
+      (QUEUE_IN_USE); a pull queue never keeps a target
+- [ ] add: a task, an array, or `{tasks}` (≤100); `delay` and `runAt` together →
+      INVALID_ARGUMENT; payload over 128 KB → INVALID_ARGUMENT; a push queue with no
+      target and a task with none → NO_TARGET
+- [ ] a `name` dedupes: a taken name is a per-task `{ok:false, code:"TASK_EXISTS"}`;
+      when none landed the answer is 409 with the results AND an `error` envelope
+- [ ] push delivery: the function sees `x-ae-trigger: task`, `x-task-id`,
+      `x-task-queue`, `x-task-attempt` and `{task, payload}`; 2xx is done; 5xx/408/429
+      are retried at `min × 2^n` (capped, linear past `maxDoublings`); another 4xx or a
+      3xx fails at once; a failure is copied to the dead-letter queue
+- [ ] deadline: queue `deadlineSeconds` 15–840 (default 600), a task's own overrides it
+      (null in the record means the queue's); `task.deadlineAt` = claim time + deadline;
+      no answer by then → `timeout` "no answer within the Ns deadline", retried
+- [ ] target control: `x-task-retry: defer` re-runs without spending an attempt;
+      `never` fails now; `retry` retries a 2xx; `Retry-After` / `x-task-retry-after`
+      sets the next attempt; `x-task-max-attempts` lowers or raises the limit — all
+      ignored when the queue's `targetControl` is false
+- [ ] a channel target (queue or task) needs `write` on that channel instance
+- [ ] pull: lease → `leaseId`; ack/extend/release with the wrong one → 409 LEASE_LOST;
+      an expired lease puts the task back with the attempt spent
+- [ ] run: a scheduled task now; a failed/cancelled one retried with attempts reset;
+      a done one re-run as a NEW task (`source: "rerun"`)
+- [ ] triggers: datastore `triggers` → `datastore.write` events (≤100 per task,
+      `doc`/`before`, `docTruncated` past 32 KB); blob → `blob.create` (with a
+      short-lived `url`) / `blob.delete`; a mailbox `{queue}` route → the function
+      payload as a task named per message and route; a rule's queue must exist when
+      saved; a chain deeper than 8 is cut
+
 ## MCP
 
 `POST /mcp` (JSON-RPC 2.0, stateless) is the surface an AI agent uses, and the
@@ -153,8 +187,9 @@ These apply to the emulator and the hosted server alike; run them against both.
       refused `INVALID_ARGUMENT` by `patch_instance_config`; lowering it prunes
       at once; a deploy prunes past it; the ACTIVE version is never pruned (roll
       back to v1, deploy with `activate: false` past the limit → v1 still runs)
-- [ ] `resources/list` offers the four `docs://` grounding resources and every
-      argument they document is one the matching tool actually accepts
+- [ ] `resources/list` offers the `docs://` grounding resources (search, datastore,
+      auth rules, functions, tasks) and every argument they document is one the
+      matching tool actually accepts
 - [ ] results are bounded: list/query tools cap below the REST default and say so
 
 ## Path grammar

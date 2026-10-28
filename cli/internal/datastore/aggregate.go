@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -257,8 +258,37 @@ type TxnOp struct {
 
 // RunTransaction applies operations atomically within the namespace.
 func (s *Store) RunTransaction(ops []TxnOp) ([]any, int, error) {
+	keys, written, _, err := s.RunTransactionChanges(ops, false)
+	return keys, written, err
+}
+
+// RunTransactionChanges is RunTransaction that, with collect, also reports what each write did
+// to each document — for a trigger watching the collections it touches. A delete of a document
+// that did not exist is no change.
+func (s *Store) RunTransactionChanges(ops []TxnOp, collect bool) ([]any, int, []WriteChange, error) {
+	var changes []WriteChange
+	keys, written, err := s.runTransaction(ops, func(c WriteChange) {
+		if collect {
+			changes = append(changes, c)
+		}
+	}, collect)
+	return keys, written, changes, err
+}
+
+func (s *Store) runTransaction(ops []TxnOp, record func(WriteChange), collect bool) ([]any, int, error) {
 	if len(ops) > maxTxnOps {
 		return nil, 0, common.BadRequest(fmt.Sprintf("too many operations (max %d)", maxTxnOps))
+	}
+	// readBefore is the document a write replaces, read only when a trigger wants it.
+	readBefore := func(tx *sql.Tx, collection, key string) json.RawMessage {
+		if !collect {
+			return nil
+		}
+		var cur string
+		if tx.QueryRow(`SELECT data FROM docs WHERE collection=? AND key=?`, collection, key).Scan(&cur) != nil {
+			return nil
+		}
+		return json.RawMessage(cur)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -285,10 +315,14 @@ func (s *Store) RunTransaction(ops []TxnOp) ([]any, int, error) {
 			}
 		case "delete":
 			key, _ := coerceKey(op.Key)
+			before := readBefore(tx, op.Collection, key)
 			if _, err := tx.Exec(`DELETE FROM docs WHERE collection=? AND key=?`, op.Collection, key); err != nil {
 				return nil, 0, err
 			}
 			written++
+			if before != nil {
+				record(WriteChange{Collection: op.Collection, Key: key, Op: "delete", Before: before})
+			}
 		case "put":
 			if !isJSONObject(op.Data) {
 				return nil, 0, common.BadRequest("put data must be a JSON object")
@@ -297,10 +331,13 @@ func (s *Store) RunTransaction(ops []TxnOp) ([]any, int, error) {
 			if err != nil {
 				return nil, 0, err
 			}
+			var before json.RawMessage
 			if key == "" {
 				if key, err = s.genKeyTx(tx, op.Collection); err != nil {
 					return nil, 0, err
 				}
+			} else {
+				before = readBefore(tx, op.Collection, key)
 			}
 			if _, err := tx.Exec(`INSERT INTO docs(collection,key,data,size,created,updated) VALUES(?,?,?,?,?,?)
 				ON CONFLICT(collection,key) DO UPDATE SET data=excluded.data, size=excluded.size, updated=excluded.updated`,
@@ -309,6 +346,11 @@ func (s *Store) RunTransaction(ops []TxnOp) ([]any, int, error) {
 			}
 			keys[i] = key
 			written++
+			if before != nil {
+				record(WriteChange{Collection: op.Collection, Key: key, Op: "update", Doc: op.Data, Before: before})
+			} else {
+				record(WriteChange{Collection: op.Collection, Key: key, Op: "create", Doc: op.Data})
+			}
 		case "mutate":
 			key, err := coerceKey(op.Key)
 			if err != nil || key == "" {
@@ -337,6 +379,11 @@ func (s *Store) RunTransaction(ops []TxnOp) ([]any, int, error) {
 			}
 			keys[i] = key
 			written++
+			if exists {
+				record(WriteChange{Collection: op.Collection, Key: key, Op: "update", Doc: nb, Before: json.RawMessage(cur)})
+			} else {
+				record(WriteChange{Collection: op.Collection, Key: key, Op: "create", Doc: nb})
+			}
 		default:
 			return nil, 0, common.BadRequest("unsupported transaction op: " + op.Op)
 		}

@@ -140,6 +140,15 @@ undefined", not as a permission error.
   env.datastore.put(target, collection, [{data}]) / .get / .query / .delete / .transaction
   env.search.put(target, index, docs) / .search(target, index, request)
   env.auth / env.channel similarly; target is {instance, namespace?}
+  env.tasks.add(t, queue, task | [tasks])  write — task: {payload, name?, delay? | runAt?, target?, params?}
+            .get(t, id) / .list(t, queue, {state, cursor, limit, name})            read
+            .run(t, id) / .cancel(t, [ids])                                        write
+            .lease(t, queue, {count, leaseSeconds}) / .ack(t, id, leaseId, result?)  write (pull queues)
+    A push queue whose target is {"function": "<instance>/<name>"} POSTs
+    {"task": {id, queue, name, attempt, maxAttempts, params, ...}, "payload": ...} with
+    x-ae-trigger: task. Answer 2xx when done; anything else is retried with backoff (a 4xx
+    other than 408/429 fails the task at once). Be idempotent on task.id: delivery is
+    at-least-once.
 
 NO OUTBOUND NETWORK by default: fetch() throws unless the host is on the instance's
 allowlist. There is no filesystem, no process, and no npm resolution at runtime — the
@@ -167,6 +176,64 @@ Locally, ` + "`altengine dev`" + ` ticks the scheduler once a minute and prints 
 is served at /fn/{instance}/{name}/..., a default function at /fn/{instance}/ and below, and
 the path it sees keeps the /fn/{instance} prefix.`
 
+const tasksGuideDoc = `# Tasks: queues of work
+
+A tasks instance holds QUEUES. Every instance has ` + "`default`" + `. A task is one JSON payload (≤128 KB)
+delivered to one target, retried until it is accepted or its attempts run out.
+
+## Push queues deliver
+
+Set the queue's target once (` + "`tasks_set_queue`" + `, full):
+
+| target | what happens |
+|---|---|
+| ` + "`{ \"function\": \"<functions-instance>/<fn>\" }`" + ` | POST in process, ` + "`x-ae-trigger: task`" + `, body ` + "`{ task, payload }`" + ` |
+| ` + "`{ \"channel\": \"<channel-instance>/<channel>\" }`" + ` | published as ` + "`{ type: \"task\", task, payload }`" + ` (≤32 KB framed) |
+| ` + "`{ \"webhook\": \"https://…\" }`" + ` | POST ` + "`{ task, payload }`" + `, signed like every altengine webhook |
+
+A delivery is waited for ` + "`deadlineSeconds`" + ` (queue setting, overridable per task; 15–840, default
+600). Past it the attempt counts as failed and is retried; the target is NOT stopped, so it can
+still be running when the retry starts.
+
+A 2xx (or a published message) is done. A timeout, 408, 429 or 5xx is retried with backoff
+(` + "`min × 2^n`" + `, capped). Any other 4xx fails the task at once — a payload the target refuses does
+not improve by retrying. A task with no delay runs within about a second.
+
+` + "`task`" + ` carries ` + "`id, queue, name, attempt, maxAttempts, runAt, createdAt, source, depth, params`" + `.
+Delivery is AT LEAST ONCE: a handler must be idempotent on ` + "`task.id`" + `.
+
+## Adding
+
+` + "`tasks_add`" + ` / ` + "`POST /v1/tasks/<instance>/queues/<queue>/tasks`" + ` / ` + "`env.tasks.add(t, queue, task)`" + `:
+` + "`{ payload, name?, delay? | runAt?, target?, params?, retry? }`" + `, up to 100 per call.
+A ` + "`name`" + ` makes an add idempotent: the same name in the same queue is refused (TASK_EXISTS) for
+as long as the finished task's record is kept (the instance's retentionDays, default 7).
+
+## Pull queues are leased
+
+` + "`mode: \"pull\"`" + ` never delivers. A worker calls ` + "`tasks_lease`" + ` (count, leaseSeconds), does the work,
+and ` + "`tasks_ack`" + `s with the leaseId it was given — or ` + "`tasks_release`" + `s it. A lease that runs out
+counts as a failed attempt and the task goes back.
+
+## Triggers point at a queue
+
+Datastore and blob instances have a ` + "`triggers`" + ` config list; a mailbox route can have a
+` + "`{ \"queue\": \"<tasks-instance>/<queue>\" }`" + ` action. Each fires a task whose payload is the event:
+
+    datastore: { type: "datastore.write", instance, namespace, collection, events: [{ op: "create"|"update"|"delete", key, doc?, before? }] }
+    blob:      { type: "blob.create" | "blob.delete", instance, id, name, size, contentType, etag, public, meta, url? }
+
+Events are best effort. A write never waits for, or fails because of, a trigger. A chain of
+triggers more than 8 deep (a function writing the document that triggers it) is cut.
+
+## Watching and fixing
+
+` + "`tasks_list`" + ` by state (scheduled, running, leased, done, failed, cancelled), ` + "`tasks_get`" + ` for the
+attempts and the target's answer, ` + "`tasks_run`" + ` to run one now or retry a failed one,
+` + "`tasks_cancel`" + `, ` + "`tasks_purge_queue`" + ` (confirm). Pausing a queue stops delivery; nothing is lost.
+
+Locally, ` + "`altengine dev`" + ` checks each queue about once a second and prints every attempt.`
+
 type resource struct {
 	uri, name, title, description, text string
 }
@@ -191,6 +258,12 @@ var resources = []resource{
 		uri: "docs://functions/starter", name: "functions-starter", title: "Writing a function",
 		description: "Handler shape, the env clients, grants, egress rules, schedules, and serving a whole site from the root with a default function.",
 		text:        functionStarterDoc,
+	},
+	{
+		uri: "docs://tasks/guide", name: "tasks-guide", title: "Task queues, targets, retries and triggers",
+		description: "How a queue delivers (function, channel, webhook), what a target receives and must answer, retries, names as idempotency keys, " +
+			"pull queues and leases, and how datastore/blob/mailbox triggers feed a queue. Read before creating a queue or a trigger.",
+		text: tasksGuideDoc,
 	},
 }
 

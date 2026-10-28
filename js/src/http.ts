@@ -64,6 +64,9 @@ export interface RequestOptions {
   /** Override the client's request timeout for this call (a long-poll holds the request open
    * for longer than an ordinary call takes). */
   timeoutMs?: number;
+  /** Error statuses whose JSON body is still the answer — a task add where every name was
+   * already taken is a 409 carrying the per-task results. */
+  acceptStatus?: number[];
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -181,7 +184,7 @@ export class Http {
       clearTimeout(timer);
     }
 
-    if (!res.ok) throw await toApiError(res);
+    if (!res.ok && !opts.acceptStatus?.includes(res.status)) throw await toApiError(res);
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }

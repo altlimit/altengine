@@ -2,7 +2,8 @@
 
 Developer tooling and SDKs for [altengine](https://console.altengine.net) — managed
 **datastore**, **search**, realtime **channels**, end-user **auth**, **functions**,
-**blob** storage, **containers**, **static** sites and desktop **automation**, behind one API key.
+**blob** storage, **containers**, **static** sites, desktop **automation**, **mailboxes** and
+**task queues**, behind one API key.
 
 | Folder | What it is | Install |
 |---|---|---|
@@ -25,6 +26,8 @@ deployed with the CLI and called over plain HTTP):
 | Blob | ✓ | — | — | — |
 | Containers | ✓ | — | — | — |
 | Automation | ✓ | — | — | — |
+| Mailbox | ✓ | — | — | — |
+| Tasks | ✓ | — | — | — |
 
 For a service an SDK does not cover, call its REST API directly with the same API key.
 

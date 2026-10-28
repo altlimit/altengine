@@ -36,6 +36,9 @@
     "search_put_documents", "search_query",
     "static_activate", "static_delete_deployment", "static_deploy", "static_list_deployments",
     "static_list_files",
+    "tasks_ack", "tasks_add", "tasks_cancel", "tasks_delete_queue", "tasks_get", "tasks_lease",
+    "tasks_list", "tasks_list_queues", "tasks_purge_queue", "tasks_release",
+    "tasks_reveal_webhook_secret", "tasks_rotate_webhook_secret", "tasks_run", "tasks_set_queue",
     "usage_summary", "whoami"
   ],
   "not_emulated": {

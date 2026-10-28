@@ -67,7 +67,7 @@ func rateTarget(r *http.Request) (service, instance, plane, field string, ok boo
 	}
 	service, instance = segs[1], segs[2]
 	switch service {
-	case "datastore", "search", "blob", "functions":
+	case "datastore", "search", "blob", "functions", "tasks":
 		return service, instance, service, "rateLimit", true
 	case "container":
 		// Hosted, only a launch is limited.

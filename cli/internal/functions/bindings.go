@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
+	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/dop251/goja"
 )
 
@@ -53,6 +54,23 @@ type bindings struct {
 	// why. Hosted these are absolute URLs to storage, so this is a difference that only
 	// ever shows up locally, and only for the paths that hand a URL to someone else.
 	host string
+	// depth is the trigger-chain depth of the invocation these stubs belong to: non-zero only for
+	// a function a triggered task runs. Every call carries it, so a write the function makes
+	// fires its triggers one deeper and a function that writes what triggers it is cut off.
+	depth int
+}
+
+// forInvocation is the bindings for one invocation: the shared ones, at that invocation's depth.
+func (b *bindings) forInvocation(depth int) *bindings {
+	c := *b
+	c.depth = depth
+	return &c
+}
+
+// context marks an internal request as a function's, at this invocation's depth.
+func (b *bindings) context(req *http.Request) *http.Request {
+	ctx := common.WithCaller(req.Context(), "function")
+	return req.WithContext(common.WithTriggerDepth(ctx, b.depth))
 }
 
 // call is one stub method: the HTTP shape it maps to, and how it reads its arguments.
@@ -171,6 +189,7 @@ func (b *bindings) invoke(vm *goja.Runtime, service, name string, m call, grants
 	// routes whose outcome depends on the level beyond the one checked above (mailbox keep: only
 	// `full` may move an expiry earlier).
 	req = req.WithContext(auth.WithOnBehalfGrants(req.Context(), auth.Grants(grants)))
+	req = b.context(req)
 	b.stampHost(req)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	req.Header.Set("Content-Type", "application/json")
@@ -211,8 +230,8 @@ func (b *bindings) stampHost(req *http.Request) {
 // do makes one in-process request and decodes it, so the custom methods below report errors
 // exactly as invoke does. A non-JSON response comes back as raw bytes, which is how `bytes`
 // gets a file rather than a parse failure.
-func (b *bindings) do(method, path, contentType string, payload []byte) (any, error) {
-	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
+func (b *bindings) do(method, path, contentType string, payload []byte, accept ...int) (any, error) {
+	req := b.context(httptest.NewRequest(method, path, bytes.NewReader(payload)))
 	b.stampHost(req)
 	req.Header.Set("Authorization", "Bearer "+b.token)
 	if contentType != "" {
@@ -229,7 +248,11 @@ func (b *bindings) do(method, path, contentType string, payload []byte) (any, er
 			return nil, fmt.Errorf("unreadable response")
 		}
 	}
-	if rec.Code >= 400 {
+	accepted := false
+	for _, c := range accept {
+		accepted = accepted || rec.Code == c
+	}
+	if rec.Code >= 400 && !accepted {
 		return nil, fmt.Errorf("%s", errMessage(decoded, rec.Code))
 	}
 	if !isJSON {
@@ -965,6 +988,186 @@ var serviceMethods = map[string]map[string]call{
 			method: "DELETE", level: auth.Full, minArgs: 2,
 			path: func(t target, a []goja.Value) (string, error) {
 				return fmt.Sprintf("/v1/mailbox/%s/messages/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+	},
+	// Tasks. The cases it exists for: a request that must not wait for slow work ("add a task,
+	// answer at once"), a task that schedules the next one, and a pull queue a function drains on a
+	// schedule. Reading is `read`, adding and working tasks is `write`, and changing a queue is
+	// `full` — whoever receives a queue's tasks runs them with ITS grants. A task added here keeps
+	// the invocation's trigger depth: an explicit add is the author's own recursion, allowed, but
+	// never a way to reset a trigger chain's count.
+	"tasks": {
+		"queues": {
+			method: "GET", level: auth.Read, minArgs: 1, unwrap: "queues",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues", esc(t.instance)), nil
+			},
+		},
+		// Not `queue`: hosted, that name is taken by the entrypoint's own queue handler.
+		"getQueue": {
+			method: "GET", level: auth.Read, minArgs: 2, unwrap: "queue",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"createQueue": {
+			method: "POST", level: auth.Full, minArgs: 2, unwrap: "queue",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				out := map[string]any{}
+				if o, ok := argAny(a, 2).(map[string]any); ok {
+					for k, v := range o {
+						out[k] = v
+					}
+				}
+				out["name"] = argStr(a, 1)
+				return out, nil
+			},
+		},
+		"updateQueue": {
+			method: "PATCH", level: auth.Full, minArgs: 3, unwrap: "queue",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) { return argAny(a, 2), nil },
+		},
+		"pauseQueue": {
+			method: "POST", level: auth.Full, minArgs: 2, unwrap: "queue",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s/pause", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"resumeQueue": {
+			method: "POST", level: auth.Full, minArgs: 2, unwrap: "queue",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s/resume", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"purgeQueue": {
+			method: "POST", level: auth.Full, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s/purge", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"deleteQueue": {
+			method: "DELETE", level: auth.Full, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		// One task or an array of up to 100. Each result says whether it was added or its name
+		// was already taken — an add where every name was taken answers 409 over HTTP, and the
+		// stub still returns the results rather than throwing, as hosted.
+		"add": {
+			level: auth.Write, minArgs: 3,
+			custom: func(b *bindings, t target, a []goja.Value) (any, error) {
+				payload, err := json.Marshal(argAny(a, 2))
+				if err != nil {
+					return nil, err
+				}
+				res, err := b.do("POST", fmt.Sprintf("/v1/tasks/%s/queues/%s/tasks", esc(t.instance), esc(argStr(a, 1))),
+					"application/json", payload, http.StatusConflict)
+				if err != nil {
+					return nil, err
+				}
+				obj, _ := res.(map[string]any)
+				return obj["tasks"], nil
+			},
+		},
+		"get": {
+			method: "GET", level: auth.Read, minArgs: 2, unwrap: "task",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/%s", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"list": {
+			method: "GET", level: auth.Read, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				o, _ := argAny(a, 2).(map[string]any)
+				q := url.Values{}
+				for _, k := range []string{"state", "cursor", "limit", "name"} {
+					if v, ok := o[k]; ok && v != nil && v != "" {
+						q.Set(k, fmt.Sprint(v))
+					}
+				}
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s/tasks?%s", esc(t.instance), esc(argStr(a, 1)), q.Encode()), nil
+			},
+		},
+		"cancel": {
+			method: "POST", level: auth.Write, minArgs: 2,
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/cancel", esc(t.instance)), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				ids, ok := argAny(a, 1).([]any)
+				if !ok {
+					ids = []any{argStr(a, 1)}
+				}
+				if len(ids) > 200 {
+					ids = ids[:200]
+				}
+				return map[string]any{"ids": ids}, nil
+			},
+		},
+		"run": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "task",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/%s/run", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+		},
+		"lease": {
+			method: "POST", level: auth.Write, minArgs: 2, unwrap: "tasks",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/queues/%s/lease", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				out := map[string]any{}
+				for _, k := range []string{"count", "leaseSeconds"} {
+					if v := optField(a, 2, k); v != nil {
+						out[k] = v
+					}
+				}
+				return out, nil
+			},
+		},
+		"ack": {
+			method: "POST", level: auth.Write, minArgs: 3, unwrap: "task",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/%s/ack", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				return map[string]any{"leaseId": argStr(a, 2), "result": argAny(a, 3)}, nil
+			},
+		},
+		"extend": {
+			method: "POST", level: auth.Write, minArgs: 3, unwrap: "task",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/%s/extend", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				out := map[string]any{"leaseId": argStr(a, 2)}
+				if v := argAny(a, 3); v != nil {
+					out["leaseSeconds"] = v
+				}
+				return out, nil
+			},
+		},
+		"release": {
+			method: "POST", level: auth.Write, minArgs: 3, unwrap: "task",
+			path: func(t target, a []goja.Value) (string, error) {
+				return fmt.Sprintf("/v1/tasks/%s/tasks/%s/release", esc(t.instance), esc(argStr(a, 1))), nil
+			},
+			body: func(a []goja.Value) (any, error) {
+				out := map[string]any{"leaseId": argStr(a, 2)}
+				for _, k := range []string{"delaySeconds", "error"} {
+					if v := optField(a, 3, k); v != nil {
+						out[k] = v
+					}
+				}
+				return out, nil
 			},
 		},
 	},

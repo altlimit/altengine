@@ -38,6 +38,7 @@ import { AutomationClient } from "./automation/client.js";
 import { BlobClient } from "./blob/client.js";
 import { ContainerClient } from "./container/client.js";
 import { MailboxClient } from "./mailbox/client.js";
+import { TasksClient } from "./tasks/client.js";
 
 export class AltEngine {
   private readonly http: Http;
@@ -85,6 +86,12 @@ export class AltEngine {
    * what arrives, wait for the next message, send and reply. Organization API key only. */
   mailbox(instance: string): MailboxClient {
     return new MailboxClient(this.http, instance);
+  }
+
+  /** Server-side client for a tasks instance — queues of work delivered to a function, a channel
+   * or a signed webhook with retries, or leased by workers. Organization API key only. */
+  tasks(instance: string): TasksClient {
+    return new TasksClient(this.http, instance);
   }
 
   /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
@@ -135,6 +142,9 @@ export * from "./container/types.js";
 
 export { MailboxClient, attachmentBase64, MAX_WAIT_SECONDS } from "./mailbox/client.js";
 export * from "./mailbox/types.js";
+
+export { TasksClient, TASK_RETRY_HEADER, TASK_RETRY_AFTER_HEADER, TASK_MAX_ATTEMPTS_HEADER } from "./tasks/client.js";
+export * from "./tasks/types.js";
 
 export { ChannelClient } from "./channel/client.js";
 export * from "./channel/types.js";

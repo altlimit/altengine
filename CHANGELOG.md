@@ -5,6 +5,36 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- Tasks service: `/v1/tasks/{instance}`, the fourteen `tasks_*` MCP tools, the
+  `docs://tasks/guide` resource, `env.tasks` (`queues`, `getQueue`, `createQueue`,
+  `updateQueue`, `pauseQueue`, `resumeQueue`, `purgeQueue`, `deleteQueue`, `add`, `get`, `list`,
+  `cancel`, `run`, `lease`, `ack`, `extend`, `release`) and a console Tasks tab. Every instance
+  has a `default` queue. A push queue delivers to a function (`x-ae-trigger: task`, body
+  `{task, payload}`), a channel or a webhook signed with the instance's `whsec_` key, within
+  about a second of a task falling due; a pull queue is leased and acked. Retries back off from
+  `minBackoffSeconds`, doubling `maxDoublings` times; a timeout, 408, 429 or 5xx is retried and
+  any other 4xx or a 3xx fails the task, which is then copied to the queue's `deadLetterQueue`.
+  A target's `Retry-After`, `x-task-retry: never | retry | defer` and `x-task-max-attempts`
+  steer its retries unless the queue's `targetControl` is off. A `name` makes an add
+  idempotent while the finished task's record is kept (`retentionDays`, 1–30, default 7); an
+  add that lands nothing answers 409 with the per-task results and an `error`. Naming a channel
+  target takes `write` on that channel instance.
+- A delivery is waited for the queue's `deadlineSeconds` (15–840, default 600), or a task's own
+  `deadlineSeconds`; past it the attempt is a `timeout` ("no answer within the Ns deadline") and
+  is retried, while the target keeps running. Functions and webhooks share the one deadline.
+  The task sent to a target carries `deadlineAt` (epoch ms), a task record carries its own
+  `deadlineSeconds` (null for the queue's), and `tasks_set_queue` takes `targetControl` and
+  `deadlineSeconds`.
+- Triggers: a datastore or blob instance's `triggers` config, and a mailbox route's
+  `{ "queue": "<tasks-instance>/<queue>" }` action, add a task per matching write
+  (`datastore.write`, up to 100 events per task), upload or delete (`blob.create` with a
+  one-hour download `url`, `blob.delete`) or message. The queue must exist when the rule is
+  saved. A write never waits for or fails because of a trigger, and a chain more than 8 deep is
+  cut.
+- The console's mailbox routes editor offers the `queue` action.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -21,6 +51,12 @@ SDK commit that a release will carry.
 - JS: `ae.mailbox(instance)` — `info`, `list`, `wait`, `get`, `raw`, `attachment`, `markRead`,
   `send`, `reply`, `keep`, `delete` and `addresses.list` / `create` / `disable`. Attachment
   `content` may be base64 text, a `Uint8Array`, an `ArrayBuffer` or a `Blob`.
+- JS: `ae.tasks(instance)` — `info`, `queues`, `queue`, `createQueue`, `updateQueue`,
+  `pauseQueue`, `resumeQueue`, `purgeQueue`, `deleteQueue`, `add`, `list`, `listAll`, `get`,
+  `cancel`, `run`, `lease`, `ack`, `extend` and `release`, with `TaskDelivery` for a target's
+  request body. A taken task name comes back as a result, not a throw; an add is retried only
+  when every task in it is named, and a lease never. Queues and tasks take `deadlineSeconds`;
+  `TaskEnvelope` carries `deadlineAt`.
 - JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response

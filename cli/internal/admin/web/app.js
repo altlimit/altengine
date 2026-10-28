@@ -99,7 +99,7 @@ views.overview = async () => {
     "Four services running locally. Point your SDK at this host and use any Bearer token."));
   const grid = h("div", { class: "grid" });
   main.append(grid);
-  for (const svc of ["datastore", "search", "channel", "auth", "mailbox"]) {
+  for (const svc of ["datastore", "search", "channel", "auth", "mailbox", "tasks"]) {
     try {
       const { instances } = await jGet(`/admin/${svc}`);
       const label = svc === "channel" ? "channels" : svc;
@@ -119,6 +119,7 @@ views.overview = async () => {
       h("span", { class: "muted" }, "Channels"), h("span", {}, location.origin + "/v1/channel/{instance}"),
       h("span", { class: "muted" }, "Auth"), h("span", {}, location.origin + "/v1/auth/{instance}"),
       h("span", { class: "muted" }, "Mailbox"), h("span", {}, location.origin + "/v1/mailbox/{instance}"),
+      h("span", { class: "muted" }, "Tasks"), h("span", {}, location.origin + "/v1/tasks/{instance}"),
       h("span", { class: "muted" }, "API keys"), h("span", {}, "Authorization: Bearer <any-token>"),
     )
   ));
@@ -961,16 +962,17 @@ function mailSettings(body, info) {
       hasAtt.addEventListener("change", () => { if (hasAtt.value === "either") delete m.hasAttachment; else m.hasAttachment = hasAtt.value === "yes"; });
       const acts = h("div");
       (r.do || (r.do = [])).forEach((a, j) => {
-        const kind = a.function != null ? "function" : a.webhook != null ? "webhook" : "channel";
-        const kindSel = sel(["function", "channel", "webhook"], kind);
-        const target = h("input", { value: a[kind] || "", placeholder: kind === "webhook" ? "https://example.com/hook" : "<instance>/<name>" });
+        const kind = a.function != null ? "function" : a.webhook != null ? "webhook" : a.queue != null ? "queue" : "channel";
+        const kindSel = sel(["function", "channel", "webhook", "queue"], kind);
+        const hint = (k) => k === "webhook" ? "https://example.com/hook" : k === "queue" ? "<tasks-instance>/<queue>" : "<instance>/<name>";
+        const target = h("input", { value: a[kind] || "", placeholder: hint(kind) });
         const incl = checkbox("include text", !!a.includeText);
         const sync = () => {
           const k = kindSel.value;
           r.do[j] = { [k]: target.value.trim() };
           if (k === "channel" && incl.cb.checked) r.do[j].includeText = true;
           incl.el.style.display = k === "channel" ? "" : "none";
-          target.placeholder = k === "webhook" ? "https://example.com/hook" : "<instance>/<name>";
+          target.placeholder = hint(k);
         };
         kindSel.addEventListener("change", sync); target.addEventListener("input", sync); incl.cb.addEventListener("change", sync);
         incl.el.style.display = kind === "channel" ? "" : "none";
@@ -1067,6 +1069,225 @@ function mailAddresses(body, info) {
     } catch (err) { toast(err.message, true); }
   } }, h("div", { class: "row" }, field("Name", local), field("Label", label), h("div", { style: "align-self:end" }, h("button", { class: "btn", type: "submit" }, "Register")))), list);
   load();
+}
+
+// ================= TASKS =================
+// Queues of work. Everything here goes through the same rules as /v1/tasks: a queue's settings
+// are patched, tasks are added and run exactly as an API key would.
+const tkState = { instId: null, queue: null, state: "scheduled" };
+const TASK_STATES = ["scheduled", "running", "leased", "done", "failed", "cancelled"];
+
+function targetLabel(t) {
+  if (!t) return "—";
+  if (t.function) return "function " + t.function;
+  if (t.channel) return "channel " + t.channel;
+  return "webhook " + t.webhook;
+}
+
+views.tasks = async () => {
+  main.append(h("h1", {}, "Tasks"),
+    h("p", { class: "muted" }, "Queues of work: a push queue delivers each task to a function, a channel or a signed webhook; a pull queue holds tasks for workers to lease. The engine checks for due work about once a second and logs every attempt in the terminal."));
+  main.append(await instancePicker("tasks", (id) => { tkState.instId = id; tkState.queue = null; renderTasks(); }, tkState.instId));
+  main.append(h("div", { id: "tk-holder" }));
+  if (tkState.instId) renderTasks();
+};
+
+async function renderTasks() {
+  const holder = $("#tk-holder"); if (!holder) return; holder.innerHTML = "";
+  if (typeof viewCleanup === "function") { viewCleanup(); viewCleanup = null; }
+  if (!tkState.instId) return;
+  const base = `/admin/tasks/${tkState.instId}`;
+  let info;
+  try { info = await jGet(`${base}/info`); }
+  catch (e) { holder.append(errBox(e)); return; }
+
+  holder.append(h("div", { class: "card" }, h("div", { class: "kv mono" },
+    h("span", { class: "muted" }, "Tasks held"), h("span", {}, `${info.task_count} (${fmtBytes(info.index_bytes)})`),
+    h("span", { class: "muted" }, "Records kept"), h("span", {}, `${info.config.retentionDays ?? 7} days after a task finishes (its name stays taken until then)`),
+    h("span", { class: "muted" }, "API"), h("span", {}, `${location.origin}/v1/tasks/${info.name}`))));
+
+  // Queues.
+  const tb = h("tbody");
+  for (const q of info.queues) {
+    const s = q.settings;
+    const c = q.counts;
+    const act = (label, fn) => h("button", { class: "btn ghost sm", onclick: async () => { try { await fn(); renderTasks(); } catch (e) { toast(e.message, true); } } }, label);
+    tb.append(h("tr", {},
+      h("td", {}, h("button", { class: "btn ghost sm", "aria-label": `Open queue ${q.name}`, onclick: () => { tkState.queue = q.name; renderTasks(); } }, q.name === tkState.queue ? "● " + q.name : q.name)),
+      h("td", {}, s.mode, s.paused ? h("span", { class: "pill", style: "margin-left:6px" }, "paused") : null),
+      h("td", { class: "mono" }, s.mode === "pull" ? "leased by workers" : targetLabel(s.target)),
+      h("td", { class: "mono" }, `${c.scheduled} / ${c.running + c.leased} / ${c.done} / ${c.failed}${q.capped.length ? " (10,000+)" : ""}`),
+      h("td", {},
+        s.paused ? act(`Resume ${q.name}`, () => jPost(`${base}/queues/${q.name}/resume`, {})) : act(`Pause ${q.name}`, () => jPost(`${base}/queues/${q.name}/pause`, {})),
+        act(`Purge ${q.name}`, async () => { if (!confirm(`Delete every task in '${q.name}'?`)) throw new Error("not purged"); const r = await jPost(`${base}/queues/${q.name}/purge`, {}); toast(`purged ${r.purged}`); }),
+        q.name === "default" ? null : h("button", { class: "btn danger sm", onclick: async () => {
+          if (!confirm(`Delete queue '${q.name}' and every task in it?`)) return;
+          try { await jDel(`${base}/queues/${q.name}`); if (tkState.queue === q.name) tkState.queue = null; renderTasks(); } catch (e) { toast(e.message, true); }
+        } }, `Delete ${q.name}`))));
+  }
+  holder.append(h("h2", {}, "Queues"), h("div", { class: "tablewrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Queue"), h("th", { scope: "col" }, "Mode"), h("th", { scope: "col" }, "Target"),
+      h("th", { scope: "col" }, "Waiting / in flight / done / failed"), h("th", { scope: "col" }, ""))), tb)));
+
+  // Create a queue.
+  const qName = h("input", { placeholder: "e.g. emails" });
+  const qSettings = h("textarea", { rows: 4, class: "mono" }, JSON.stringify({ target: { function: "<functions-instance>/<function>" }, ratePerSecond: 10, maxConcurrent: 5, deadlineSeconds: 600 }, null, 2));
+  holder.append(h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      const settings = parseJSONField(qSettings.value, {});
+      const { queue } = await jPost(`${base}/queues`, { ...settings, name: qName.value.trim() });
+      toast("created " + queue.name); tkState.queue = queue.name; renderTasks();
+    } catch (err) { toast(err.message, true); }
+  } }, h("h2", { style: "margin-top:0" }, "New queue"),
+    h("div", { class: "row" }, field("Name", qName, "")),
+    field("Settings (JSON: mode, target, ratePerSecond, maxConcurrent, retry, deadLetterQueue, paused, targetControl, deadlineSeconds 15–840)", qSettings),
+    h("div", { style: "margin-top:8px" }, h("button", { class: "btn", type: "submit" }, "Create queue"))));
+
+  const queue = info.queues.find((q) => q.name === tkState.queue);
+  if (queue) holder.append(taskQueueView(base, queue));
+  holder.append(tasksSettings(base, info));
+}
+
+function taskQueueView(base, queue) {
+  const box = h("div");
+  box.append(h("h2", {}, `Queue '${queue.name}'`));
+  const listBox = h("div", { "aria-live": "polite" });
+  const detail = h("div");
+  let rows = [], cursor = null, sig = "";
+  const qbase = `${base}/queues/${queue.name}`;
+
+  function draw() {
+    listBox.innerHTML = "";
+    if (!rows.length) { listBox.append(h("div", { class: "empty" }, `No ${tkState.state === "all" ? "" : tkState.state + " "}tasks.`)); return; }
+    const tb = h("tbody");
+    for (const t of rows) {
+      tb.append(h("tr", {},
+        h("td", {}, h("button", { class: "btn ghost sm", "aria-label": `Open task ${t.id}`, onclick: () => openTask(t.id) }, "Open")),
+        h("td", { class: "mono" }, t.name || t.id),
+        h("td", {}, h("span", { class: t.state === "done" ? "pill ok" : "pill" }, t.state)),
+        h("td", { class: "mono" }, `${t.attempts}/${t.maxAttempts}${t.defers ? ` (+${t.defers} deferred)` : ""}`),
+        h("td", { class: "mono" }, t.lastStatus || "—", t.lastError ? h("div", { class: "muted", style: "font-size:12px" }, t.lastError) : null),
+        h("td", { class: "muted" }, fmtTime(t.runAt)),
+        h("td", { class: "muted" }, t.source)));
+    }
+    listBox.append(h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { scope: "col" }, ""), h("th", { scope: "col" }, "Task"), h("th", { scope: "col" }, "State"),
+        h("th", { scope: "col" }, "Attempts"), h("th", { scope: "col" }, "Last"), h("th", { scope: "col" }, "Runs at"), h("th", { scope: "col" }, "From"))), tb)));
+    if (cursor) listBox.append(h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "btn ghost", onclick: () => load(true) }, "Load more")));
+  }
+  function query(append) {
+    const q = new URLSearchParams({ limit: "50" });
+    if (tkState.state !== "all") q.set("state", tkState.state);
+    if (append && cursor) q.set("cursor", cursor);
+    return `${qbase}/tasks?${q}`;
+  }
+  async function load(append) {
+    try {
+      const res = await jGet(query(append));
+      rows = append ? rows.concat(res.tasks) : res.tasks;
+      cursor = res.cursor;
+      draw();
+    } catch (e) { listBox.innerHTML = ""; listBox.append(errBox(e)); }
+  }
+  async function poll() {
+    try {
+      const res = await jGet(query(false));
+      const s = res.tasks.map((t) => t.id + t.state + t.attempts).join(",");
+      if (s !== sig && rows.length <= 50) { sig = s; rows = res.tasks; cursor = res.cursor; draw(); }
+    } catch {}
+  }
+  async function openTask(id) {
+    detail.innerHTML = "";
+    try {
+      const { task } = await jGet(`${base}/tasks/${id}`);
+      const act = (label, fn, cls = "btn ghost") => h("button", { class: cls, onclick: async () => { try { await fn(); toast("done"); openTask(task.id); load(false); } catch (e) { toast(e.message, true); } } }, label);
+      detail.append(h("div", { class: "card" },
+        h("h3", { style: "margin-top:0" }, `Task ${task.id}`),
+        h("div", { class: "kv mono" },
+          h("span", { class: "muted" }, "State"), h("span", {}, task.state),
+          h("span", { class: "muted" }, "Target"), h("span", {}, targetLabel(task.target || queue.settings.target)),
+          h("span", { class: "muted" }, "Depth"), h("span", {}, String(task.depth)),
+          h("span", { class: "muted" }, "Deadline"), h("span", {}, `${task.deadlineSeconds ?? queue.settings.deadlineSeconds}s per attempt${task.deadlineSeconds == null ? " (the queue's)" : ""}`),
+          h("span", { class: "muted" }, "Dead letter of"), h("span", {}, task.deadLetterOf || "—")),
+        h("h4", {}, "Payload"), h("pre", {}, JSON.stringify(task.payload, null, 2)),
+        task.params ? [h("h4", {}, "Params"), h("pre", {}, JSON.stringify(task.params, null, 2))] : null,
+        h("h4", {}, "Attempts"),
+        task.attemptLog.length ? h("pre", {}, task.attemptLog.map((a) => `#${a.n} ${fmtTime(a.startedAt)} ${a.status || ""}${a.error ? " — " + a.error : ""}`).join("\n")) : h("p", { class: "muted" }, "None yet."),
+        task.result != null ? [h("h4", {}, "Target's answer"), h("pre", {}, task.result)] : null,
+        h("div", { class: "row", style: "margin-top:8px" },
+          act(task.state === "done" ? "Run again (as a new task)" : task.state === "failed" || task.state === "cancelled" ? "Retry" : "Run now", () => jPost(`${base}/tasks/${task.id}/run`, {}), "btn"),
+          task.state === "scheduled" || task.state === "leased" ? act("Cancel", () => jPost(`${base}/tasks/cancel`, { ids: [task.id] }), "btn danger") : null)));
+    } catch (e) { detail.append(errBox(e)); }
+  }
+
+  const names = [...TASK_STATES, "all"];
+  const sub = subtabs(names, (name) => { tkState.state = name; sig = ""; load(false); });
+  for (const b of sub.bar.querySelectorAll("button")) b.classList.toggle("active", b.textContent === tkState.state);
+
+  // Add a task by hand.
+  const payload = h("textarea", { rows: 3, class: "mono" }, "{}");
+  const tName = h("input", { placeholder: "optional: makes the add idempotent" });
+  const delay = h("input", { type: "number", min: "0", placeholder: "0" });
+  const deadline = h("input", { type: "number", min: "15", max: "840", placeholder: `${queue.settings.deadlineSeconds} (the queue's)` });
+  const addForm = h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      const task = { payload: parseJSONField(payload.value, null) };
+      if (tName.value.trim()) task.name = tName.value.trim();
+      if (delay.value) task.delay = Number(delay.value);
+      if (deadline.value) task.deadlineSeconds = Number(deadline.value);
+      const { tasks } = await jPost(`${qbase}/tasks`, task);
+      toast(tasks[0].ok ? "added " + tasks[0].id : tasks[0].message, !tasks[0].ok);
+      load(false);
+    } catch (err) { toast(err.message, true); }
+  } }, h("h3", { style: "margin-top:0" }, "Add a task"),
+    field("Payload (JSON)", payload),
+    h("div", { class: "row" }, field("Name", tName), field("Delay (seconds)", delay, ""), field("Deadline (seconds, 15–840)", deadline, "")),
+    h("div", { style: "margin-top:8px" }, h("button", { class: "btn", type: "submit" }, "Add task")));
+
+  // Change the queue: only the fields sent change.
+  const patch = h("textarea", { rows: 6, class: "mono" }, JSON.stringify(queue.settings, null, 2));
+  const editForm = h("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    try { await api("PATCH", qbase, parseJSONField(patch.value, {})); toast("saved"); renderTasks(); }
+    catch (err) { toast(err.message, true); }
+  } }, h("h3", { style: "margin-top:0" }, "Queue settings"), field("Settings (JSON; fields left out keep their value)", patch),
+    h("div", { style: "margin-top:8px" }, h("button", { class: "btn", type: "submit" }, "Save queue")));
+
+  box.append(sub.bar, listBox, detail, addForm, editForm);
+  load(false);
+  const timer = setInterval(poll, 3000);
+  viewCleanup = () => clearInterval(timer);
+  return box;
+}
+
+function tasksSettings(base, info) {
+  const c = info.config;
+  const retention = h("input", { type: "number", min: "1", max: "30", value: c.retentionDays ?? 7 });
+  const rateLimit = h("input", { type: "number", min: "1", value: c.rateLimit ?? "", placeholder: "none" });
+  const result = h("div", { role: "status", "aria-live": "polite" });
+  const secretOut = h("pre", { "aria-live": "polite" }, "hidden");
+  return h("div", {},
+    h("form", { class: "card", onsubmit: async (e) => {
+      e.preventDefault(); result.innerHTML = "";
+      // The whole config, every field named: a save replaces it.
+      const config = { rateLimit: rateLimit.value ? Number(rateLimit.value) : null, region: c.region ?? "auto", retentionDays: Number(retention.value) };
+      try { await jPut(`/admin/tasks/${tkState.instId}/config`, { config }); toast("saved"); renderTasks(); }
+      catch (err) { result.append(h("div", { role: "alert" }, errBox(err))); }
+    } }, h("h2", { style: "margin-top:0" }, "Instance settings"),
+      h("div", { class: "row" }, field("Keep finished tasks (days, 1–30)", retention), field("Rate limit (req/min, blank: none)", rateLimit)),
+      h("p", { class: "muted", style: "font-size:12px" }, `Region: ${c.region ?? "auto"} (fixed at creation).`),
+      h("button", { class: "btn", type: "submit" }, "Save settings"), result),
+    h("div", { class: "card" }, h("h2", { style: "margin-top:0" }, "Webhook signing secret"),
+      h("p", { class: "muted", style: "font-size:12px" }, "Webhook deliveries carry x-altengine-timestamp and x-altengine-signature: v1=<hex HMAC-SHA256 of \"<timestamp>.<body>\">."),
+      secretOut,
+      h("div", { class: "row" },
+        h("button", { class: "btn ghost", onclick: async () => { try { secretOut.textContent = (await jPost(`${base}/webhook-secret/reveal`, {})).secret; } catch (e) { toast(e.message, true); } } }, "Reveal"),
+        h("button", { class: "btn danger", onclick: async () => {
+          if (!confirm("Rotate the secret? Receivers checking the old one will reject every delivery.")) return;
+          try { secretOut.textContent = (await jPost(`${base}/webhook-secret/rotate`, {})).secret; toast("rotated"); } catch (e) { toast(e.message, true); }
+        } }, "Rotate"))));
 }
 
 // ================= API KEYS =================

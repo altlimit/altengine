@@ -22,6 +22,8 @@ type Handler struct {
 	Ident *identity.Service
 	// Live publishes change events for the datastore→channel live bridge (nil = off).
 	Live LivePublisher
+	// Triggers receives committed writes for the instance's trigger rules (nil = off).
+	Triggers TriggerSink
 }
 
 // NewHandler builds a datastore handler.
@@ -197,6 +199,18 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	collection := r.PathValue("collection")
+	// Whether each document is new is read before the write, only when a trigger watches.
+	ns := decodeNs(r.PathValue("ns"))
+	var existed map[string]json.RawMessage
+	if h.watches(inst, ns, collection) {
+		var named []any
+		for _, d := range body.Documents {
+			if d.Key != nil {
+				named = append(named, d.Key)
+			}
+		}
+		existed = existingDocs(store, collection, named)
+	}
 	var keys []string
 	var changed []LiveDoc
 	if user != nil {
@@ -223,7 +237,23 @@ func (h *Handler) putDocs(w http.ResponseWriter, r *http.Request) error {
 			changed = append(changed, LiveDoc{Key: k, Data: body.Documents[i].Data})
 		}
 	}
-	h.emitLive(inst, decodeNs(r.PathValue("ns")), collection, "put", changed)
+	h.emitLive(inst, ns, collection, "put", changed)
+	if existed != nil {
+		changes := make([]WriteChange, 0, len(changed))
+		for _, d := range changed {
+			c := WriteChange{Collection: collection, Key: d.Key, Op: "create", Doc: d.Data}
+			if before, ok := existed[d.Key]; ok {
+				c.Op = "update"
+				// A row-scoped write already reads the row it replaces; the hosted event carries
+				// it there, and only there.
+				if user != nil {
+					c.Before = before
+				}
+			}
+			changes = append(changes, c)
+		}
+		h.fireTriggers(r, inst, ns, changes)
+	}
 	common.WriteJSON(w, 200, map[string]any{"keys": keys})
 	return nil
 }
@@ -289,9 +319,15 @@ func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
+	// A trigger fires for what was deleted, not for every key asked about.
+	ns := decodeNs(r.PathValue("ns"))
+	var existed map[string]json.RawMessage
+	if h.watches(inst, ns, collection) {
+		existed = existingDocs(store, collection, body.Keys)
+	}
 	var n int
 	if user != nil {
-		del, err := user.DatastoreWritePolicy(inst.Name, decodeNs(r.PathValue("ns")), collection, "delete")
+		del, err := user.DatastoreWritePolicy(inst.Name, ns, collection, "delete")
 		if err != nil {
 			return err
 		}
@@ -305,7 +341,27 @@ func (h *Handler) deleteDocs(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if n > 0 {
-		h.emitLive(inst, decodeNs(r.PathValue("ns")), collection, "delete", removed)
+		h.emitLive(inst, ns, collection, "delete", removed)
+		if existed != nil {
+			var changes []WriteChange
+			seen := map[string]bool{}
+			for _, k := range body.Keys {
+				key, err := coerceKey(k)
+				data, ok := existed[key]
+				if err != nil || !ok || seen[key] {
+					continue
+				}
+				seen[key] = true
+				c := WriteChange{Collection: collection, Key: key, Op: "delete"}
+				// A row-scoped delete already reads the row it removes; the hosted event carries
+				// it there, and only there.
+				if user != nil {
+					c.Before = data
+				}
+				changes = append(changes, c)
+			}
+			h.fireTriggers(r, inst, ns, changes)
+		}
 	}
 	common.WriteJSON(w, 200, map[string]any{"deleted": n})
 	return nil
@@ -383,7 +439,7 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) transaction(w http.ResponseWriter, r *http.Request) error {
-	_, store, user, err := h.resolve(r, auth.Write)
+	inst, store, user, err := h.resolve(r, auth.Write)
 	if err != nil {
 		return err
 	}
@@ -412,9 +468,18 @@ func (h *Handler) transaction(w http.ResponseWriter, r *http.Request) error {
 			break
 		}
 	}
-	keys, _, err := store.RunTransaction(body.Operations)
+	ns := decodeNs(r.PathValue("ns"))
+	colls := make([]string, 0, len(body.Operations))
+	for _, op := range body.Operations {
+		colls = append(colls, op.Collection)
+	}
+	watch := h.watches(inst, ns, colls...)
+	keys, _, changes, err := store.RunTransactionChanges(body.Operations, watch)
 	if err != nil {
 		return err
+	}
+	if watch {
+		h.fireTriggers(r, inst, ns, changes)
 	}
 	common.WriteJSON(w, 200, map[string]any{"keys": keys})
 	return nil

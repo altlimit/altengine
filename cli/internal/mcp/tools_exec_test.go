@@ -29,6 +29,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/mailbox"
 	"github.com/altlimit/altengine/cli/internal/search"
+	"github.com/altlimit/altengine/cli/internal/tasks"
 )
 
 // newLiveHandler builds an MCP handler over real, wired data planes — the same objects the
@@ -57,6 +58,10 @@ func newLiveHandler(t *testing.T) *Handler {
 	mailbox.NewHandler(reg, a, mailSvc).Register(mux)
 	reg.OnValidateConfig("mailbox", mailbox.ValidateConfig)
 	reg.OnDelete("mailbox", mailSvc.Drop)
+	taskSvc := tasks.NewService(reg, tasks.NewStore(""), mux, hub)
+	tasks.NewHandler(reg, a, taskSvc).Register(mux)
+	reg.OnValidateConfig("tasks", tasks.ValidateConfig)
+	reg.OnDelete("tasks", taskSvc.Drop)
 	// Admin before MCP, as the real server does: some tools reach an /admin route, and admin's
 	// console handler is a catch-all on "/" that would otherwise swallow them.
 	admin.NewHandler(reg, a, dsMgr, srMgr, hub).WithIdentity(idMgr).Register(mux)

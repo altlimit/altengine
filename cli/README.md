@@ -459,6 +459,41 @@ After a committed put or delete the emulator publishes `{op, keys, ns, collectio
 document body — so subscribers re-fetch through the access-controlled read path and a live event
 can't leak a row they couldn't read. It is best-effort: a publish failure never fails the write.
 
+### Tasks — `/v1/tasks/{instance}`
+
+Queues of work. Every instance has a `default` queue. Org API keys only.
+
+| Method & path | Purpose |
+|---|---|
+| `GET  /` · `GET /queues` | the instance's queues, with settings and counts by state |
+| `POST /queues` · `PATCH /queues/{q}` · `DELETE /queues/{q}` | create / change (only the fields sent) / delete — `full` |
+| `POST /queues/{q}/pause` · `/resume` · `/purge` | `full` |
+| `POST /queues/{q}/tasks` | a task, an array, or `{tasks}` (≤100) → `{tasks:[{ok,id,…}]}`; 409 when none was added |
+| `GET  /queues/{q}/tasks` | `?state&cursor&limit&name` → `{tasks,cursor}` |
+| `POST /queues/{q}/lease` | pull queues: `{count,leaseSeconds}` → tasks with a `leaseId` |
+| `GET  /tasks/{id}` · `DELETE /tasks/{id}` · `POST /tasks/cancel` | read / cancel one / cancel `{ids}` |
+| `POST /tasks/{id}/run` | run now; retry a failed one; re-run a finished one as a new task |
+| `POST /tasks/{id}/ack` · `/extend` · `/release` | finish, hold longer, or give back a leased task (`{leaseId,…}`) |
+
+A push queue's `target` is `{function: "<instance>/<fn>"}` (called in process with
+`x-ae-trigger: task` and the body `{task, payload}`), `{channel: "<instance>/<channel>"}` or
+`{webhook: "https://…"}` (signed with the instance's key). The engine checks for due work about
+once a second and logs every attempt; a 2xx is done, a timeout/408/429/5xx is retried with the
+queue's backoff, and any other 4xx fails the task. An attempt is waited for the queue's
+`deadlineSeconds` (15–840, default 600) or the task's own; past it, it counts as a timeout and the
+target is not stopped. The task a target receives carries that moment as `deadlineAt`.
+
+**Triggers.** A datastore or blob instance's `triggers` config, and a mailbox route's
+`{"queue": "<tasks-instance>/<queue>"}` action, add a task for each matching write, upload,
+delete or message:
+
+```json
+{ "triggers": [ { "match": { "collection": "orders", "ops": ["create"] }, "queue": "jobs/billing" } ] }
+```
+
+The queue must exist when the rule is saved. Events are best effort — a write never waits for or
+fails because of one — and a chain more than 8 deep (a function writing what triggers it) is cut.
+
 ## Quick examples
 
 ```bash
@@ -524,6 +559,10 @@ on localhost), CSRF, the plan-level rate-limit ceilings (an instance's own `rate
 `publishRateLimit` and `connectRateLimit` *are* enforced, with a 429 `RATE_LIMITED`), usage archival, datastore PITR/backups, and multi-node channel
 fan-out (single-process hub). The index-served guard matches the hosted service on field coverage
 but is lenient on sort *direction*.
+
+**Tasks** run in the emulator process: a task is delivered within about a second of falling
+due, a delivery a restart interrupts is retried once its lease runs out, and a trigger that cannot
+be enqueued is logged to the terminal rather than raised as a console notice.
 
 **Static deployments** are not stored locally — `altengine dev --static ./dist` serves a directory
 instead, which is what a dev loop wants. `/v1/static` answers `501 UNIMPLEMENTED` naming that,

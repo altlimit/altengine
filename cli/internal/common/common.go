@@ -268,3 +268,38 @@ func Trigger(r *http.Request) string {
 	}
 	return "http"
 }
+
+type depthKey struct{}
+
+// WithTriggerDepth records the trigger-chain depth an in-process request runs at: a function run
+// by a task carries the task's depth, and every write it makes through its env bindings carries
+// it on, so the event that write fires is one deeper. Context only — no caller over the network
+// can set or read it.
+func WithTriggerDepth(ctx context.Context, depth int) context.Context {
+	if depth <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, depthKey{}, depth)
+}
+
+// TriggerDepth is the depth WithTriggerDepth set, else 0.
+func TriggerDepth(ctx context.Context) int {
+	if d, ok := ctx.Value(depthKey{}).(int); ok && d > 0 {
+		return d
+	}
+	return 0
+}
+
+type callerKey struct{}
+
+// WithCaller names the surface an in-process request comes from ("function", "mcp") — a task
+// records where it was added, as hosted. Context only, so no network caller can claim one.
+func WithCaller(ctx context.Context, caller string) context.Context {
+	return context.WithValue(ctx, callerKey{}, caller)
+}
+
+// Caller is the surface WithCaller set, else "".
+func Caller(ctx context.Context) string {
+	c, _ := ctx.Value(callerKey{}).(string)
+	return c
+}

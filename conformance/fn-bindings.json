@@ -99,6 +99,25 @@
       "schema": "read",
       "listIndexes": "read",
       "deleteIndex": "full"
+    },
+    "tasks": {
+      "queues": "read",
+      "getQueue": "read",
+      "createQueue": "full",
+      "updateQueue": "full",
+      "pauseQueue": "full",
+      "resumeQueue": "full",
+      "purgeQueue": "full",
+      "deleteQueue": "full",
+      "add": "write",
+      "get": "read",
+      "list": "read",
+      "cancel": "write",
+      "run": "write",
+      "lease": "write",
+      "ack": "write",
+      "extend": "write",
+      "release": "write"
     }
   }
 }

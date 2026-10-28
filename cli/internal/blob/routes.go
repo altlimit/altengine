@@ -40,6 +40,8 @@ type Handler struct {
 	auth  *auth.Store
 	store *Store
 	sig   *signer
+	// triggers receives object events for the instance's trigger rules (nil = off).
+	triggers TriggerSink
 }
 
 func NewHandler(reg *control.Registry, a *auth.Store, store *Store) *Handler {
@@ -362,6 +364,7 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) error {
 		return common.BadRequest("at most 200 ids per call")
 	}
 	removed := h.store.Remove(inst.ID, body.IDs)
+	h.fireDelete(r, inst, removed)
 	common.WriteJSON(w, http.StatusOK, map[string]any{"deleted": len(removed)})
 	return nil
 }
@@ -409,6 +412,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	h.fireCreate(r, instanceID, stored)
 	// Object storage answers a PUT with an empty 200 and the digest it computed.
 	w.Header().Set("ETag", `"`+stored.ETag+`"`)
 	w.WriteHeader(http.StatusOK)
@@ -481,6 +485,7 @@ func (h *Handler) objectPost(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	h.fireCreate(r, instanceID, rec)
 	return writeXML(w, "<CompleteMultipartUploadResult><Key>"+xmlEscape(id)+
 		"</Key><ETag>&quot;"+xmlEscape(rec.ETag)+"&quot;</ETag></CompleteMultipartUploadResult>")
 }
