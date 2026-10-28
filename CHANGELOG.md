@@ -5,6 +5,35 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### SDKs
+
+No SDK has been published to a package registry yet; these are the changes since the first
+SDK commit that a release will carry.
+
+- All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
+- JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
+  `webSocket` option.
+- JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
+  completion webhook's signature and timestamp.
+- JS: a channel socket pings at least once a minute; a longer `pingIntervalMs` is capped at
+  60000, because the service closes a socket (4408) that goes 15 minutes without one.
+- Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
+- JS: `ae.mailbox(instance)` — `info`, `list`, `wait`, `get`, `raw`, `attachment`, `markRead`,
+  `send`, `reply`, `keep`, `delete` and `addresses.list` / `create` / `disable`. Attachment
+  `content` may be base64 text, a `Uint8Array`, an `ArrayBuffer` or a `Blob`.
+- JS: `ae.tasks(instance)` — `info`, `queues`, `queue`, `createQueue`, `updateQueue`,
+  `pauseQueue`, `resumeQueue`, `purgeQueue`, `deleteQueue`, `add`, `list`, `listAll`, `get`,
+  `cancel`, `run`, `lease`, `ack`, `extend` and `release`, with `TaskDelivery` for a target's
+  request body. A taken task name comes back as a result, not a throw; an add is retried only
+  when every task in it is named, and a lease never. Queues and tasks take `deadlineSeconds`;
+  `TaskEnvelope` carries `deadlineAt`.
+- JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
+  `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
+  An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
+  types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.35 — 2026-10-28
+
 ### Emulator
 
 - Tasks service: `/v1/tasks/{instance}`, the fourteen `tasks_*` MCP tools, the
@@ -34,33 +63,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
   saved. A write never waits for or fails because of a trigger, and a chain more than 8 deep is
   cut.
 - The console's mailbox routes editor offers the `queue` action.
-
-### SDKs
-
-No SDK has been published to a package registry yet; these are the changes since the first
-SDK commit that a release will carry.
-
-- All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
-- JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
-  `webSocket` option.
-- JS: `verifyWebhook({ secret, body, signature, timestamp, toleranceMs })` checks an automation
-  completion webhook's signature and timestamp.
-- JS: a channel socket pings at least once a minute; a longer `pingIntervalMs` is capped at
-  60000, because the service closes a socket (4408) that goes 15 minutes without one.
-- Go, Python and PHP send a `User-Agent`; the Python package ships `py.typed`.
-- JS: `ae.mailbox(instance)` — `info`, `list`, `wait`, `get`, `raw`, `attachment`, `markRead`,
-  `send`, `reply`, `keep`, `delete` and `addresses.list` / `create` / `disable`. Attachment
-  `content` may be base64 text, a `Uint8Array`, an `ArrayBuffer` or a `Blob`.
-- JS: `ae.tasks(instance)` — `info`, `queues`, `queue`, `createQueue`, `updateQueue`,
-  `pauseQueue`, `resumeQueue`, `purgeQueue`, `deleteQueue`, `add`, `list`, `listAll`, `get`,
-  `cancel`, `run`, `lease`, `ack`, `extend` and `release`, with `TaskDelivery` for a target's
-  request body. A taken task name comes back as a result, not a throw; an add is retried only
-  when every task in it is named, and a lease never. Queues and tasks take `deadlineSeconds`;
-  `TaskEnvelope` carries `deadlineAt`.
-- JS, Go and Python channel sockets send the token as a subprotocol (`ws_endpoint` +
-  `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
-  An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
-  types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
 
 ## v0.2.34 — 2026-10-27
 
