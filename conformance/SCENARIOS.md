@@ -125,7 +125,12 @@ Org API keys only. Every instance has a `default` queue.
       3xx fails at once; a failure is copied to the dead-letter queue
 - [ ] deadline: queue `deadlineSeconds` 15–840 (default 600), a task's own overrides it
       (null in the record means the queue's); `task.deadlineAt` = claim time + deadline;
-      no answer by then → `timeout` "no answer within the Ns deadline", retried
+      no answer by then → `timeout` "no answer within the Ns deadline", retried; the late
+      call keeps its slot until it returns (a maxConcurrent-1 queue never runs two calls, a
+      task never runs beside itself), then the attempt's error gains "; the target answered
+      http:<status> after <N>s"; a call still running 14.5 minutes after the attempt started
+      frees its slot and the error gains "; still running when this run of the queue ended
+      (<N>s)"
 - [ ] target control: `x-task-retry: defer` re-runs without spending an attempt;
       `never` fails now; `retry` retries a 2xx; `Retry-After` / `x-task-retry-after`
       sets the next attempt; `x-task-max-attempts` lowers or raises the limit — all

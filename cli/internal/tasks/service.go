@@ -33,6 +33,9 @@ type Service struct {
 	// waitCap, when set, bounds how long any one delivery is waited for — so a test can see a
 	// deadline pass without waiting the 15-second minimum. Zero in the emulator.
 	waitCap time.Duration
+	// holdCap, when set, replaces HoldBudget — so a test can see a late call's hold run out
+	// without waiting 14.5 minutes. Zero in the emulator.
+	holdCap time.Duration
 
 	mu       sync.Mutex
 	inflight map[string]map[string]bool // instance id -> task id
@@ -114,18 +117,22 @@ func (s *Service) Run(ctx context.Context) {
 	}()
 }
 
-func (s *Service) snapshot(instanceID string) (map[string]bool, map[string]int, int) {
+// snapshot is what is in flight on an instance: the task ids (a call held past its deadline
+// included) and how many per queue.
+func (s *Service) snapshot(instanceID string) (map[string]bool, map[string]int, []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	in := map[string]bool{}
+	busy := make([]string, 0, len(s.inflight[instanceID]))
 	for k := range s.inflight[instanceID] {
 		in[k] = true
+		busy = append(busy, k)
 	}
 	run := map[string]int{}
 	for k, v := range s.running[instanceID] {
 		run[k] = v
 	}
-	return in, run, len(in)
+	return in, run, busy
 }
 
 // Tick is one pass of the engine over every instance.
@@ -138,7 +145,7 @@ func (s *Service) Tick() {
 func (s *Service) tickInstance(in *control.Instance) {
 	now := s.now()
 	keep := retentionDays(in)
-	inflight, running, n := s.snapshot(in.ID)
+	inflight, running, busy := s.snapshot(in.ID)
 	failed, err := s.store.Housekeep(in.ID, inflight, now, keep)
 	if err != nil {
 		log.Printf("[tasks] %s: housekeeping: %v", in.Name, err)
@@ -147,7 +154,7 @@ func (s *Service) tickInstance(in *control.Instance) {
 	for _, f := range failed {
 		logFailed(in.Name, f)
 	}
-	claimed, err := s.store.Claim(in.ID, running, n, now)
+	claimed, err := s.store.Claim(in.ID, running, busy, now)
 	if err != nil {
 		log.Printf("[tasks] %s: claiming: %v", in.Name, err)
 		return
@@ -202,7 +209,15 @@ func (s *Service) start(in *control.Instance, c Claimed) {
 			s.mu.Unlock()
 			s.Kick()
 		}()
-		o := s.deliver(in.ID, target, env, r.payload)
+		// The hold's budget, from the moment the attempt started. A webhook request is cancelled
+		// when it runs out, so neither the slot nor the connection is held for ever.
+		budget := HoldBudget
+		if s.holdCap > 0 {
+			budget = s.holdCap
+		}
+		hold, release := context.WithTimeout(context.Background(), budget)
+		defer release()
+		o, late := s.deliver(hold, in.ID, target, env, r.payload)
 		log.Printf("[tasks] %s/%s %s attempt %d → %s: %s", in.Name, r.queue, r.id, r.attempts, TargetLabel(target), o.Status)
 		// The instance may have been deleted meanwhile; its store is gone and so is the row.
 		if s.reg.GetByID("tasks", in.ID) == nil {
@@ -214,6 +229,29 @@ func (s *Service) start(in *control.Instance, c Claimed) {
 		}
 		if f != nil {
 			logFailed(in.Name, f)
+		}
+		// A deadline stops the queue WAITING; it cannot stop the call. The task's slot stays taken
+		// until the target returns — so maxConcurrent is a true ceiling and the retry never runs
+		// beside it — and the timed-out attempt records what the target finally answered. The hold
+		// is bounded by its budget: past it the slot is freed and the attempt says so.
+		if o.Status == "timeout" && late != nil {
+			answer := ""
+			select {
+			case answer = <-late:
+				log.Printf("[tasks] %s/%s %s attempt %d: the target answered %s after its deadline", in.Name, r.queue, r.id, r.attempts, answer)
+			case <-hold.Done():
+			}
+			// A webhook request cancelled by the budget ends as an "error" too; that is the budget.
+			if answer == "" || (answer == "error" && hold.Err() != nil) {
+				answer = ""
+				log.Printf("[tasks] %s/%s %s attempt %d: still running after %s; its slot is freed", in.Name, r.queue, r.id, r.attempts, budget)
+			}
+			if s.reg.GetByID("tasks", in.ID) == nil {
+				return
+			}
+			if err := s.store.NoteLate(in.ID, r.id, r.attempts, answer, s.now()); err != nil {
+				log.Printf("[tasks] %s: noting the late answer for %s: %v", in.Name, r.id, err)
+			}
 		}
 	}()
 }

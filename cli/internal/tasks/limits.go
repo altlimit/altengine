@@ -56,7 +56,11 @@ const (
 	MaxDeadlineSeconds     = 840
 	// LeaseSlackMS is added to a running task's deadline to make its lease. Past it, the attempt
 	// was lost (a restart mid-delivery) and the task is retried like a timeout.
-	LeaseSlackMS           = 60_000
+	LeaseSlackMS = 60_000
+	// HoldBudget bounds how long a call that outran its deadline keeps its task's slot, counted
+	// from when the attempt started — the same bound the hosted queue keeps. Past it the slot is
+	// freed and the attempt records that the target was still running.
+	HoldBudget             = 14*time.Minute + 30*time.Second
 	MaxTriggerDepth        = 8
 	MaxListLimit           = 200
 	defaultListLimit       = 50

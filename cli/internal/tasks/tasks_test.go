@@ -795,6 +795,157 @@ func TestTheDeliveryDeadline(t *testing.T) {
 	}
 }
 
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 400; i++ {
+		if ok() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// A deadline stops the queue WAITING; it cannot stop the call. So past it the attempt is recorded
+// as a timeout and its retry scheduled, but the task's slot stays taken until the call returns:
+// maxConcurrent is a true ceiling, a task never runs beside itself, and the timed-out attempt
+// records what the target finally answered.
+func TestALateCallKeepsItsSlot(t *testing.T) {
+	w := newWorld(t)
+	w.svc.waitCap = 30 * time.Millisecond
+	release := make(chan struct{})
+	w.answer = func(n int) (int, http.Header, string) {
+		c := w.calls()[n-1]
+		// Each "slow" task's first call outlives its deadline; everything else answers at once.
+		if c.body["payload"] == "slow" && c.header.Get("x-task-attempt") == "1" {
+			<-release
+		}
+		return 200, nil, "ok"
+	}
+	retry := map[string]any{"minBackoffSeconds": 1}
+	w.pushQueue(t, "one", map[string]any{"maxConcurrent": 1, "deadlineSeconds": 15, "retry": retry})
+	w.pushQueue(t, "two", map[string]any{"maxConcurrent": 2, "deadlineSeconds": 15, "retry": retry})
+	a := w.addOne(t, "one", map[string]any{"payload": "slow"})
+	c := w.addOne(t, "two", map[string]any{"payload": "slow"})
+	w.svc.Tick()
+	for _, id := range []string{a, c} {
+		id := id
+		eventually(t, "the timeout to be recorded", func() bool { return w.task(t, id)["lastStatus"] == "timeout" })
+	}
+	if got := w.task(t, a); got["state"] != "scheduled" || got["lastError"] != "no answer within the 15s deadline" {
+		t.Fatalf("timed-out task: %v", got)
+	}
+	callsFor := func(id string) int {
+		n := 0
+		for _, call := range w.calls() {
+			if call.header.Get("x-task-id") == id {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Both retries are due now, and so are two new tasks.
+	b := w.addOne(t, "one", map[string]any{"payload": "fast"})
+	d := w.addOne(t, "two", map[string]any{"payload": "fast"})
+	w.advance(2_000)
+	w.svc.Tick()
+	eventually(t, "the free slot in 'two' to be used", func() bool { return w.task(t, d)["state"] == "done" })
+	w.svc.Tick()
+	time.Sleep(50 * time.Millisecond)
+	// 1. 'one' runs one call at a time: its only slot is still held by the late call.
+	if n := callsFor(b); n != 0 || w.task(t, b)["state"] != "scheduled" {
+		t.Fatalf("a maxConcurrent-1 queue ran a second call beside a late one (%d calls)", n)
+	}
+	// 2. 'two' had a slot free and used it — but not for the task whose own call is still running.
+	if n := callsFor(c); n != 1 {
+		t.Fatalf("a task ran beside its own late call: %d calls", n)
+	}
+
+	// 3. When the late calls return, the slots free, the retries run, and the timed-out attempt
+	// says what the target answered and when.
+	w.advance(3_000)
+	close(release)
+	w.svc.Wait()
+	for _, id := range []string{a, c} {
+		log := w.task(t, id)["attemptLog"].([]any)
+		if e := log[0].(map[string]any)["error"]; e != "no answer within the 15s deadline; the target answered http:200 after 5s" {
+			t.Fatalf("attempt 1 of %s: %v", id, e)
+		}
+	}
+	w.pump()
+	for _, id := range []string{a, b, c} {
+		if got := w.task(t, id); got["state"] != "done" {
+			t.Fatalf("after the late calls returned, %s is %v", id, got["state"])
+		}
+	}
+	if callsFor(a) != 2 || callsFor(c) != 2 || callsFor(b) != 1 {
+		t.Fatalf("calls: a=%d b=%d c=%d", callsFor(a), callsFor(b), callsFor(c))
+	}
+}
+
+// The hold is bounded: a receiver that never answers keeps its task's slot only until the hold's
+// budget (14.5 minutes from the attempt's start) runs out. Then the request is cancelled, the
+// slot is freed, and the attempt says the target was still running.
+func TestALateCallsHoldIsBounded(t *testing.T) {
+	w := newWorld(t)
+	w.svc.waitCap = 30 * time.Millisecond
+	w.svc.holdCap = 300 * time.Millisecond
+	cancelled := make(chan struct{})
+	var slowOnce sync.Once
+	recv := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			first := false
+			slowOnce.Do(func() { first = true })
+			if first {
+				// Never answers: it only learns the request was given up on. (The body is read
+				// first: only then can the server notice the client hanging up.)
+				_, _ = io.ReadAll(r.Body)
+				<-r.Context().Done()
+				close(cancelled)
+				return
+			}
+		}
+		rw.WriteHeader(204)
+	}))
+	defer recv.Close()
+	w.svc.SetHTTPClient(recv.Client())
+	w.mustDo(t, 201, "POST", "/v1/tasks/jobs/queues", map[string]any{
+		"name": "hooks", "target": map[string]any{"webhook": recv.URL + "/fast"},
+		"maxConcurrent": 1, "deadlineSeconds": 15, "retry": map[string]any{"minBackoffSeconds": 1},
+	})
+	a := w.addOne(t, "hooks", map[string]any{"payload": 1, "target": map[string]any{"webhook": recv.URL + "/slow"}})
+	w.svc.Tick()
+	eventually(t, "the timeout to be recorded", func() bool { return w.task(t, a)["lastStatus"] == "timeout" })
+
+	// While the hold lasts, the queue's only slot is taken.
+	b := w.addOne(t, "hooks", map[string]any{"payload": 2})
+	w.advance(2_000)
+	w.svc.Tick()
+	time.Sleep(50 * time.Millisecond)
+	if got := w.task(t, b); got["state"] != "scheduled" || got["attempts"] != float64(0) {
+		t.Fatalf("a second call started beside a held one: %v", got)
+	}
+
+	// When it runs out: the request is cancelled, the slot freed, and the attempt says why.
+	w.svc.Wait()
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request outlived the hold: the receiver never saw it cancelled")
+	}
+	log := w.task(t, a)["attemptLog"].([]any)
+	if e := log[0].(map[string]any)["error"]; e != "no answer within the 15s deadline; still running when this run of the queue ended (2s)" {
+		t.Fatalf("attempt 1: %v", e)
+	}
+	w.pump()
+	for _, id := range []string{a, b} {
+		if got := w.task(t, id); got["state"] != "done" {
+			t.Fatalf("after the hold ran out, %s is %v (%v)", id, got["state"], got["lastError"])
+		}
+	}
+}
+
 func TestATargetThatIsGoneFailsAtOnce(t *testing.T) {
 	w := newWorld(t)
 	w.pushQueue(t, "q", nil)

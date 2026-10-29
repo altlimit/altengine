@@ -481,7 +481,11 @@ A push queue's `target` is `{function: "<instance>/<fn>"}` (called in process wi
 once a second and logs every attempt; a 2xx is done, a timeout/408/429/5xx is retried with the
 queue's backoff, and any other 4xx fails the task. An attempt is waited for the queue's
 `deadlineSeconds` (15–840, default 600) or the task's own; past it, it counts as a timeout and the
-target is not stopped. The task a target receives carries that moment as `deadlineAt`.
+target is not stopped. The task a target receives carries that moment as `deadlineAt`. A late
+call keeps its task's slot until it returns, so `maxConcurrent` is never exceeded and the retry
+never runs beside it; the timed-out attempt then records what the target answered. The hold
+lasts at most 14.5 minutes from the attempt's start; then the slot is freed (a webhook request
+is cancelled) and the attempt records that the target was still running.
 
 **Triggers.** A datastore or blob instance's `triggers` config, and a mailbox route's
 `{"queue": "<tasks-instance>/<queue>"}` action, add a task for each matching write, upload,

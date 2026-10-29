@@ -192,8 +192,9 @@ Set the queue's target once (` + "`tasks_set_queue`" + `, full):
 | ` + "`{ \"webhook\": \"https://…\" }`" + ` | POST ` + "`{ task, payload }`" + `, signed like every altengine webhook |
 
 A delivery is waited for ` + "`deadlineSeconds`" + ` (queue setting, overridable per task; 15–840, default
-600). Past it the attempt counts as failed and is retried; the target is NOT stopped, so it can
-still be running when the retry starts.
+600). Past it the attempt counts as failed and is retried. The target is not stopped; its slot
+stays taken and the retry waits until it returns, so ` + "`maxConcurrent`" + ` is never exceeded and a task
+never runs beside itself. The timed-out attempt records what the target finally answered.
 
 A 2xx (or a published message) is done. A timeout, 408, 429 or 5xx is retried with backoff
 (` + "`min × 2^n`" + `, capped). Any other 4xx fails the task at once — a payload the target refuses does

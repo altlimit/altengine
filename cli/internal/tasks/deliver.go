@@ -123,7 +123,12 @@ func resultOf(body []byte) *string {
 	return &s
 }
 
-func (s *Service) deliver(instanceID string, target *Target, task Envelope, payloadJSON string) (out Outcome) {
+// deliver makes one attempt, waiting until the task's deadline. `late` is the target's own call
+// — a function invocation or a webhook request — which reports its status ("http:<code>", or
+// "error") whenever it ends, deadline or not: a deadline stops the queue WAITING, it cannot stop
+// the call. It is nil when there is no call to wait for. `hold` ends when the queue stops holding
+// the task's slot for a late call; a webhook request is cancelled then.
+func (s *Service) deliver(hold context.Context, instanceID string, target *Target, task Envelope, payloadJSON string) (out Outcome, late <-chan string) {
 	defer func() {
 		if p := recover(); p != nil {
 			out = Outcome{Status: "error", Error: fmt.Sprint(p)}
@@ -131,22 +136,22 @@ func (s *Service) deliver(instanceID string, target *Target, task Envelope, payl
 	}()
 	switch {
 	case target == nil:
-		return Outcome{Status: "error", Error: "no target: the task has none and neither does its queue", Permanent: true}
+		return Outcome{Status: "error", Error: "no target: the task has none and neither does its queue", Permanent: true}, nil
 	case target.Function != "":
 		return s.toFunction(target.Function, task, payloadJSON)
 	case target.Channel != "":
-		return s.toChannel(target.Channel, task, payloadJSON)
+		return s.toChannel(target.Channel, task, payloadJSON), nil
 	}
-	return s.toWebhook(instanceID, target.Webhook, task, payloadJSON)
+	return s.toWebhook(hold, instanceID, target.Webhook, task, payloadJSON)
 }
 
-func (s *Service) toFunction(ref string, task Envelope, payloadJSON string) Outcome {
+func (s *Service) toFunction(ref string, task Envelope, payloadJSON string) (Outcome, <-chan string) {
 	inst, name := SplitRef(ref)
 	if s.reg.Get("functions", inst) == nil {
-		return Outcome{Status: "error", Error: fmt.Sprintf("no functions instance '%s'", inst), Permanent: true}
+		return Outcome{Status: "error", Error: fmt.Sprintf("no functions instance '%s'", inst), Permanent: true}, nil
 	}
 	if s.mux == nil {
-		return Outcome{Status: "error", Error: "functions are not served here", Permanent: true}
+		return Outcome{Status: "error", Error: "functions are not served here", Permanent: true}, nil
 	}
 	req := httptest.NewRequest(http.MethodPost, "/fn/"+url.PathEscape(inst)+"/"+url.PathEscape(name), bytes.NewReader(DeliveryBody(task, payloadJSON)))
 	// Marked as a trigger, and carrying the task's depth: a write the function makes fires its
@@ -157,26 +162,33 @@ func (s *Service) toFunction(ref string, task Envelope, payloadJSON string) Outc
 	req.Header.Set("authorization", "Bearer emulator-internal")
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
+	late := make(chan string, 1)
 	go func() {
-		defer close(done)
+		status := "error"
+		defer func() {
+			_ = recover()
+			close(done)
+			late <- status
+		}()
 		s.mux.ServeHTTP(rec, req)
+		status = fmt.Sprintf("http:%d", rec.Code)
 	}()
 	wait, timedOut := s.deadline(task)
 	select {
 	case <-done:
 	case <-time.After(wait):
-		return Outcome{Status: "timeout", Error: timedOut}
+		return Outcome{Status: "timeout", Error: timedOut}, late
 	}
 	result := resultOf(rec.Body.Bytes())
 	control := ReadTargetControl(rec.Header(), s.now())
 	status := fmt.Sprintf("http:%d", rec.Code)
 	if rec.Code >= 200 && rec.Code < 300 {
-		return Outcome{OK: true, Status: status, Result: result, Control: control}
+		return Outcome{OK: true, Status: status, Result: result, Control: control}, late
 	}
 	// A 404 with no control headers is "no such function"; one the function returned itself
 	// carries its own control headers if it wants different treatment.
 	if rec.Code == 404 && control == nil {
-		return Outcome{Status: "http:404", Error: fmt.Sprintf("function '%s' not found", name), Permanent: true, Result: result}
+		return Outcome{Status: "http:404", Error: fmt.Sprintf("function '%s' not found", name), Permanent: true, Result: result}, late
 	}
 	why := fmt.Sprintf("function answered %d", rec.Code)
 	if result != nil {
@@ -184,7 +196,7 @@ func (s *Service) toFunction(ref string, task Envelope, payloadJSON string) Outc
 	}
 	// A redirect is not followed here either: a task is not a browser, and retrying it returns the
 	// same redirect. Same rule as a webhook.
-	return Outcome{Status: status, Error: why, Permanent: permanentStatus(rec.Code) || (rec.Code >= 300 && rec.Code < 400), Result: result, Control: control}
+	return Outcome{Status: status, Error: why, Permanent: permanentStatus(rec.Code) || (rec.Code >= 300 && rec.Code < 400), Result: result, Control: control}, late
 }
 
 func (s *Service) toChannel(ref string, task Envelope, payloadJSON string) Outcome {
@@ -210,46 +222,71 @@ func (s *Service) toChannel(ref string, task Envelope, payloadJSON string) Outco
 	return Outcome{OK: true, Status: fmt.Sprintf("published:%d", n)}
 }
 
-func (s *Service) toWebhook(instanceID, target string, task Envelope, payloadJSON string) Outcome {
+// webhookAnswer is what a receiver sent back, read in full.
+type webhookAnswer struct {
+	err    error
+	status int
+	header http.Header
+	raw    []byte
+}
+
+func (s *Service) toWebhook(hold context.Context, instanceID, target string, task Envelope, payloadJSON string) (Outcome, <-chan string) {
 	key, err := s.store.WebhookSecret(instanceID)
 	if err != nil || key == "" {
 		// Nothing is sent unsigned. A key that could not be read is a retry, not a delivery.
-		return Outcome{Status: "error", Error: "signing key unavailable"}
+		return Outcome{Status: "error", Error: "signing key unavailable"}, nil
 	}
 	body := DeliveryBody(task, payloadJSON)
 	ts := time.Now().UnixMilli()
 	wait, timedOut := s.deadline(task)
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(hold, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		return Outcome{Status: "error", Error: err.Error()}
+		return Outcome{Status: "error", Error: err.Error()}, nil
 	}
 	setTaskHeaders(req.Header, task)
 	req.Header.Set(SignatureHeader, SignWebhook(key, ts, body))
 	req.Header.Set(TimestampHeader, strconv.FormatInt(ts, 10))
-	res, err := s.client.Do(req)
-	if err != nil {
-		var ue *url.Error
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ue) && ue.Timeout()) {
-			return Outcome{Status: "timeout", Error: timedOut}
+	// The request is not cancelled at the deadline — the queue only stops waiting for it — so the
+	// receiver's slot stays taken until it actually answers, or until the hold's budget ends it.
+	answered := make(chan webhookAnswer, 1)
+	late := make(chan string, 1)
+	go func() {
+		res, err := s.client.Do(req)
+		if err != nil {
+			answered <- webhookAnswer{err: err}
+			late <- "error"
+			return
 		}
-		return Outcome{Status: "error", Error: err.Error()}
+		raw, _ := io.ReadAll(io.LimitReader(res.Body, MaxResultBytes+4))
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		answered <- webhookAnswer{status: res.StatusCode, header: res.Header, raw: raw}
+		late <- fmt.Sprintf("http:%d", res.StatusCode)
+	}()
+	var a webhookAnswer
+	select {
+	case a = <-answered:
+	case <-time.After(wait):
+		return Outcome{Status: "timeout", Error: timedOut}, late
 	}
-	raw, _ := io.ReadAll(io.LimitReader(res.Body, MaxResultBytes+4))
-	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
-	res.Body.Close()
-	result := resultOf(raw)
-	control := ReadTargetControl(res.Header, s.now())
-	status := fmt.Sprintf("http:%d", res.StatusCode)
-	if res.StatusCode >= 200 && res.StatusCode < 300 {
-		return Outcome{OK: true, Status: status, Result: result, Control: control}
+	if a.err != nil {
+		var ue *url.Error
+		if errors.As(a.err, &ue) && ue.Timeout() {
+			return Outcome{Status: "timeout", Error: timedOut}, late
+		}
+		return Outcome{Status: "error", Error: a.err.Error()}, late
 	}
-	why := fmt.Sprintf("receiver answered %d", res.StatusCode)
+	result := resultOf(a.raw)
+	control := ReadTargetControl(a.header, s.now())
+	status := fmt.Sprintf("http:%d", a.status)
+	if a.status >= 200 && a.status < 300 {
+		return Outcome{OK: true, Status: status, Result: result, Control: control}, late
+	}
+	why := fmt.Sprintf("receiver answered %d", a.status)
 	if result != nil {
 		why, _ = clipBytes(*result, 500)
 	}
 	// A redirect is not followed: the URL is the receiver, and a 3xx is a misconfiguration.
-	return Outcome{Status: status, Error: why, Permanent: permanentStatus(res.StatusCode) || (res.StatusCode >= 300 && res.StatusCode < 400),
-		Result: result, Control: control}
+	return Outcome{Status: status, Error: why, Permanent: permanentStatus(a.status) || (a.status >= 300 && a.status < 400),
+		Result: result, Control: control}, late
 }

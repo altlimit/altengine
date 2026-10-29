@@ -99,7 +99,7 @@ func init() {
 				"mode 'pull' holds tasks for workers to lease. ratePerSecond (0.01–100) and maxConcurrent (1–50) bound delivery; retry is { maxAttempts, minBackoffSeconds, " +
 				"maxBackoffSeconds, maxDoublings, maxAgeSeconds }; deadLetterQueue names another queue that receives a copy of every task that fails; paused stops delivery " +
 				"without losing tasks; deadlineSeconds (15–840, default 600) is how long a delivery is waited for before the attempt counts as failed and is retried — " +
-				"the target is not stopped.",
+				"the target is not stopped, but its slot stays taken and the retry waits until it returns, so maxConcurrent is never exceeded.",
 			required: []string{"instance", "name"},
 			props: map[string]any{
 				"instance":        tasksInstanceArg,

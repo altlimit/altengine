@@ -1293,9 +1293,16 @@ type Claimed struct {
 }
 
 // Claim claims as much due push work as the limits allow: per-queue concurrency (`running` per
-// queue, from the caller), a token bucket per queue, and the instance's MaxInflight.
-func (s *Store) Claim(instanceID string, running map[string]int, inflight int, now int64) ([]Claimed, error) {
+// queue, from the caller), a token bucket per queue, and the instance's MaxInflight. `busy` are
+// tasks whose previous call is still running — past its deadline, retried, its target not yet
+// returned — and they are not started again beside it: a task never overlaps itself.
+func (s *Store) Claim(instanceID string, running map[string]int, busy []string, now int64) ([]Claimed, error) {
 	var out []Claimed
+	inflight := len(busy)
+	notBusy := ""
+	if len(busy) > 0 {
+		notBusy = "AND id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(busy)), ",") + ")"
+	}
 	err := s.with(instanceID, func(db *sql.DB) error {
 		qs, err := allQueues(db)
 		if err != nil {
@@ -1333,10 +1340,15 @@ func (s *Store) Claim(instanceID string, running map[string]int, inflight int, n
 			}
 			// The lease is the task's own deadline (or the queue's) plus slack: past it, a delivery
 			// nothing is waiting on any more was lost and is retried.
+			args := []any{now, now, st.DeadlineSeconds, LeaseSlackMS, q.name, now}
+			for _, id := range busy {
+				args = append(args, id)
+			}
+			args = append(args, n)
 			rows, err := queryTasks(db, `UPDATE task SET state = 'running', attempts = attempts + 1, started = ?,
 					lease_until = ? + COALESCE(deadline, ?) * 1000 + ?
-				WHERE id IN (SELECT id FROM task WHERE queue = ? AND state = 'scheduled' AND run_at <= ? ORDER BY run_at, id LIMIT ?)
-				RETURNING `+taskCols, now, now, st.DeadlineSeconds, LeaseSlackMS, q.name, now, n)
+				WHERE id IN (SELECT id FROM task WHERE queue = ? AND state = 'scheduled' AND run_at <= ? `+notBusy+` ORDER BY run_at, id LIMIT ?)
+				RETURNING `+taskCols, args...)
 			if err != nil {
 				return err
 			}
@@ -1372,6 +1384,36 @@ func (s *Store) Settle(instanceID, id string, attempts int, o Outcome, now int64
 		return err
 	})
 	return failed, err
+}
+
+// NoteLate records, on an attempt that outran its deadline, what the target finally answered and
+// how long after the attempt started: "<error>; the target answered http:200 after 42s". An empty
+// answer means the hold's budget ran out first: "<error>; still running when this run of the
+// queue ended (870s)".
+func (s *Store) NoteLate(instanceID, id string, attempt int, answer string, now int64) error {
+	return s.with(instanceID, func(db *sql.DB) error {
+		var started int64
+		var prev sql.NullString
+		err := db.QueryRow(`SELECT started, error FROM attempt WHERE task_id = ? AND n = ?`, id, attempt).Scan(&started, &prev)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // purged, or the instance deleted
+		}
+		if err != nil {
+			return err
+		}
+		base := "timeout"
+		if prev.Valid {
+			base = prev.String
+		}
+		after := (now - started + 500) / 1000
+		text := fmt.Sprintf("%s; the target answered %s after %ds", base, answer, after)
+		if answer == "" {
+			text = fmt.Sprintf("%s; still running when this run of the queue ended (%ds)", base, after)
+		}
+		note, _ := clipBytes(text, 1000)
+		_, err = db.Exec(`UPDATE attempt SET error = ? WHERE task_id = ? AND n = ?`, note, id, attempt)
+		return err
+	})
 }
 
 // Housekeep drops finished tasks past their retention and recovers tasks whose lease passed with
