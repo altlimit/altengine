@@ -5,17 +5,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- A task whose delivery outlives its `deadlineSeconds` still records the attempt as a `timeout`
-  and schedules its retry, but keeps its concurrency slot until the function or webhook call
-  actually returns: `maxConcurrent` is never exceeded, and a task's retry never runs beside its
-  own late call. When that call returns, the timed-out attempt's `error` gains "; the target
-  answered http:<status> after <N>s" (or `error` when the call failed). Webhook requests are no
-  longer cut off at the deadline. The hold lasts at most 14.5 minutes from the attempt's start:
-  then the slot is freed, a webhook request is cancelled, and the attempt's `error` gains
-  "; still running when this run of the queue ended (<N>s)".
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -42,6 +31,19 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.36 — 2026-10-29
+
+### Emulator
+
+- A task whose delivery outlives its `deadlineSeconds` still records the attempt as a `timeout`
+  and schedules its retry, but keeps its concurrency slot until the function or webhook call
+  actually returns: `maxConcurrent` is never exceeded, and a task's retry never runs beside its
+  own late call. When that call returns, the timed-out attempt's `error` gains "; the target
+  answered http:<status> after <N>s" (or `error` when the call failed). Webhook requests are no
+  longer cut off at the deadline. The hold lasts at most 14.5 minutes from the attempt's start:
+  then the slot is freed, a webhook request is cancelled, and the attempt's `error` gains
+  "; still running when this run of the queue ended (<N>s)".
 
 ## v0.2.35 — 2026-10-28
 
