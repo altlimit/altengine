@@ -43,14 +43,30 @@ func parseLevel(s string) Level {
 	return None
 }
 
-// Grants maps "service" or "service:instance" to a level string.
+// Grants maps "service", "service:prefix*" or "service:instance" to a level string.
 type Grants map[string]string
 
-// Effective returns the level for (service, instance): an instance-specific grant
-// overrides the service-wide grant.
+// Effective returns the level for (service, instance), resolved as hosted altengine does
+// (effectiveLevel in altengineapp's src/auth/grants.ts): the exact instance entry, else the
+// longest "service:prefix*" entry the name starts with (`*` matches zero or more characters),
+// else the service-wide entry. The most specific entry wins even when it is lower.
 func (g Grants) Effective(service, instance string) Level {
 	if v, ok := g[service+":"+instance]; ok {
 		return parseLevel(v)
+	}
+	head := service + ":"
+	best, bestLen := "", -1
+	for k, v := range g {
+		if !strings.HasPrefix(k, head) || !strings.HasSuffix(k, "*") {
+			continue
+		}
+		prefix := k[len(head) : len(k)-1]
+		if len(prefix) > bestLen && strings.HasPrefix(instance, prefix) {
+			best, bestLen = v, len(prefix)
+		}
+	}
+	if bestLen >= 0 {
+		return parseLevel(best)
 	}
 	if v, ok := g[service]; ok {
 		return parseLevel(v)

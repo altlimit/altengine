@@ -62,3 +62,21 @@ func TestMintedKeyGetsOnlyItsGrants(t *testing.T) {
 		t.Fatal("an unminted token must be rejected when dev-open is off")
 	}
 }
+
+func TestEffectiveResolvesPrefixGrants(t *testing.T) {
+	g := Grants{"search": "read", "search:shop*": "full", "search:shop-eu*": "write", "search:shop-eu-1": "read"}
+	cases := map[string]Level{
+		"orders": Read, "shop": Full, "shop-us": Full, "shop-eu": Write, "shop-eu-2": Write, "shop-eu-1": Read,
+	}
+	for name, want := range cases {
+		if got := g.Effective("search", name); got != want {
+			t.Errorf("Effective(search, %q) = %v, want %v", name, got, want)
+		}
+	}
+	if got := (Grants{"datastore:dutyboard*": "full"}).Effective("datastore", "orders"); got != None {
+		t.Errorf("a prefix reached a name outside it: %v", got)
+	}
+	if got := (Grants{"datastore:dutyboard*": "full"}).Effective("blob", "dutyboard"); got != None {
+		t.Errorf("a prefix reached another service: %v", got)
+	}
+}
