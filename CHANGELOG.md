@@ -5,6 +5,18 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- Deploy to AltEngine manifests: `altengine dev deploy <path|url>` (`--name`, `--var`,
+  `--secret key/NAME=value`, `--bind`, `--adopt`, `--confirm-escalation`, `--confirm-source`,
+  `--dry-run`, `--json`), `altengine dev --deploy <path|url>` at startup, and `POST /__deploy`
+  (loopback only). The hosted parser's rules, limits and messages; create / update / adopt /
+  conflict per instance, recorded in `<data>/deploys.json`; the hosted step order, through the
+  emulator's MCP tools and REST routes. A static instance is a site served on its own port,
+  kept across restarts and redeploys, with its `runtimeConfig` file served from memory.
+- `GET /v1/functions/{instance}/settings` returns `allowedHosts` and `corsOrigins`.
+- `--static` without `--static-port` moves up a port when a deployed site holds `--port + 1`.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first

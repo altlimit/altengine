@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -115,6 +116,7 @@ func usage(w io.Writer) {
 Usage:
   altengine dev [flags]              Start the emulator (data plane + admin console)
   altengine dev --static ./dist      ...and serve a built site on its own port
+  altengine dev deploy <manifest>    Apply a Deploy to AltEngine manifest to the running emulator
   altengine deploy [flags] <file>    Bundle a function and deploy it
   altengine functions <subcommand>   list | versions | rollback | pull | delete
   altengine static <subcommand>      deploy | list | rollback | info
@@ -135,6 +137,10 @@ Run 'altengine <command> --help' for flags.
 }
 
 func devCmd(args []string) {
+	if len(args) > 0 && args[0] == "deploy" {
+		devDeployCmd(args[1:])
+		return
+	}
 	fs := flag.NewFlagSet("dev", flag.ExitOnError)
 	port := fs.Int("port", 9191, "port to listen on")
 	host := fs.String("host", "127.0.0.1", "host to bind")
@@ -153,6 +159,8 @@ func devCmd(args []string) {
 	smtp := fs.Bool("smtp", false, "also accept mail over SMTP, delivered into local mailboxes")
 	smtpAddr := fs.String("smtp-addr", "127.0.0.1:2525", "address for the SMTP listener (with --smtp)")
 	smtpAuth := fs.String("smtp-auth", "pass", "how mail received over SMTP is marked: pass (sender authenticated) or none")
+	deployRef := fs.String("deploy", "", "apply this Deploy to AltEngine manifest (a path or URL) at startup; exits on problems")
+	df := addDeployFlags(fs)
 	_ = fs.Parse(flagsFirst(fs, args))
 	if *smtpAuth != "pass" && *smtpAuth != "none" {
 		fail(fmt.Errorf("--smtp-auth must be pass or none"))
@@ -208,6 +216,18 @@ func devCmd(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "startup error:", err)
 		os.Exit(1)
+	}
+	if *deployRef != "" {
+		req, err := df.request(*deployRef)
+		if err != nil {
+			fail(err)
+		}
+		resp, err := srv.Deploy(context.Background(), req)
+		printDeploy(os.Stderr, resp)
+		if err != nil {
+			srv.Close()
+			os.Exit(1)
+		}
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -27,6 +27,7 @@ import (
 	"github.com/altlimit/altengine/cli/internal/functions"
 	"github.com/altlimit/altengine/cli/internal/identity"
 	"github.com/altlimit/altengine/cli/internal/mailbox"
+	"github.com/altlimit/altengine/cli/internal/manifest"
 	"github.com/altlimit/altengine/cli/internal/mcp"
 	"github.com/altlimit/altengine/cli/internal/search"
 	"github.com/altlimit/altengine/cli/internal/tasks"
@@ -75,6 +76,10 @@ type Server struct {
 
 	site   *devsite.Server
 	siteLn net.Listener
+
+	// Manifest deploys (POST /__deploy) and the static sites they publish.
+	deployer *manifest.Deployer
+	sites    *manifest.SiteHost
 }
 
 // New builds the server and all service handlers.
@@ -210,6 +215,46 @@ func New(opts Options) (*Server, error) {
 
 	srv := &Server{opts: opts, mux: mux, fn: fnHandler, reg: reg, lim: newLimiter(), blob: blobStore, mail: mailSvc, task: taskSvc}
 
+	// Manifest deploys: the same "Deploy to AltEngine" manifest the hosted deploy page takes,
+	// applied through this mux. A static instance is a site served on a port of its own, kept in
+	// the install record so its origin is the same after every restart.
+	installs, err := manifest.NewStore(opts.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	held := map[int]bool{}
+	for _, s := range installs.Sites() {
+		held[s.Site.Port] = true
+	}
+	if opts.StaticDir != "" && opts.StaticAddr == "" {
+		// --static without --static-port takes the API port + 1 — unless a deployed site was given
+		// that port, whose origin is written into config. Then --static moves up instead.
+		srv.opts.StaticAddr = srv.freeStaticAddr(held)
+	}
+	bindHost, urlHost, apiPort := addrParts(opts.Addr)
+	first := apiPort + 1
+	reserved := []int{apiPort}
+	if opts.StaticAddr != "" {
+		if _, p, err := net.SplitHostPort(opts.StaticAddr); err == nil {
+			if n, err := strconv.Atoi(p); err == nil {
+				first = n
+			}
+		}
+	}
+	if opts.StaticDir != "" {
+		if _, p, err := net.SplitHostPort(srv.staticAddr()); err == nil {
+			if n, err := strconv.Atoi(p); err == nil {
+				reserved = append(reserved, n)
+			}
+		}
+	}
+	srv.sites = manifest.NewSiteHost(bindHost, urlHost, first, reserved)
+	srv.deployer = manifest.New(manifest.Options{
+		Registry: reg, Mux: mux, Store: installs, Sites: srv.sites, DataDir: opts.DataDir,
+		APIBase: "http://" + net.JoinHostPort(urlHost, strconv.Itoa(apiPort)),
+	})
+	mux.Handle("POST /__deploy", srv.deployer)
+
 	if opts.SMTPAddr != "" {
 		// Bound here, like the site listener, so a port in use is a startup error.
 		ln, err := mailSvc.ListenSMTP(opts.SMTPAddr, opts.SMTPAuthenticated)
@@ -238,7 +283,69 @@ func New(opts Options) (*Server, error) {
 		srv.site, srv.siteLn = site, ln
 	}
 
+	// Every site an earlier deploy published, on its own port again.
+	srv.deployer.ReopenSites()
+
 	return srv, nil
+}
+
+// Deploy applies (or, with DryRun, plans) a manifest in process — `altengine dev --deploy`.
+func (s *Server) Deploy(ctx context.Context, req manifest.Request) (*manifest.Response, error) {
+	resp, ae := s.deployer.Deploy(ctx, req)
+	if ae != nil {
+		return resp, ae
+	}
+	return resp, nil
+}
+
+// Close stops the listeners New opened (deployed sites, the --static site, SMTP). For tests and
+// for a clean restart; ListenAndServe's own server is the caller's to stop.
+func (s *Server) Close() {
+	if s.sites != nil {
+		s.sites.Close()
+	}
+	if s.siteLn != nil {
+		_ = s.siteLn.Close()
+	}
+}
+
+// addrParts splits the API address into the host sites bind to, the host URLs name (loopback for
+// an unspecified bind address) and the port.
+func addrParts(addr string) (bindHost, urlHost string, port int) {
+	host, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "127.0.0.1", "127.0.0.1", 9191
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n == 0 {
+		n = 9191
+	}
+	urlHost = host
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		urlHost = "127.0.0.1"
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return host, urlHost, n
+}
+
+// freeStaticAddr is --static's default address: the API port + 1, or the next port up that no
+// deployed site holds.
+func (s *Server) freeStaticAddr(held map[int]bool) string {
+	def := s.staticAddr()
+	host, p, err := net.SplitHostPort(def)
+	if err != nil {
+		return def
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return def
+	}
+	for held[n] {
+		n++
+	}
+	return net.JoinHostPort(host, strconv.Itoa(n))
 }
 
 // staticAddr is the site's listen address: the flag if given, otherwise the API port + 1.
@@ -288,6 +395,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	log.Printf("  scheduler:      on, ticking each minute (UTC) for functions with a schedule")
 	log.Printf("  mcp:            POST http://%s/mcp — point an AI agent here (any bearer token)", s.opts.Addr)
+	log.Printf("  deploy:         altengine dev deploy <manifest> (POST /__deploy) — a Deploy to AltEngine manifest, applied here")
 	s.serveSite()
 	return newHTTPServer(s.opts.Addr, s.Handler()).ListenAndServe()
 }

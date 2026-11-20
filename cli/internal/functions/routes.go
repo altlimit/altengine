@@ -101,6 +101,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+p+"/secrets", common.Wrap(h.setSecrets))
 	mux.HandleFunc("GET "+p+"/secrets", common.Wrap(h.listSecrets))
 	mux.HandleFunc("PUT "+p+"/settings", common.Wrap(h.setSettings))
+	mux.HandleFunc("GET "+p+"/settings", common.Wrap(h.getSettings))
 
 	// Invocation. The trailing slash makes this a subtree so everything under the
 	// function name reaches the handler, which is what a function's own router needs.
@@ -309,6 +310,18 @@ func (h *Handler) setSecrets(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	common.WriteJSON(w, 200, map[string]any{"secrets": h.store.Config(in.ID).SecretNames()})
+	return nil
+}
+
+// getSettings reads the outbound allowlist and CORS origins — what a caller that merges into them
+// (a manifest deploy adding its site's origin to corsOrigins) needs before its PUT replaces both.
+func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request) error {
+	in, err := h.resolve(r, auth.Read)
+	if err != nil {
+		return err
+	}
+	cfg := h.store.Config(in.ID)
+	common.WriteJSON(w, 200, map[string]any{"allowedHosts": cfg.AllowedHosts, "corsOrigins": cfg.CORSOrigins})
 	return nil
 }
 

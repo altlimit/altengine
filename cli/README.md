@@ -177,6 +177,61 @@ easier to fix before the deploy than after.
 The directory need not exist yet: the site answers 404 saying so, and serves the build as soon as
 it lands.
 
+## Deploying a manifest locally
+
+The emulator takes the same **Deploy to AltEngine** manifest (`altengine.json`) as the hosted
+deploy page, with the same rules: instance names from the app name (`N`, `N-<key>`,
+`N-<suffix>`), `${key}` references, `{{vars}}`, `initialConfig` only on creation, the one-level
+config merge that adds to auth `settings.allowedOrigins` and functions `corsOrigins`, hash-checked
+modules and site files, and create / update / adopt / conflict per instance.
+
+```bash
+altengine dev                                     # in one terminal
+altengine dev deploy ./deploy/altengine.json \
+  --var board=acme --secret functions/RESEND_KEY=re_123
+```
+
+Or apply it at startup, for `npm run setup` and smoke tests (exits non-zero on problems):
+
+```bash
+altengine dev --deploy ./deploy/altengine.json --var board=acme
+```
+
+| Flag | |
+|---|---|
+| `--name app` | App name. Default: the manifest's `name`. Deploying the same name again is an update. |
+| `--var k=v` | A var value; repeat. Precedence: `--var`, the manifest URL's query string, the values the install was last deployed with, the default. |
+| `--secret key/NAME=value` | A secret for the functions instance `key`; repeat. Stored values are kept when left out. |
+| `--bind key=instance` | The existing instance a `uses` entry means. Default: the previous binding, else `suggest`. |
+| `--adopt` | Take over existing instances with the app's names that no deployed app manages. |
+| `--confirm-escalation`, `--confirm-source` | Allow an update that asks for more access, or that comes from another host. |
+| `--dry-run` | Print the plan; change nothing. |
+| `--url`, `--json` | The emulator (default `http://127.0.0.1:9191`); print the response as JSON. |
+
+The manifest is a file path or an http(s) URL; plain http only to this machine. Relative URLs
+resolve against the file's directory or the URL. The CLI calls `POST /__deploy`, which answers
+loopback callers only and takes `{ manifest, name?, vars?, secrets?: {key: {NAME: value}},
+bindings?, adopt?, confirmEscalation?, confirmSource?, dryRun? }`. It returns `{ plan, result?,
+error? }`.
+
+Install records are in `<data>/deploys.json`: owned instance ids, bindings, vars, the applied
+manifest's sha256, its source and each site's port.
+
+**Static instances.** The emulator has no static service, so each one is a site served on a port
+of its own, assigned once and kept: the first takes `--port + 1` (or `--static-port`; the next
+port up when `--static` uses it), and every site opens on its port again at startup.
+`${key:url}` is `http://127.0.0.1:<port>/`; for functions it is `http://127.0.0.1:9191/fn/<name>/`.
+A file manifest's site is served live from its `base` directory, so a rebuild shows on reload and
+files the manifest does not list are served too; a URL manifest's files are downloaded to
+`<data>/sites/`. The `runtimeConfig` file is served from memory, never written into your build;
+its `api` is the emulator's URL, so keep the same `--port` or deploy again after changing it.
+
+Differences from hosted: there are no roles, quotas or custom domains; a config value is checked
+by the step that writes it rather than in the plan; functions are activated one after another
+after all are stored, not in one switch; `vars.*.pattern` uses Go regular expressions (no
+lookaround); and auth `allowedOrigins` is stored but not enforced, as every loopback origin is
+allowed locally.
+
 ## Automation
 
 `automation` deploys scripts to an automation instance's enrolled machines, starts runs and reads
@@ -548,6 +603,7 @@ internal/functions/         function runtime, bindings, egress rules, scheduler
 internal/blob/              objects, signed URLs, multipart, public host
 internal/container/         jobs on the local Docker daemon
 internal/devsite/           `dev --static` site server
+internal/manifest/          Deploy to AltEngine manifests: parse, plan, apply, local sites
 internal/mcp/               the MCP endpoint
 internal/admin/             control-plane REST + embedded console (web/*)
 internal/server/            HTTP wiring, rate limits

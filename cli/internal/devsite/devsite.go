@@ -21,6 +21,7 @@
 package devsite
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -47,6 +48,10 @@ type Options struct {
 	CleanURLs bool
 	// NotFound is the page served for a miss when SPA is off. Defaults to /404.html, as hosted.
 	NotFound string
+	// Overlay are files served from memory, by site path ("/altengine.json"), ahead of the
+	// directory: a file the emulator generates for a site without writing into the build output.
+	// With an overlay, Dir may be empty — the site is then the overlay alone.
+	Overlay map[string][]byte
 }
 
 // Server serves one directory as a site.
@@ -64,6 +69,12 @@ type Server struct {
 	spa      bool
 	spaFixed bool // set by Options.SPA: never detect, never log
 	etags    map[string]etagEntry
+
+	// overlay is fixed at New; overlayTags are their content hashes. noDir: the overlay is the
+	// whole site.
+	overlay     map[string][]byte
+	overlayTags map[string]string
+	noDir       bool
 }
 
 type etagEntry struct {
@@ -74,6 +85,9 @@ type etagEntry struct {
 
 // New builds a site server for dir.
 func New(o Options) (*Server, error) {
+	if o.Dir == "" && o.Overlay != nil {
+		return newOverlayOnly(o), nil
+	}
 	abs, err := filepath.Abs(o.Dir)
 	if err != nil {
 		return nil, err
@@ -102,7 +116,35 @@ func New(o Options) (*Server, error) {
 	if o.SPA != nil {
 		s.spa, s.spaSet, s.spaFixed = *o.SPA, true, true
 	}
+	s.setOverlay(o.Overlay)
 	return s, nil
+}
+
+func newOverlayOnly(o Options) *Server {
+	s := &Server{display: "(in memory)", cleanURLs: o.CleanURLs, notFound: o.NotFound, etags: map[string]etagEntry{}, noDir: true}
+	if s.notFound == "" {
+		s.notFound = "/404.html"
+	}
+	if !strings.HasPrefix(s.notFound, "/") {
+		s.notFound = "/" + s.notFound
+	}
+	spa := o.SPA != nil && *o.SPA
+	s.spa, s.spaSet, s.spaFixed = spa, true, true
+	s.setOverlay(o.Overlay)
+	return s
+}
+
+func (s *Server) setOverlay(files map[string][]byte) {
+	s.overlay = map[string][]byte{}
+	s.overlayTags = map[string]string{}
+	for p, b := range files {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		sum := sha256.Sum256(b)
+		s.overlay[p] = b
+		s.overlayTags[p] = hex.EncodeToString(sum[:])
+	}
 }
 
 // Dir returns the absolute directory being served.
@@ -255,7 +297,8 @@ func NormalizePath(raw string) (string, bool) {
 type resolution struct {
 	kind     string // "file" | "redirect" | "notfound"
 	path     string // site path, e.g. /docs/index.html
-	local    string // absolute path on disk
+	local    string // absolute path on disk ("" for an overlay file)
+	data     []byte // an overlay file's bytes
 	status   int
 	location string
 }
@@ -271,7 +314,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.plain(w, r, http.StatusNotFound, "Not found")
 		return
 	}
-	if _, err := os.Stat(s.dir); err != nil {
+	if _, err := os.Stat(s.dir); err != nil && !s.noDir && len(s.overlay) == 0 {
 		// The generator has not run yet. Saying so beats a bare 404, which reads as a routing
 		// bug in the emulator rather than an empty directory.
 		s.plain(w, r, http.StatusNotFound,
@@ -298,24 +341,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) resolve(p string, nav bool) resolution {
 	// A path ending in "/" is never a file — hosted, no manifest key ends in a slash.
 	if !strings.HasSuffix(p, "/") {
-		if local, ok := s.file(p); ok {
-			return resolution{kind: "file", path: p, local: local, status: 200}
+		if r, ok := s.find(p, 200); ok {
+			return r
 		}
 	}
 
 	if strings.HasSuffix(p, "/") {
-		if local, ok := s.file(p + "index.html"); ok {
-			return resolution{kind: "file", path: p + "index.html", local: local, status: 200}
+		if r, ok := s.find(p+"index.html", 200); ok {
+			return r
 		}
 	} else {
 		// Serving /docs/index.html at /docs directly would make every relative link on that page
 		// resolve one level too high, so the canonical form is the one with the slash.
-		if _, ok := s.file(p + "/index.html"); ok {
+		if _, ok := s.find(p+"/index.html", 200); ok {
 			return resolution{kind: "redirect", location: p + "/"}
 		}
 		if s.cleanURLs {
-			if local, ok := s.file(p + ".html"); ok {
-				return resolution{kind: "file", path: p + ".html", local: local, status: 200}
+			if r, ok := s.find(p+".html", 200); ok {
+				return r
 			}
 		}
 	}
@@ -326,14 +369,28 @@ func (s *Server) resolve(p string, nav bool) resolution {
 	// browser reports `Unexpected token '<'`, which reads as a syntax error in your code. Locally
 	// that matters more than hosted, because this is where a missing file should be loudest.
 	if nav && s.isSPA() {
-		if local, ok := s.file("/index.html"); ok {
-			return resolution{kind: "file", path: "/index.html", local: local, status: 200}
+		if r, ok := s.find("/index.html", 200); ok {
+			return r
 		}
 	}
-	if local, ok := s.file(s.notFound); ok {
-		return resolution{kind: "file", path: s.notFound, local: local, status: 404}
+	if r, ok := s.find(s.notFound, 404); ok {
+		return r
 	}
 	return resolution{kind: "notfound"}
+}
+
+// find is one site path as a servable file: an overlay file first, then the directory.
+func (s *Server) find(sitePath string, status int) (resolution, bool) {
+	if b, ok := s.overlay[sitePath]; ok {
+		return resolution{kind: "file", path: sitePath, data: b, status: status}, true
+	}
+	if s.noDir {
+		return resolution{}, false
+	}
+	if local, ok := s.file(sitePath); ok {
+		return resolution{kind: "file", path: sitePath, local: local, status: status}, true
+	}
+	return resolution{}, false
 }
 
 // file maps a site path to a readable regular file inside the root, or reports that there is
@@ -355,6 +412,10 @@ func (s *Server) file(sitePath string) (string, bool) {
 }
 
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, res resolution) {
+	if res.local == "" {
+		s.serveBytes(w, r, res)
+		return
+	}
 	f, err := os.Open(res.local)
 	if err != nil {
 		s.plain(w, r, http.StatusNotFound, "Not found")
@@ -390,6 +451,29 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, res resolutio
 	w.WriteHeader(res.status)
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, f)
+	}
+}
+
+// serveBytes serves an overlay file with the same headers as one on disk.
+func (s *Server) serveBytes(w http.ResponseWriter, r *http.Request, res resolution) {
+	etag := `"` + s.overlayTags[res.path] + `"`
+	h := w.Header()
+	h.Set("Content-Type", ContentTypeFor(res.path))
+	h.Set("ETag", etag)
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Content-Type-Options", "nosniff")
+	if NotModified(r.Header.Get("If-None-Match"), etag) {
+		h.Del("Content-Type")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if res.status == http.StatusOK {
+		http.ServeContent(w, r, res.path, time.Time{}, bytes.NewReader(res.data))
+		return
+	}
+	w.WriteHeader(res.status)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(res.data)
 	}
 }
 
