@@ -5,18 +5,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- Deploy to AltEngine manifests: `altengine dev deploy <path|url>` (`--name`, `--var`,
-  `--secret key/NAME=value`, `--bind`, `--adopt`, `--confirm-escalation`, `--confirm-source`,
-  `--dry-run`, `--json`), `altengine dev --deploy <path|url>` at startup, and `POST /__deploy`
-  (loopback only). The hosted parser's rules, limits and messages; create / update / adopt /
-  conflict per instance, recorded in `<data>/deploys.json`; the hosted step order, through the
-  emulator's MCP tools and REST routes. A static instance is a site served on its own port,
-  kept across restarts and redeploys, with its `runtimeConfig` file served from memory.
-- `GET /v1/functions/{instance}/settings` returns `allowedHosts` and `corsOrigins`.
-- `--static` without `--static-port` moves up a port when a deployed site holds `--port + 1`.
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -43,6 +31,23 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.37 — 2026-11-20
+
+### Emulator
+
+- Deploy to AltEngine manifests: `altengine dev deploy <path|url>` (`--name`, `--var`,
+  `--secret key/NAME=value`, `--bind`, `--adopt`, `--confirm-escalation`, `--confirm-source`,
+  `--dry-run`, `--json`), `altengine dev --deploy <path|url>` at startup, and `POST /__deploy`
+  (loopback only). The hosted parser's rules, limits and messages; create / update / adopt /
+  conflict per instance, recorded in `<data>/deploys.json`; the hosted step order, through the
+  emulator's MCP tools and REST routes. A static instance is a site served on its own port,
+  kept across restarts and redeploys, with its `runtimeConfig` file served from memory.
+- `GET /v1/functions/{instance}/settings` returns `allowedHosts` and `corsOrigins`.
+- `--static` without `--static-port` moves up a port when a deployed site holds `--port + 1`.
+- Prefix grants (`service:prefix*`) resolve as hosted: the exact instance entry, else the longest
+  prefix the name starts with, else the service-wide entry; the most specific wins even when it
+  is lower.
 
 ## v0.2.36 — 2026-10-29
 
