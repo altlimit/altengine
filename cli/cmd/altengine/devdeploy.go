@@ -182,7 +182,9 @@ func printDeploy(w io.Writer, resp *manifest.Response) {
 		}
 		for _, s := range p.Secrets {
 			state := "needs a value"
-			if s.Stored {
+			if s.Given {
+				state = "given"
+			} else if s.Stored {
 				state = "stored"
 			} else if !s.Required {
 				state = "optional"

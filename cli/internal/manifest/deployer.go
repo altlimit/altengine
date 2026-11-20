@@ -93,6 +93,7 @@ func (d *Deployer) Deploy(ctx context.Context, req Request) (*Response, *common.
 	if err != nil {
 		return fail(err)
 	}
+	noteGivenSecrets(p.plan, req.Secrets)
 	resp.Plan = p.plan
 	if req.DryRun {
 		return resp, nil

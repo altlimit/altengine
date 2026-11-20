@@ -94,6 +94,36 @@ type PlanSecret struct {
 	Description *string `json:"description"`
 	Required    bool    `json:"required"`
 	Stored      bool    `json:"stored"`
+	// Given: this request carries a value for it. Hosted has no equivalent, because there the
+	// page collects secrets after the preview; here the caller sends them with the plan.
+	Given bool `json:"given,omitempty"`
+}
+
+// noteGivenSecrets marks the secrets the request supplies and drops the "Enter a value" warning
+// for them, so a plan printed by `dev deploy --secret …` does not ask for what it was given.
+func noteGivenSecrets(plan *Plan, given map[string]map[string]string) {
+	var missing []string
+	for i := range plan.Secrets {
+		s := &plan.Secrets[i]
+		if v := given[s.Key][s.Name]; v != "" {
+			s.Given = true
+		}
+		if s.Required && !s.Stored && !s.Given {
+			missing = append(missing, s.Name)
+		}
+	}
+	kept := plan.Warnings[:0]
+	for _, w := range plan.Warnings {
+		if !strings.HasPrefix(w, "Enter a value for ") && !strings.HasPrefix(w, "Enter values for ") {
+			kept = append(kept, w)
+		}
+	}
+	plan.Warnings = kept
+	if len(missing) == 1 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Enter a value for %s.", missing[0]))
+	} else if len(missing) > 1 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("Enter values for %s.", strings.Join(missing, ", ")))
+	}
 }
 
 // PlanVar is a var and the value it has for this deploy.
