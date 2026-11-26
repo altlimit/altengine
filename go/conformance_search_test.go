@@ -5,6 +5,7 @@ package altengine_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -168,6 +169,46 @@ func TestSearchQueries(t *testing.T) {
 		})
 		if err != nil || !reflect.DeepEqual(hitIDs(page2), []string{"p2"}) {
 			t.Fatalf("page2=%v err=%v", hitIDs(page2), err)
+		}
+	})
+
+	t.Run("sorts by an atom field", func(t *testing.T) {
+		// sku: BC-004 (p4) < BS-001 (p1) < RR-002 (p2)
+		res, err := idx.Search(ctx(t), altengine.SearchRequest{
+			Query: "shoes",
+			Sort:  []altengine.SortSpec{{Expr: "sku", Desc: true}},
+		})
+		if err != nil || !reflect.DeepEqual(hitIDs(res), []string{"p2", "p1", "p4"}) {
+			t.Fatalf("got %v err=%v", hitIDs(res), err)
+		}
+		zero := 0.0
+		_, err = idx.Search(ctx(t), altengine.SearchRequest{
+			Query: "shoes",
+			Sort:  []altengine.SortSpec{{Expr: "sku", Default: &zero}},
+		})
+		var ae *altengine.APIError
+		if !errors.As(err, &ae) || ae.Status != 400 {
+			t.Fatalf("a number default on an atom field: err=%v, want 400", err)
+		}
+	})
+
+	t.Run("count only and rank ascending", func(t *testing.T) {
+		res, err := idx.Search(ctx(t), altengine.SearchRequest{Query: "shoes", CountOnly: true})
+		if err != nil || len(res.Results) != 0 || res.TotalHits != 3 || res.Cursor != "" {
+			t.Fatalf("count only: results=%v total=%d cursor=%q err=%v", hitIDs(res), res.TotalHits, res.Cursor, err)
+		}
+		desc, err := idx.Search(ctx(t), altengine.SearchRequest{Query: "shoes", Sort: []altengine.SortSpec{{Expr: "rank"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		asc, err := idx.Search(ctx(t), altengine.SearchRequest{Query: "shoes", Sort: []altengine.SortSpec{{Expr: "rank", Asc: true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev := hitIDs(desc)
+		slices.Reverse(rev)
+		if !reflect.DeepEqual(hitIDs(asc), rev) {
+			t.Fatalf("rank asc %v is not the reverse of rank desc %v", hitIDs(asc), hitIDs(desc))
 		}
 	})
 

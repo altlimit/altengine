@@ -111,6 +111,14 @@ for hit, err := range idx.SearchAll(ctx, altengine.SearchRequest{Query: "shoes"}
 }
 ```
 
+A zero or false field is not sent, so three fields stand in for those wire values:
+
+| Field | Sends |
+|---|---|
+| `SortSpec.DefaultText` | a string `default`, for sorting an atom field |
+| `SortSpec.Asc` | `desc: false` — `rank` lowest-first, `_score` worst-first |
+| `SearchRequest.CountOnly` | `limit: 0` — counts and facets, no results |
+
 ## Channels
 
 Server side — mint subscriber tokens, publish, read presence:

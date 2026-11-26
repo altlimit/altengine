@@ -12,11 +12,14 @@ import (
 	"github.com/altlimit/altengine/cli/internal/common"
 )
 
-// SortSpec is one sort key.
+// SortSpec is one sort key. Default is the value for a document without the field: a
+// string sorts an atom field, a number a number/date field; omitted, the schema decides.
 type SortSpec struct {
-	Expr    string  `json:"expr"`
-	Desc    bool    `json:"desc"`
-	Default float64 `json:"default"`
+	Expr string `json:"expr"`
+	// Desc is a pointer because absent and false differ, as hosted: rank sorts
+	// descending unless desc is false; a field sorts ascending unless desc is true.
+	Desc    *bool `json:"desc"`
+	Default any   `json:"default"`
 }
 
 // Refinement is a facet refinement (atom value or number range).
@@ -47,7 +50,7 @@ type CollapseReq struct {
 // SearchRequest mirrors the hosted search request body.
 type SearchRequest struct {
 	Query             string       `json:"query"`
-	Limit             int          `json:"limit"`
+	Limit             *int         `json:"limit"` // nil = 20; 0 = counts and facets only
 	Offset            int          `json:"offset"`
 	Cursor            string       `json:"cursor"`
 	IDsOnly           bool         `json:"ids_only"`
@@ -203,7 +206,13 @@ func (s *Store) Search(indexName string, req SearchRequest) (*SearchResponse, er
 	}
 
 	// Pagination.
-	limit := clamp(req.Limit, 20, 1000)
+	limit := 20
+	if req.Limit != nil {
+		if *req.Limit < 0 {
+			return nil, common.BadRequest("limit must be a non-negative number")
+		}
+		limit = min(*req.Limit, 1000)
+	}
 	offset := req.Offset
 	if req.Cursor != "" {
 		if o, ok := decodeSearchCursor(req.Cursor); ok {
@@ -232,7 +241,10 @@ func (s *Store) Search(indexName string, req SearchRequest) (*SearchResponse, er
 	if collapse != nil {
 		mainSQL, args = ix.collapseQuery(matchedSQL, matchedArgs, collapse, fetchLimit, fetchOffset)
 	} else {
-		orderBy, sortJoins, sortArgs := ix.buildSort(req.Sort)
+		orderBy, sortJoins, sortArgs, err := ix.buildSort(req.Sort)
+		if err != nil {
+			return nil, err
+		}
 		mainSQL = fmt.Sprintf(`SELECT d.doc_id, d.rank, d.body FROM %s_docs d
 			JOIN (%s) m ON m.doc_id = d.doc_id
 			%s
@@ -242,37 +254,41 @@ func (s *Store) Search(indexName string, req SearchRequest) (*SearchResponse, er
 		args = append(append([]any{}, matchedArgs...), sortArgs...)
 	}
 
-	rows, err := s.db.Query(mainSQL, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	// `limit: 0` asks for counts and facets only, as hosted: no page query runs. The sort
+	// was still resolved above, so a bad sort default is a 400 either way.
 	var results []SearchResult
-	n := 0
 	hasMore := false
-	for rows.Next() {
-		n++
-		if n > fetchLimit {
-			hasMore = true
-			break
-		}
-		var id, body string
-		var rank int64
-		if err := rows.Scan(&id, &rank, &body); err != nil {
+	if limit > 0 {
+		rows, err := s.db.Query(mainSQL, args...)
+		if err != nil {
 			return nil, err
 		}
-		res := SearchResult{ID: id, Rank: rank}
-		if !req.IDsOnly {
-			var d Document
-			json.Unmarshal([]byte(body), &d)
-			if len(req.ReturnedFields) > 0 {
-				d = projectFields(d, req.ReturnedFields)
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			n++
+			if n > fetchLimit {
+				hasMore = true
+				break
 			}
-			res.Document = &d
+			var id, body string
+			var rank int64
+			if err := rows.Scan(&id, &rank, &body); err != nil {
+				return nil, err
+			}
+			res := SearchResult{ID: id, Rank: rank}
+			if !req.IDsOnly {
+				var d Document
+				json.Unmarshal([]byte(body), &d)
+				if len(req.ReturnedFields) > 0 {
+					d = projectFields(d, req.ReturnedFields)
+				}
+				res.Document = &d
+			}
+			results = append(results, res)
 		}
-		results = append(results, res)
+		rows.Close()
 	}
-	rows.Close()
 	if results == nil {
 		results = []SearchResult{}
 	}
@@ -312,7 +328,7 @@ func (s *Store) Search(indexName string, req SearchRequest) (*SearchResponse, er
 	}
 
 	var cursor *string
-	if hasMore {
+	if hasMore && limit > 0 {
 		c := encodeSearchCursor(offset + limit)
 		cursor = &c
 	}
@@ -368,20 +384,45 @@ func projectFields(d Document, keep []string) Document {
 	return d
 }
 
-func (ix *Index) buildSort(sorts []SortSpec) (orderBy, joins string, args []any) {
-	if len(sorts) == 0 {
-		return "d.rank DESC, d.doc_id ASC", "", nil
+// sortDefault validates a sort default as hosted: absent, a finite number, or a string no
+// longer than an atom value can be.
+func sortDefault(v any) (any, error) {
+	switch d := v.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		if len(d) > maxAtomBytes {
+			return nil, common.BadRequest(fmt.Sprintf("sort default exceeds %d bytes", maxAtomBytes))
+		}
+		return d, nil
+	case float64:
+		if math.IsNaN(d) || math.IsInf(d, 0) {
+			return nil, common.BadRequest("sort default must be a finite number")
+		}
+		return d, nil
 	}
-	var parts []string
-	var joinParts []string
+	return nil, common.BadRequest("sort default must be a number or a string")
+}
+
+// buildSort resolves each sort key as hosted: a string default sorts as atom (by the
+// lowercased value, so atoms order case-insensitively, as they match), a number as
+// numeric; with no default the field's schema decides, numeric unless the field is atom
+// only. A default whose type the field never has is a 400.
+func (ix *Index) buildSort(sorts []SortSpec) (orderBy, joins string, args []any, err error) {
+	if len(sorts) == 0 {
+		return "d.rank DESC, d.doc_id ASC", "", nil, nil
+	}
+	var schema map[string]map[string]bool
+	var parts, joinParts []string
+	var joinArgs, orderArgs []any
 	ji := 0
 	for _, s := range sorts {
 		expr := strings.TrimSpace(s.Expr)
 		dir := "ASC"
 		switch expr {
 		case "rank", "_rank", "":
-			// rank defaults to descending
-			if s.Desc || expr == "" || expr == "rank" || expr == "_rank" {
+			// rank defaults to descending; desc: false sorts it ascending
+			if s.Desc == nil || *s.Desc {
 				dir = "DESC"
 			}
 			parts = append(parts, "d.rank "+dir)
@@ -389,20 +430,56 @@ func (ix *Index) buildSort(sorts []SortSpec) (orderBy, joins string, args []any)
 			// no bm25 in the emulator; fall back to rank
 			parts = append(parts, "d.rank DESC")
 		default:
+			def, err := sortDefault(s.Default)
+			if err != nil {
+				return "", "", nil, err
+			}
+			if schema == nil {
+				if schema, err = ix.schemaTypes(); err != nil {
+					return "", "", nil, err
+				}
+			}
+			types := schema[expr]
+			atom := types["atom"]
+			numeric := types["number"] || types["date"]
+			asAtom := false
+			switch d := def.(type) {
+			case string:
+				if numeric && !atom {
+					return "", "", nil, common.BadRequest(fmt.Sprintf("sort default for number field '%s' must be a number", expr))
+				}
+				asAtom, def = true, strings.ToLower(d)
+			case float64:
+				if atom && !numeric {
+					return "", "", nil, common.BadRequest(fmt.Sprintf("sort default for atom field '%s' must be a string", expr))
+				}
+			default:
+				asAtom = atom && !numeric
+				if asAtom {
+					def = ""
+				} else {
+					def = float64(0)
+				}
+			}
+			key := "MIN(num_val) mv FROM %s_fields WHERE name=? AND type IN ('number','date')"
+			if asAtom {
+				key = "MIN(text_lc) mv FROM %s_fields WHERE name=? AND type='atom'"
+			}
 			alias := fmt.Sprintf("sf%d", ji)
 			ji++
 			joinParts = append(joinParts, fmt.Sprintf(
-				`LEFT JOIN (SELECT doc_id, MIN(num_val) mv FROM %s_fields WHERE name=? GROUP BY doc_id) %s ON %s.doc_id=d.doc_id`,
+				`LEFT JOIN (SELECT doc_id, `+key+` GROUP BY doc_id) %s ON %s.doc_id=d.doc_id`,
 				ix.prefix, alias, alias))
-			args = append(args, expr)
-			if s.Desc {
+			joinArgs = append(joinArgs, expr)
+			if s.Desc != nil && *s.Desc {
 				dir = "DESC"
 			}
-			parts = append(parts, fmt.Sprintf("COALESCE(%s.mv, %g) %s", alias, s.Default, dir))
+			parts = append(parts, fmt.Sprintf("COALESCE(%s.mv, ?) %s", alias, dir))
+			orderArgs = append(orderArgs, def)
 		}
 	}
 	parts = append(parts, "d.doc_id ASC")
-	return strings.Join(parts, ", "), strings.Join(joinParts, "\n"), args
+	return strings.Join(parts, ", "), strings.Join(joinParts, "\n"), append(joinArgs, orderArgs...), nil
 }
 
 func (ix *Index) discoverFacets(s *Store, matchedSQL string, matchedArgs []any, req SearchRequest) ([]FacetResult, error) {

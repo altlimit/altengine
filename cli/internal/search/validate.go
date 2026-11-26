@@ -46,6 +46,9 @@ func ValidateSearchRequest(v any) error {
 			if _, isStr := m["expr"].(string); !ok || !isStr {
 				return common.BadRequest("each sort entry must be an object with a string 'expr'")
 			}
+			if _, err := sortDefault(m["default"]); err != nil {
+				return err
+			}
 		}
 	}
 	if f := r["facet_refinements"]; f != nil {

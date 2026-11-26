@@ -650,7 +650,7 @@ func init() {
 				"cursor":          map[string]any{"type": "string"},
 				"returned_fields": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Fetch only these fields."},
 				"sort": map[string]any{"type": "array", "items": map[string]any{"type": "object"},
-					"description": `[{"expr":"rating","desc":true,"default":0}] — note "desc" is a boolean here, unlike datastore order.`},
+					"description": `[{"expr":"rating","desc":true,"default":0}] — expr is a number, date or atom field, "rank" or "_score". default is a number for a number/date field, a string for an atom field (a number default on an atom field is a 400). Text fields do not sort. Note "desc" is a boolean here, unlike datastore order.`},
 				"ids_only": map[string]any{"type": "boolean", "description": "Return matching ids only. Much cheaper when you do not need the fields."},
 				// Facets are how an agent finds out what is IN an index without reading all
 				// of it — "what genres exist, and how many of each" in one call rather than

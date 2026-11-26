@@ -69,7 +69,7 @@ func TestFieldAndBoolean(t *testing.T) {
 func TestSortAndFacets(t *testing.T) {
 	s := openTest(t)
 	seed(t, s)
-	res, _ := s.Search("movies", SearchRequest{Sort: []SortSpec{{Expr: "rating", Desc: true}}, IDsOnly: true})
+	res, _ := s.Search("movies", SearchRequest{Sort: []SortSpec{{Expr: "rating", Desc: ptr(true)}}, IDsOnly: true})
 	if got := ids(res); len(got) != 3 || got[0] != "m3" {
 		t.Fatalf("sort by rating desc expected m3 first, got %v", got)
 	}
@@ -149,7 +149,7 @@ func seedFilms(t *testing.T, s *Store) {
 func TestCollapse(t *testing.T) {
 	s := openTest(t)
 	seedFilms(t, s)
-	res, err := s.Search("films", SearchRequest{Collapse: &CollapseReq{Field: "franchise"}, Limit: 20, TotalHitsAccuracy: 100, IDsOnly: true})
+	res, err := s.Search("films", SearchRequest{Collapse: &CollapseReq{Field: "franchise"}, Limit: ptr(20), TotalHitsAccuracy: 100, IDsOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestCollapse(t *testing.T) {
 func TestCollapseTopN(t *testing.T) {
 	s := openTest(t)
 	seedFilms(t, s)
-	res, _ := s.Search("films", SearchRequest{Collapse: &CollapseReq{Field: "franchise", Limit: 2}, Limit: 20, IDsOnly: true})
+	res, _ := s.Search("films", SearchRequest{Collapse: &CollapseReq{Field: "franchise", Limit: 2}, Limit: ptr(20), IDsOnly: true})
 	got := ids(res)
 	// Two per franchise now: godfather gf1,gf2 ; toystory ts1,ts2 ; solo.
 	if len(got) != 5 {
@@ -292,7 +292,7 @@ func TestRules(t *testing.T) {
 		 "then":{"pin":[{"id":"solo","pos":0}],"hide":["ts2"],"data":{"banner":"toys!"}}}
 	]`)})
 
-	res, err := s.Search("films", SearchRequest{Query: "story", IDsOnly: true, Limit: 20, TotalHitsAccuracy: 100})
+	res, err := s.Search("films", SearchRequest{Query: "story", IDsOnly: true, Limit: ptr(20), TotalHitsAccuracy: 100})
 	if err != nil {
 		t.Fatal(err)
 	}

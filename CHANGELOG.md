@@ -5,17 +5,15 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- `github.com/gorilla/websocket` moves to the commit that fixes GO-2026-6278, its weak PRNG for
-  WebSocket mask keys, together with `golang.org/x/net` v0.58.0, `x/sys` v0.47.0 and
-  `x/term` v0.45.0. These are the newest versions that still build with Go 1.25.
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
 SDK commit that a release will carry.
 
+- Search sort by an atom field takes a string default: `default?: number | string` in JS, and
+  `SortSpec.DefaultText` in Go (sent as `default`; set at most one of it and `Default`).
+- Go: `SearchRequest.CountOnly` sends `limit: 0`, and `SortSpec.Asc` sends `desc: false`.
+  Neither could be sent before, because a zero `Limit` and a false `Desc` are omitted.
 - Python: a `ChannelSocket` can be built outside a running event loop on Python 3.9. Before,
   its message queue was bound to whatever loop existed at construction, so building one after
   an `asyncio.run()` raised "There is no current event loop".
@@ -41,6 +39,22 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.39 — 2026-11-26
+
+### Emulator
+
+- Search sorts by an atom field, as hosted: case-insensitively, a multi-valued field by its
+  smallest value, and a string `default` (`""` if omitted) for documents without it. Before,
+  an atom sort ordered every document as its default. A `default` of the wrong type for the
+  field — `default: 0` on an atom field — is now a 400.
+- Search `limit: 0` returns counts and facets only, as hosted. Before, the emulator read it as
+  the default of 20. A negative `limit` is a 400.
+- Search sort `{"expr": "rank", "desc": false}` sorts rank ascending, as hosted. Before, rank
+  always sorted descending.
+- `github.com/gorilla/websocket` moves to the commit that fixes GO-2026-6278, its weak PRNG for
+  WebSocket mask keys, together with `golang.org/x/net` v0.58.0, `x/sys` v0.47.0 and
+  `x/term` v0.45.0. These are the newest versions that still build with Go 1.25.
 
 ## v0.2.38 — 2026-11-26
 

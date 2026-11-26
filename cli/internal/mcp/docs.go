@@ -39,7 +39,11 @@ Request shape (search_query tool takes these as arguments):
   query                 the string above
   limit / cursor        pagination. Prefer the cursor over a large offset.
   sort                  [{"expr": "rating", "desc": true, "default": 0}]
-                        'default' is required: it is used for documents missing the field.
+                        expr: a number, date or atom field, "rank" or "_score". Text fields
+                        do not sort. 'default' is used for documents missing the field: a
+                        number for a number/date field (0 if omitted), a string for an atom
+                        field ("" if omitted) — the wrong type for the field is a 400.
+                        Atoms sort case-insensitively; a multi-valued field by its smallest value.
   returned_fields       ["title"] — fetch only what you need
   ids_only              true returns just the matching ids
   facets                ["genre"] — value counts for these facets

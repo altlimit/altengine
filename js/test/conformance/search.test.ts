@@ -75,6 +75,22 @@ describe("search queries", () => {
     expect(page2.results.map((r) => r.id)).toEqual(["p2"]);
   });
 
+  it("sorts by an atom field", async () => {
+    // sku: BC-004 (p4) < BS-001 (p1) < RR-002 (p2)
+    const res = await idx.search({ query: "shoes", sort: [{ expr: "sku", desc: true }] });
+    expect(res.results.map((r) => r.id)).toEqual(["p2", "p1", "p4"]);
+    await expect(idx.search({ query: "shoes", sort: [{ expr: "sku", default: 0 }] })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("limit 0 returns counts only; rank sorts ascending with desc: false", async () => {
+    const counts = await idx.search({ query: "shoes", limit: 0 });
+    expect(counts.results).toEqual([]);
+    expect(counts.total_hits).toBe(3);
+    expect(counts.cursor).toBeFalsy();
+    const asc = await idx.search({ query: "shoes", sort: [{ expr: "rank", desc: false }] });
+    expect(asc.results.map((r) => r.id)).toEqual(["p4", "p2", "p1"]);
+  });
+
   it("returns facets with counts and honors refinements", async () => {
     const res = await idx.search({ query: "", facets: ["category"] });
     const cat = res.facets!.find((f) => f.name === "category")!;

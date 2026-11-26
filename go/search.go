@@ -2,6 +2,8 @@ package altengine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"iter"
 	"net/url"
 	"strconv"
@@ -94,12 +96,46 @@ type SearchDocument struct {
 	Facets []SearchFacet `json:"facets,omitempty"`
 }
 
-// SortSpec is one sort clause. Expr is a field name, "rank", or "_score".
+// SortSpec is one sort clause. Expr is a number, date or atom field name, "rank", or
+// "_score".
 type SortSpec struct {
 	Expr string `json:"expr"`
-	Desc bool   `json:"desc,omitempty"`
-	// Default is the sort value for documents missing the field.
+	// Desc sorts a field descending. "rank" and "_score" sort best-first unless Asc.
+	Desc bool `json:"desc,omitempty"`
+	// Asc sends `desc: false`, which sorts "rank" lowest-first and "_score"
+	// worst-first. A field already sorts ascending without it. Set at most one of
+	// Desc and Asc.
+	Asc bool `json:"-"`
+	// Default is the sort value for documents missing a number or date field.
 	Default *float64 `json:"default,omitempty"`
+	// DefaultText is the sort value for documents missing an atom field. It is sent as
+	// `default`; set at most one of Default and DefaultText.
+	DefaultText *string `json:"-"`
+}
+
+// MarshalJSON sends DefaultText as the wire `default` and Asc as `desc: false`.
+func (s SortSpec) MarshalJSON() ([]byte, error) {
+	if s.Default != nil && s.DefaultText != nil {
+		return nil, errors.New("altengine: SortSpec sets both Default and DefaultText")
+	}
+	if s.Desc && s.Asc {
+		return nil, errors.New("altengine: SortSpec sets both Desc and Asc")
+	}
+	type plain SortSpec
+	out := struct {
+		plain
+		Desc    *bool `json:"desc,omitempty"`
+		Default any   `json:"default,omitempty"`
+	}{plain: plain(s)}
+	if s.Desc || s.Asc {
+		out.Desc = &s.Desc
+	}
+	if s.DefaultText != nil {
+		out.Default = *s.DefaultText
+	} else if s.Default != nil {
+		out.Default = *s.Default
+	}
+	return json.Marshal(out)
 }
 
 // FacetRefinement narrows results to an atom facet value or a number range
@@ -138,8 +174,11 @@ type SearchRequest struct {
 	// comparisons, AND/OR/NOT, -term, grouping, "phrases", ~stem,
 	// distance(loc, geopoint(lat,lng)) < n.
 	Query string `json:"query"`
-	// Limit defaults to 20, max 1000.
+	// Limit defaults to 20, max 1000. A zero Limit is not sent; use CountOnly for
+	// `limit: 0`.
 	Limit int `json:"limit,omitempty"`
+	// CountOnly sends `limit: 0`: total_hits and facets, no results. Leave Limit unset.
+	CountOnly bool `json:"-"`
 	// Offset max 1000; prefer Cursor for deep paging.
 	Offset         int        `json:"offset,omitempty"`
 	Cursor         string     `json:"cursor,omitempty"`
@@ -163,6 +202,21 @@ type SearchRequest struct {
 	TotalHitsAccuracy int              `json:"total_hits_accuracy,omitempty"`
 	Snippet           *SnippetRequest  `json:"snippet,omitempty"`
 	Collapse          *CollapseRequest `json:"collapse,omitempty"`
+}
+
+// MarshalJSON sends CountOnly as `limit: 0`.
+func (r SearchRequest) MarshalJSON() ([]byte, error) {
+	type plain SearchRequest
+	if !r.CountOnly {
+		return json.Marshal(plain(r))
+	}
+	if r.Limit != 0 {
+		return nil, errors.New("altengine: SearchRequest sets both Limit and CountOnly")
+	}
+	return json.Marshal(struct {
+		plain
+		Limit int `json:"limit"`
+	}{plain(r), 0})
 }
 
 // SearchHit is one result.

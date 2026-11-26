@@ -44,11 +44,12 @@ export interface SearchDocument {
 }
 
 export interface SortSpec {
-  /** Field name, `"rank"`, or `"_score"`. */
+  /** A number, date or atom field name, `"rank"`, or `"_score"`. */
   expr: string;
   desc?: boolean;
-  /** Sort value for documents missing the field. */
-  default?: number;
+  /** Sort value for documents missing the field: a number for a number or date field, a
+   *  string for an atom field. */
+  default?: number | string;
 }
 
 export interface FacetRefinement {
