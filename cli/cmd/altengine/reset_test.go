@@ -28,11 +28,18 @@ func TestResetOnlyWipesADataDirectory(t *testing.T) {
 	if _, err := os.Stat(data); err != nil {
 		t.Fatal("a refused confirmation deleted the directory")
 	}
+	_ = os.WriteFile(filepath.Join(data, ".gitignore"), []byte("*\n"), 0o600)
+	_ = os.MkdirAll(filepath.Join(data, "functions"), 0o700)
 	if err := resetDataDir(data, yes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(data); !os.IsNotExist(err) {
-		t.Fatal("the data directory survived a confirmed reset")
+	// Emptied, not removed: in a container the directory is a volume's mount point.
+	left, err := os.ReadDir(data)
+	if err != nil {
+		t.Fatalf("the data directory itself was removed: %v", err)
+	}
+	if len(left) != 1 || left[0].Name() != ".gitignore" {
+		t.Fatalf("after a confirmed reset the directory holds %v, want only .gitignore", left)
 	}
 
 	if err := resetDataDir(filepath.Join(t.TempDir(), "missing"), yes); err != nil {

@@ -259,7 +259,7 @@ func confirmed(yes bool, what string) bool {
 	return a == "y" || a == "yes"
 }
 
-// resetDataDir deletes an emulator data directory, and nothing that is not one.
+// resetDataDir empties an emulator data directory, and refuses anything that is not one.
 //
 // --data can point anywhere, and --reset used to RemoveAll it unasked: `--data . --reset` deleted
 // the project. A directory is wiped only when it holds the emulator's registry (control.json) or
@@ -283,7 +283,18 @@ func resetDataDir(dir string, confirm func(abs string) bool) error {
 		return fmt.Errorf("not reset")
 	}
 	fmt.Fprintln(os.Stderr, "resetting data directory:", abs)
-	return os.RemoveAll(abs)
+	// Empty it rather than delete it: in a container the data directory is a volume's mount point,
+	// which cannot be removed (and a non-root user cannot remove /data from / anyway). The
+	// .gitignore stays, so a directory that was ignored stays ignored.
+	for _, e := range entries {
+		if e.Name() == ".gitignore" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(abs, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveConfig builds the hosted-service config from flags, falling back to the

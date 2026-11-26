@@ -8,6 +8,7 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 | Folder | What it is | Install |
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`); deploys functions, sites and automation scripts | `alt install altlimit/altengine` |
+| [`docker/`](docker/) | The emulator as a container image, with docker compose samples | `docker pull ghcr.io/altlimit/altengine` |
 | [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | from this repo — see below |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
 | [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | from this repo — see below |

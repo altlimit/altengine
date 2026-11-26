@@ -315,44 +315,23 @@ data across if you need it.
 
 ### Docker / compose
 
-Each release is also published as `ghcr.io/altlimit/altengine` for linux/amd64 and arm64. The
-image holds the static binary and nothing else, and it pulls at about 11 MB.
+Each release is also published as `ghcr.io/altlimit/altengine` for linux/amd64 and arm64. It is
+the static binary on `scratch`, about 11 MB to pull. Other services reach it at
+`http://altengine:9191`.
 
 ```yaml
 services:
   altengine:
-    image: ghcr.io/altlimit/altengine:latest   # or pin a release, e.g. :0.2.38
-    ports:
-      - "127.0.0.1:9191:9191"   # console + API for your browser; loopback only, see above
-    volumes:
-      - altengine:/data
-  app:
-    build: .
-    environment:
-      ALTENGINE_URL: http://altengine:9191
-    depends_on:
-      altengine:
-        condition: service_healthy
+    image: ghcr.io/altlimit/altengine:latest
+    ports: ["127.0.0.1:9191:9191"]
+    volumes: ["altengine:/data"]
 volumes:
   altengine:
 ```
 
-- **Other services call `http://altengine:9191`.** The emulator answers only to localhost Host
-  headers, which guards against DNS rebinding, plus the names in `--allow-host` /
-  `ALTENGINE_ALLOW_HOST`. The image sets that to `altengine`. If you name the service something
-  else, set `ALTENGINE_ALLOW_HOST` to that name. Names are matched exactly, with no wildcard.
-- **Data** lives in `/data`. Mount a volume there to keep it, or pass `command: [dev, --host,
-  0.0.0.0, --memory]` to start empty every time.
-- **Flags**: the default command is `dev --host 0.0.0.0 --data /data`. To add flags, repeat it in
-  `command:`, e.g. `[dev, --host, 0.0.0.0, --data, /data, --static, /site]`. Keep `--host 0.0.0.0`,
-  which is the container's own interface. Whether anything else can reach the emulator is set by
-  the published port.
-- **Health**: the image's `HEALTHCHECK` runs `altengine health`, which probes `/healthz` on port
-  9191. If you change `--port`, override `healthcheck.test` with `["CMD", "/altengine",
-  "health", "--port", "<port>"]`.
-- **Containers** are not available in the image, because it has no Docker daemon, so container
-  jobs answer 503. Run `altengine dev` on the host if you need them.
-- To build the image locally: `docker build -t altengine cli/`.
+[docker/README.md](../docker/README.md) has compose samples: in-memory, a project folder, reset
+on start, deploying a manifest, serving a site, SMTP and other service names. It also has the
+flag reference and troubleshooting.
 
 ## Credentials
 

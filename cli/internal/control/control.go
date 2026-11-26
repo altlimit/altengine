@@ -132,6 +132,12 @@ func New(dir string) (*Registry, error) {
 	r.path = filepath.Join(dir, "control.json")
 	data, err := os.ReadFile(r.path)
 	if errors.Is(err, fs.ErrNotExist) {
+		// Written now, not at the first instance: control.json is what marks this directory as
+		// the emulator's, and --reset refuses a directory without one. A run that created
+		// nothing would otherwise leave a directory the next `--reset` will not touch.
+		if err := r.save(); err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 	if err != nil {

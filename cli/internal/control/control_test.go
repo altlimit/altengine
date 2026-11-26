@@ -363,3 +363,18 @@ func TestExistingForeignDataDirIsLeftAlone(t *testing.T) {
 		t.Errorf("changed the mode of a directory it did not create: %v", fi.Mode().Perm())
 	}
 }
+
+// control.json marks a directory as the emulator's, and --reset refuses one without it. It is
+// written when the registry opens, so a run that created no instance still leaves one.
+func TestNewWritesTheRegistryAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "control.json")); err != nil {
+		t.Fatalf("control.json after New on an empty directory: %v", err)
+	}
+	if _, err := New(dir); err != nil {
+		t.Fatalf("reopening the written registry: %v", err)
+	}
+}

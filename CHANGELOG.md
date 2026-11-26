@@ -5,16 +5,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- A container image, `ghcr.io/altlimit/altengine` (linux/amd64 and arm64), is pushed with each
-  release for docker compose. It is the static binary on `scratch`, runs as a non-root user and
-  keeps its data in `/data`. See [cli/README.md](cli/README.md#docker--compose).
-- `altengine dev --allow-host <name>` (env `ALTENGINE_ALLOW_HOST`) answers to extra hostnames
-  besides localhost. A compose service needs this to reach the emulator by its service name.
-  Names are matched exactly.
-- `altengine health [--port 9191]` exits 0 when the local emulator answers `/healthz`.
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -41,6 +31,24 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.38 — 2026-11-26
+
+### Emulator
+
+- A container image, `ghcr.io/altlimit/altengine` (linux/amd64 and arm64), is pushed with each
+  release for docker compose. It is the static binary on `scratch`, runs as a non-root user and
+  keeps its data in `/data`. [docker/README.md](docker/README.md) has compose samples.
+- `altengine dev --allow-host <name>` (env `ALTENGINE_ALLOW_HOST`) answers to extra hostnames
+  besides localhost. A compose service needs this to reach the emulator by its service name.
+  Names are matched exactly.
+- `altengine health [--port 9191]` exits 0 when the local emulator answers `/healthz`.
+- `--reset` empties the data directory instead of deleting it, and keeps its `.gitignore`. In a
+  container the directory is a volume's mount point, which cannot be removed.
+- `control.json` is written when the emulator first opens a data directory, not when the first
+  instance is created. Before, `--reset` refused the directory a run left behind if that run
+  created no instance.
+- Mailbox waits allow up to 60 s, as the hosted service does.
 
 ## v0.2.37 — 2026-11-20
 
