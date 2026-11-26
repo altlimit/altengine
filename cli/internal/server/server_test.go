@@ -331,6 +331,35 @@ func TestRefusesARebindingHost(t *testing.T) {
 	}
 }
 
+// In a container network another service calls http://altengine:9191, so the Host is the service
+// name. --allow-host lists it — exactly, so a name that merely ends in it is still refused.
+func TestAllowHostAnswersAListedServiceName(t *testing.T) {
+	s, err := New(Options{DevOpen: true, AllowHosts: []string{"AltEngine"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.Close)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	for host, want := range map[string]int{
+		"altengine:9191":             http.StatusOK,
+		"altengine":                  http.StatusOK,
+		"altengine.attacker.example": http.StatusForbidden,
+		"attacker.example":           http.StatusForbidden,
+	} {
+		req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
+		req.Host = host
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != want {
+			t.Errorf("Host %q: status = %d, want %d", host, res.StatusCode, want)
+		}
+	}
+}
+
 // /admin and /mcp are same-origin surfaces with no CORS. A no-cors POST from any page still
 // ARRIVES — the response being unreadable does not undo a delete — and a cross-site request
 // always carries an Origin, which is the whole check.

@@ -5,6 +5,16 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- A container image, `ghcr.io/altlimit/altengine` (linux/amd64 and arm64), is pushed with each
+  release for docker compose. It is the static binary on `scratch`, runs as a non-root user and
+  keeps its data in `/data`. See [cli/README.md](cli/README.md#docker--compose).
+- `altengine dev --allow-host <name>` (env `ALTENGINE_ALLOW_HOST`) answers to extra hostnames
+  besides localhost. A compose service needs this to reach the emulator by its service name.
+  Names are matched exactly.
+- `altengine health [--port 9191]` exits 0 when the local emulator answers `/healthz`.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first

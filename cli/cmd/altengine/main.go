@@ -46,6 +46,8 @@ func main() {
 		loginCmd(os.Args[2:])
 	case "logout":
 		logoutCmd(os.Args[2:])
+	case "health":
+		healthCmd(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("altengine", resolveVersion(version, readBuildInfo))
 	case "help", "-h", "--help":
@@ -124,6 +126,7 @@ Usage:
                                      logs | get | cancel | send | env
   altengine login [--url u]          Save an API key for the hosted commands (read from stdin)
   altengine logout                   Forget the saved key
+  altengine health [--port 9191]     Exit 0 if the local emulator answers (a container healthcheck)
   altengine version                  Print version
 
 Deploying talks to the hosted service and needs an org API key with 'full' access to the
@@ -155,6 +158,9 @@ func devCmd(args []string) {
 	// phone or a second machine on the LAN pointed at this emulator. It widens who may drive
 	// your local data, so it is a flag rather than the default.
 	allowOrigin := fs.String("allow-origin", "", "extra browser origin(s) allowed to call the API, comma-separated")
+	// The emulator only answers to localhost (a DNS-rebinding guard). Inside a container network
+	// other services reach it by service name, so that name has to be listed.
+	allowHost := fs.String("allow-host", os.Getenv("ALTENGINE_ALLOW_HOST"), "extra hostname(s) to answer to besides localhost, comma-separated, e.g. a compose service name (env ALTENGINE_ALLOW_HOST)")
 	mailDomain := fs.String("mail-domain", envOr("ALTENGINE_MAIL_DOMAIN", "mail.localhost"), "domain every mailbox address is on (env ALTENGINE_MAIL_DOMAIN)")
 	smtp := fs.Bool("smtp", false, "also accept mail over SMTP, delivered into local mailboxes")
 	smtpAddr := fs.String("smtp-addr", "127.0.0.1:2525", "address for the SMTP listener (with --smtp)")
@@ -208,6 +214,7 @@ func devCmd(args []string) {
 		StaticAddr:   staticAddr,
 		StaticSPA:    spaOverride,
 		AllowOrigins: splitList(*allowOrigin),
+		AllowHosts:   splitList(*allowHost),
 
 		MailDomain:        *mailDomain,
 		SMTPAddr:          smtpListen,

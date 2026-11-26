@@ -53,6 +53,12 @@ type Options struct {
 	// second machine on the LAN pointed at this emulator.
 	AllowOrigins []string
 
+	// AllowHosts are extra hostnames (beyond loopback) the emulator answers to in the Host header.
+	// For a container network, where another service calls http://altengine:9191 and the Host is
+	// the service name. Each is matched exactly — there is no wildcard, because answering to ANY
+	// Host is precisely what DNS rebinding needs (see hostMW).
+	AllowHosts []string
+
 	// MailDomain is the domain every mailbox address is on ("" => mail.localhost).
 	MailDomain string
 	// SMTPAddr, when set, starts an SMTP listener there that delivers into local mailboxes.
@@ -367,7 +373,7 @@ func (s *Server) staticAddr() string {
 // Handler returns the root http.Handler (host guard, CSRF-ish origin guard, CORS, per-instance
 // rate limits, request log).
 func (s *Server) Handler() http.Handler {
-	return logMW(hostMW(originMW(corsMW(rateMW(s.reg, s.lim, s.mux), s.opts.DevOpen, s.opts.AllowOrigins))))
+	return logMW(hostMW(s.opts.AllowHosts, originMW(corsMW(rateMW(s.reg, s.lim, s.mux), s.opts.DevOpen, s.opts.AllowOrigins))))
 }
 
 // ListenAndServe starts the HTTP server.
@@ -457,6 +463,15 @@ func isLoopbackHost(hostport string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// hostOnly is the lowercased host of a host[:port], without IPv6 brackets.
+func hostOnly(hostport string) string {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	return strings.ToLower(strings.Trim(host, "[]"))
+}
+
 // originAllowed reports whether a browser Origin may call the data plane in dev-open mode.
 func originAllowed(origin string, allowed []string) bool {
 	for _, a := range allowed {
@@ -478,9 +493,19 @@ func originAllowed(origin string, allowed []string) bool {
 // (including the Origin check below) is bypassed, and the page can drive /admin and /mcp in
 // full. The Host header is what distinguishes that request from a real local one, and it is the
 // only thing that does.
-func hostMW(next http.Handler) http.Handler {
+//
+// allowed names hosts to answer to as well, each matched exactly (case-insensitively, port
+// ignored). A rebinding attack needs a name the attacker controls; a container service name such
+// as "altengine" is not one, so listing it reopens nothing.
+func hostMW(allowed []string, next http.Handler) http.Handler {
+	extra := map[string]bool{}
+	for _, h := range allowed {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			extra[h] = true
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "" && !isLoopbackHost(r.Host) {
+		if r.Host != "" && !isLoopbackHost(r.Host) && !extra[hostOnly(r.Host)] {
 			http.Error(w, "this emulator only answers on localhost", http.StatusForbidden)
 			return
 		}

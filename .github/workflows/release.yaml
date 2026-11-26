@@ -9,6 +9,13 @@
 # Every binary and checksums.txt gets a signed build-provenance attestation. Verify a download
 # with:  gh attestation verify altengine_linux_amd64 --repo altlimit/altengine
 #
+# The same release also pushes the emulator image, ghcr.io/altlimit/altengine (linux/amd64 and
+# arm64, built from cli/Dockerfile), for docker compose. It is tagged <version>, and a release
+# that is not a prerelease is also tagged <major>.<minor> and latest. It is attested too:
+#   gh attestation verify oci://ghcr.io/altlimit/altengine:latest --repo altlimit/altengine
+# It runs here rather than in its own tag-triggered workflow because a manual run creates its
+# tag with GITHUB_TOKEN, and a push made with that token does not trigger other workflows.
+#
 # Actions are pinned by commit SHA; the comment names the release each SHA is.
 name: Release CLI
 
@@ -34,6 +41,8 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     permissions:
       contents: write # create the release (and the tag, on a manual run)
       id-token: write # sign the provenance attestation
@@ -125,3 +134,66 @@ jobs:
         run: |
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/cli/v$VERSION" -f "sha=$GITHUB_SHA" \
             || echo "::warning::cli/v$VERSION was not created (it may already exist)"
+
+  image:
+    name: Container image
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+      id-token: write # sign the provenance attestation
+      attestations: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # No QEMU: the Dockerfile cross-compiles on the runner's own architecture.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Image tags
+        id: tags
+        run: |
+          TAGS="$IMAGE:$VERSION"
+          case "$VERSION" in
+            *-*) ;; # a prerelease gets only its exact tag
+            *) TAGS="$TAGS,$IMAGE:${VERSION%.*},$IMAGE:latest" ;;
+          esac
+          echo "TAGS=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: cli
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.TAGS }}
+          build-args: VERSION=v${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=altengine
+            org.opencontainers.image.description=Local emulator for altengine services
+            org.opencontainers.image.licenses=MIT
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

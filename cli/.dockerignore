@@ -1,0 +1,5 @@
+altengine
+dist/
+.altengine/
+**/*_test.go
+Dockerfile

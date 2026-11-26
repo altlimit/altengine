@@ -287,6 +287,7 @@ altengine dev [flags]
   --static ./dist        serve a built site on its own port (see above)
   --static-port 9192     port for that site (default: --port + 1)
   --spa                  serve index.html for unmatched paths (default: detected)
+  --allow-host name      extra Host name(s) to answer to besides localhost (env ALTENGINE_ALLOW_HOST)
 ```
 
 Data persists to `--data` by default and survives restarts. Instances **auto-create on first use**,
@@ -311,6 +312,47 @@ data across if you need it.
 > JavaScript runtime and your Docker daemon on the network for anyone who can reach the port.
 > It is a development tool, not a sandbox — run only code you trust in it. See
 > [SECURITY.md](../SECURITY.md).
+
+### Docker / compose
+
+Each release is also published as `ghcr.io/altlimit/altengine` for linux/amd64 and arm64. The
+image holds the static binary and nothing else, and it pulls at about 11 MB.
+
+```yaml
+services:
+  altengine:
+    image: ghcr.io/altlimit/altengine:latest   # or pin a release, e.g. :0.2.38
+    ports:
+      - "127.0.0.1:9191:9191"   # console + API for your browser; loopback only, see above
+    volumes:
+      - altengine:/data
+  app:
+    build: .
+    environment:
+      ALTENGINE_URL: http://altengine:9191
+    depends_on:
+      altengine:
+        condition: service_healthy
+volumes:
+  altengine:
+```
+
+- **Other services call `http://altengine:9191`.** The emulator answers only to localhost Host
+  headers, which guards against DNS rebinding, plus the names in `--allow-host` /
+  `ALTENGINE_ALLOW_HOST`. The image sets that to `altengine`. If you name the service something
+  else, set `ALTENGINE_ALLOW_HOST` to that name. Names are matched exactly, with no wildcard.
+- **Data** lives in `/data`. Mount a volume there to keep it, or pass `command: [dev, --host,
+  0.0.0.0, --memory]` to start empty every time.
+- **Flags**: the default command is `dev --host 0.0.0.0 --data /data`. To add flags, repeat it in
+  `command:`, e.g. `[dev, --host, 0.0.0.0, --data, /data, --static, /site]`. Keep `--host 0.0.0.0`,
+  which is the container's own interface. Whether anything else can reach the emulator is set by
+  the published port.
+- **Health**: the image's `HEALTHCHECK` runs `altengine health`, which probes `/healthz` on port
+  9191. If you change `--port`, override `healthcheck.test` with `["CMD", "/altengine",
+  "health", "--port", "<port>"]`.
+- **Containers** are not available in the image, because it has no Docker daemon, so container
+  jobs answer 503. Run `altengine dev` on the host if you need them.
+- To build the image locally: `docker build -t altengine cli/`.
 
 ## Credentials
 
