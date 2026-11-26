@@ -60,10 +60,18 @@ class ChannelSocket:
         self._closed = False
         self._attempts = 0
         self._tasks: List[asyncio.Task] = []
-        self._queue: asyncio.Queue = asyncio.Queue()
+        # Created on first use, inside the running loop. On Python 3.9 an asyncio.Queue binds to
+        # the current loop when it is CONSTRUCTED, so one made here belongs to whatever loop (if
+        # any) existed when the socket was built, not to the asyncio.run() that connects it.
+        self._queue: Optional[asyncio.Queue] = None
         self._pending_subs: List[tuple] = []  # (channels, future)
         self._pending_pubs: List[asyncio.Future] = []
         self._last_activity = 0.0
+
+    def _inbox(self) -> asyncio.Queue:
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        return self._queue
 
     async def connect(self) -> None:
         """Dial the socket; returns once the connection is open. After a
@@ -118,7 +126,7 @@ class ChannelSocket:
     async def messages(self):
         """Async iterator over delivered messages (``{channel, data, ts}``)."""
         while not self._closed:
-            msg = await self._queue.get()
+            msg = await self._inbox().get()
             if msg is None:
                 return
             yield msg
@@ -217,7 +225,7 @@ class ChannelSocket:
         elif ftype is None and isinstance(frame.get("channel"), str):
             if self._on_message is not None:
                 self._on_message(frame)
-            self._queue.put_nowait(frame)
+            self._inbox().put_nowait(frame)
 
     async def _ping_loop(self, ws: Any) -> None:
         try:

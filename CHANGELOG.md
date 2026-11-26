@@ -5,10 +5,20 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- `github.com/gorilla/websocket` moves to the commit that fixes GO-2026-6278, its weak PRNG for
+  WebSocket mask keys, together with `golang.org/x/net` v0.58.0, `x/sys` v0.47.0 and
+  `x/term` v0.45.0. These are the newest versions that still build with Go 1.25.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
 SDK commit that a release will carry.
+
+- Python: a `ChannelSocket` can be built outside a running event loop on Python 3.9. Before,
+  its message queue was bound to whatever loop existed at construction, so building one after
+  an `asyncio.run()` raised "There is no current event loop".
 
 - All SDKs fall back to `ALTENGINE_KEY` after `ALTENGINE_API_KEY`.
 - JS: `require()` gets CommonJS type declarations; `ChannelSocket` works on Node 20 with the
