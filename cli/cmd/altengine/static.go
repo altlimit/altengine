@@ -259,12 +259,12 @@ func staticDeploy(fs *flag.FlagSet, rest []string, url, key, instance *string) {
 
 // printLive states the propagation window rather than implying the deploy is everywhere at once.
 // It is atomic per location — a visitor gets one build or the next, never a mix — but a location
-// already serving the site can take about a minute to notice.
+// already serving the site can take about two minutes to notice.
 func printLive(url string) {
 	if url != "" {
 		fmt.Println(" ", url)
 	}
-	fmt.Println("  live here now; everywhere within about a minute")
+	fmt.Println("  live here now; everywhere within about two minutes")
 }
 
 func humanBytes(n int64) string {
