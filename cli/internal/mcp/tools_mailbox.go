@@ -26,7 +26,7 @@ const (
 	mailboxDefaultLimit = 25
 	mailboxMaxLimit     = 100
 	// mailboxMaxWait is the longest one wait call holds the MCP request open.
-	mailboxMaxWait = 25
+	mailboxMaxWait = 60
 	// modelBodyMax is the body returned to a model, per part.
 	modelBodyMax = 32 * 1024
 )
@@ -368,7 +368,7 @@ func init() {
 				"to":             map[string]any{"type": "string", "description": "Only mail for this name (e.g. 'support') or full address."},
 				"from":           map[string]any{"type": "string", "description": "Sender glob, e.g. '*@github.com'."},
 				"subject":        map[string]any{"type": "string", "description": "Case-insensitive text the subject must contain."},
-				"timeoutSeconds": map[string]any{"type": "number", "description": fmt.Sprintf("Default and max %d.", mailboxMaxWait)},
+				"timeoutSeconds": map[string]any{"type": "number", "description": fmt.Sprintf("How long to wait, up to %d. Default %d.", mailboxMaxWait, mailboxMaxWait)},
 				"extract":        map[string]any{"type": "string", "enum": []string{"code", "links"}},
 			},
 			annotations: map[string]any{"readOnlyHint": true, "idempotentHint": false},

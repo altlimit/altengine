@@ -20,7 +20,7 @@ import type {
 } from "./types.js";
 
 /** The longest the server holds a `wait`. */
-export const MAX_WAIT_SECONDS = 30;
+export const MAX_WAIT_SECONDS = 60;
 
 function bytesToBase64(bytes: Uint8Array): string {
   let s = "";
@@ -94,7 +94,7 @@ export class MailboxClient {
 
   /**
    * Wait for the next inbound mail after `after`, holding the request up to `timeoutSeconds`
-   * (at most 30). Empty on timeout — call again with the returned `cursor` to keep waiting.
+   * (at most 60; the server checks every 5 s). Empty on timeout — call again with the returned `cursor` to keep waiting.
    *
    * Pass `after: "now"` BEFORE handing an address to whoever will mail it, so older mail is not
    * mistaken for the new one.

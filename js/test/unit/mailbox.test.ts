@@ -73,10 +73,10 @@ describe("reading", () => {
     });
   });
 
-  it("caps a wait at 30 seconds and gives the request longer than that", async () => {
+  it("caps a wait at 60 seconds and gives the request longer than that", async () => {
     const fetchMock = vi.fn(async (url: any, init: any) => {
       const u = new URL(String(url));
-      expect(u.searchParams.get("wait")).toBe("30");
+      expect(u.searchParams.get("wait")).toBe("60");
       expect(u.searchParams.get("after")).toBe("now");
       // The client's own 10ms timeout must not cut a long-poll short.
       await new Promise((r) => setTimeout(r, 50));

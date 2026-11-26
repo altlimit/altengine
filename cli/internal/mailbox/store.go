@@ -37,7 +37,7 @@ const (
 	// MaxWaiters is long-polls parked at once per instance; past it a waiter is answered empty.
 	MaxWaiters = 50
 	// MaxWaitMS is the longest a long-poll is held.
-	MaxWaitMS = 30_000
+	MaxWaitMS = 60_000
 	// MaxDeliveryAttempts is attempts before a delivery is given up on.
 	MaxDeliveryAttempts = 5
 )

@@ -21,7 +21,7 @@ import (
 // The mailbox data plane, /v1/mailbox/{instance} — same paths, shapes and refusals as hosted:
 //
 //	GET    /                                  the instance's addresses and the settings a caller needs
-//	GET    /messages                          list; `wait` long-polls for the next inbound message
+//	GET    /messages                          list; `wait` (≤60 s) waits for the next inbound message
 //	GET    /messages/{id}                     one message, bodies included; `?raw=1` adds a .eml URL
 //	GET    /messages/{id}/attachments/{idx}   a short-lived download URL for one attachment
 //	POST   /messages/{id}/read                mark read
