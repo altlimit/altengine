@@ -38,6 +38,7 @@ Request shape (search_query tool takes these as arguments):
 
   query                 the string above
   limit / cursor        pagination. Prefer the cursor over a large offset.
+                        limit 0 returns total_hits and facets only — the cheap way to count.
   sort                  [{"expr": "rating", "desc": true, "default": 0}]
                         expr: a number, date or atom field, "rank" or "_score". Text fields
                         do not sort. 'default' is used for documents missing the field: a

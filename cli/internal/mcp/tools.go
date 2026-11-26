@@ -258,6 +258,15 @@ func boundedLimit(args map[string]any) int {
 	return n
 }
 
+// searchLimit is boundedLimit, except that 0 passes through, as hosted: a search with
+// `limit: 0` returns total_hits and facets and no page.
+func searchLimit(args map[string]any) int {
+	if v, ok := args["limit"].(float64); ok && v == 0 {
+		return 0
+	}
+	return boundedLimit(args)
+}
+
 // instanceOf resolves an instance argument (a name, as everywhere else) to its registry
 // row, so a tool can fail with "no such instance" before issuing a request.
 func (h *Handler) instanceOf(service, name string) (*control.Instance, error) {
@@ -646,7 +655,7 @@ func init() {
 				"namespace":       nsArg,
 				"index":           map[string]any{"type": "string"},
 				"query":           map[string]any{"type": "string", "description": "e.g. genre:comedy rating > 3"},
-				"limit":           map[string]any{"type": "number", "description": fmt.Sprintf("Default %d, max %d.", defaultLimit, maxLimit)},
+				"limit":           map[string]any{"type": "number", "description": fmt.Sprintf("Default %d, max %d. 0 returns total_hits and facets only — no results.", defaultLimit, maxLimit)},
 				"cursor":          map[string]any{"type": "string"},
 				"returned_fields": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Fetch only these fields."},
 				"sort": map[string]any{"type": "array", "items": map[string]any{"type": "object"},
@@ -668,7 +677,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				body := map[string]any{"query": argString(args, "query"), "limit": boundedLimit(args)}
+				body := map[string]any{"query": argString(args, "query"), "limit": searchLimit(args)}
 				copyIfPresent(body, args, "cursor", "returned_fields", "sort", "ids_only",
 					"facets", "facet_discover", "facet_refinements", "total_hits_accuracy")
 				path := fmt.Sprintf("/v1/search/%s/ns/%s/idx/%s/search",

@@ -52,6 +52,8 @@ SDK commit that a release will carry.
   the default of 20. A negative `limit` is a 400.
 - Search sort `{"expr": "rank", "desc": false}` sorts rank ascending, as hosted. Before, rank
   always sorted descending.
+- The MCP `search_query` tool passes `limit: 0` through, as hosted, for counts and facets only.
+  Before, it clamped 0 up to 1.
 - `github.com/gorilla/websocket` moves to the commit that fixes GO-2026-6278, its weak PRNG for
   WebSocket mask keys, together with `golang.org/x/net` v0.58.0, `x/sys` v0.47.0 and
   `x/term` v0.45.0. These are the newest versions that still build with Go 1.25.

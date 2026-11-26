@@ -281,6 +281,19 @@ func TestDatastoreAndSearchToolsRoundTrip(t *testing.T) {
 			map[string]any{"name": "title", "type": "text", "value": "blue shoes"},
 		}}},
 	})
+	// limit 0 reaches the engine as 0 (counts only), not the clamp's floor of 1.
+	counts := runTool(t, h, "search_query", map[string]any{
+		"instance": "idx", "index": "products", "query": "shoes", "limit": float64(0),
+	})
+	if res, _ := counts["results"].([]any); len(res) != 0 || counts["total_hits"].(float64) != 1 {
+		t.Fatalf("search_query limit 0 = %v, want no results and total_hits 1", counts)
+	}
+	page := runTool(t, h, "search_query", map[string]any{
+		"instance": "idx", "index": "products", "query": "shoes",
+	})
+	if res, _ := page["results"].([]any); len(res) != 1 {
+		t.Fatalf("search_query without a limit = %v, want the match", page)
+	}
 	if _, isErr := toolText(t, h, "search_delete_documents", map[string]any{
 		"instance": "idx", "index": "products", "ids": []any{"p1"},
 	}); !isErr {
