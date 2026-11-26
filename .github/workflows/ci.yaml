@@ -84,7 +84,9 @@ jobs:
 
   python:
     name: Python SDK
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: setup-python has no 3.9 build for Ubuntu 26.04, and the SDK still
+    # supports 3.9 (requires-python >=3.9). Move this when 3.9 support is dropped.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python: ["3.9", "3.13"]
