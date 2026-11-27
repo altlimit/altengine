@@ -25,6 +25,8 @@ App Engine Search syntax, NOT Lucene/Elasticsearch DSL and NOT SQL. The query is
   up                        bare term (searches every text field)
   title:up                  field scope
   genre = "sci fi"          equality; quote values containing spaces
+  sku:12345                 a number/date value matches by the field's type: an atom
+                            "12345" as text, a number field numerically. No quotes needed.
   rating > 3                numeric comparison (also >=, <, <=, =)
   released < 2011-02-28     date comparison (YYYY-MM-DD)
   a AND b / a OR b          booleans; NOT x and -x negate

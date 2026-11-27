@@ -348,10 +348,18 @@ func ftsQuote(s string) string {
 func (p *parser) compileTermExpanded(field, word string, stem, phrase bool) *setSQL {
 	base := p.compileTerm(field, word, stem, phrase)
 	if n, ok := numericValue(word, stem, phrase); ok && field != "" {
-		// A number or date value compares numerically whatever the field's type, as hosted:
-		// `year:2011` matches a number 2011, not the word "2011" in text. Its synonym
-		// alternatives are still words.
-		base = p.numericCond(field, "=", n)
+		// A number or date value matches every type the field holds, as hosted: numerically
+		// for number/date, and by its literal text for atom, untokenprefix and full text —
+		// `sku:12345` finds the atom "12345", `year:2011` the number 2011. A field of no
+		// textual type (or unknown) matches numerically only. Synonym alternatives are words.
+		types := p.schema[field]
+		textual := types["text"] || types["html"] || types["tokenprefix"] || types["atom"] || types["untokenprefix"]
+		switch {
+		case !textual:
+			base = p.numericCond(field, "=", n)
+		case types["number"] || types["date"]:
+			base = union(p.numericCond(field, "=", n), base)
+		}
 	}
 	if stem || p.ix == nil || p.ix.syn == nil {
 		return base

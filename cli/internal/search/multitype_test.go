@@ -6,8 +6,9 @@ import (
 )
 
 // A field written as more than one type matches by every one of them, as hosted: the
-// results are the union of the full-text, atom and untokenprefix matches. And a number or
-// date value compares numerically whatever the field's types.
+// results are the union of the full-text, atom and untokenprefix matches. A number or date
+// value is no exception: it matches the number/date rows numerically and the textual rows by
+// its literal text.
 func TestFieldOfSeveralTypesMatchesByEach(t *testing.T) {
 	s := openTest(t)
 	docs := []Document{
@@ -28,10 +29,10 @@ func TestFieldOfSeveralTypesMatchesByEach(t *testing.T) {
 		`code:"blueberry j"`:   {"untok"},
 		`code:(blue OR jam)`:   {"atom", "text", "untok"},
 		`NOT code:blue`:        {"date", "num"},
-		`year:2011`:            {"num"},
+		`year:2011`:            {"num", "text"},
 		`year:"2011"`:          {"text"},
 		`on:2011-02-28`:        {"date"},
-		`code:blue year:2011`:  nil,
+		`code:blue year:2011`:  {"text"},
 		`code:blue OR year:20`: {"atom", "text", "untok"},
 	} {
 		res, err := s.Search("multi", SearchRequest{Query: q, IDsOnly: true})

@@ -40,6 +40,15 @@ SDK commit that a release will carry.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
 
+## v0.2.40 — 2026-11-27
+
+### Emulator
+
+- Search `field:value` with a number or date value matches by each type the field holds, as
+  hosted: an atom or untokenprefix by its literal text, full text by its token, a number or
+  date numerically. `sku:12345` finds the atom `"12345"` without quotes. Before, any such
+  value compared numerically only. Comparisons (`<`, `>=`, `!=`, …) stay numeric only.
+
 ## v0.2.39 — 2026-11-26
 
 ### Emulator
