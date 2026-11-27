@@ -40,6 +40,18 @@ SDK commit that a release will carry.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
 
+## v0.2.41 — 2026-11-27
+
+### Emulator
+
+- The console's Search page has a namespace picker. Before, it read only the default
+  namespace, so an app that keeps its indexes in namespaces (one per tenant, say) showed an
+  empty "pick index" list. It opens on the default namespace if that holds an index, else on
+  the first one that does; typing a name opens a new one to insert into.
+- Search `GET /namespaces` lists only namespaces that hold an index, as hosted. Before, it also
+  listed every namespace that had only been read. Index listings carry their real `namespace`
+  instead of `""`.
+
 ## v0.2.40 — 2026-11-27
 
 ### Emulator

@@ -53,3 +53,38 @@ func TestOpenRefusesInvalidNamespace(t *testing.T) {
 		t.Errorf("refused namespaces were recorded: %q", ns)
 	}
 }
+
+// A namespace that was only read holds no index, so it is not listed — hosted lists namespaces
+// from its index registry. The index listing names the namespace it was read from.
+func TestNamespacesListOnlyThoseWithIndexes(t *testing.T) {
+	for _, dir := range []string{"", t.TempDir()} {
+		m := NewManager(dir)
+		for _, ns := range []string{"", "7", "8"} {
+			s, err := m.Open("inst", ns, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ns == "8" {
+				if _, err := s.Put("products", []Document{{ID: "p", Fields: []Field{field("t", "atom", "x")}}}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				s.Get("products", "p") // a read of an index that is not there: 404
+			}
+		}
+		check := func(m *Manager, when string) {
+			if got := m.Namespaces("inst"); strings.Join(got, "|") != "8" {
+				t.Errorf("dir %q %s: namespaces = %q, want [8]", dir, when, got)
+			}
+		}
+		check(m, "live")
+		if dir != "" {
+			check(NewManager(dir), "after restart")
+		}
+		s, _ := m.Open("inst", "8", true)
+		rows, _, _, err := s.ListIndexes("", 10, "")
+		if err != nil || len(rows) != 1 || rows[0]["namespace"] != "8" {
+			t.Errorf("dir %q: ListIndexes in namespace 8 = %v (err %v), want products in namespace 8", dir, rows, err)
+		}
+	}
+}

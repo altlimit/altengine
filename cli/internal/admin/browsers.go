@@ -32,6 +32,16 @@ func (h *Handler) searchStore(r *http.Request) (*search.Store, error) {
 	return store, nil
 }
 
+// searchNamespaces lists the namespaces that hold an index, for the console's namespace picker.
+func (h *Handler) searchNamespaces(w http.ResponseWriter, r *http.Request) error {
+	in, err := h.resolveInst(r, "search")
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"namespaces": h.Srch.Namespaces(in.ID)})
+	return nil
+}
+
 func (h *Handler) searchIndexes(w http.ResponseWriter, r *http.Request) error {
 	store, err := h.searchStore(r)
 	if err != nil {

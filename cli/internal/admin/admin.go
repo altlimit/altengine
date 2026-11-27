@@ -75,6 +75,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/auth/{id}/signin-code", common.Wrap(h.authSignInCode))
 
 	// Search data browser.
+	mux.HandleFunc("GET /admin/search/{id}/namespaces", common.Wrap(h.searchNamespaces))
 	mux.HandleFunc("GET /admin/search/{id}/indexes", common.Wrap(h.searchIndexes))
 	mux.HandleFunc("GET /admin/search/{id}/indexes/{index}/documents", common.Wrap(h.searchListDocs))
 	mux.HandleFunc("POST /admin/search/{id}/indexes/{index}/search", common.Wrap(h.searchQuery))

@@ -77,9 +77,18 @@ func (m *Manager) Namespaces(instanceID string) []string {
 			}
 		}
 	}
+	// Only namespaces that hold an index, as hosted lists them: reading a namespace opens its
+	// database, so an empty file stands for no more than a lookup that found nothing.
 	out := make([]string, 0, len(set))
 	for ns := range set {
-		out = append(out, ns)
+		db, err := m.handle(instanceID, ns)
+		if err != nil {
+			continue
+		}
+		var has bool
+		if db.QueryRow(`SELECT EXISTS(SELECT 1 FROM _indexes)`).Scan(&has) == nil && has {
+			out = append(out, ns)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -173,8 +182,9 @@ type Index struct {
 
 // Store scopes index operations to one (instance, namespace).
 type Store struct {
-	db       *sql.DB
-	stemming bool
+	db        *sql.DB
+	namespace string
+	stemming  bool
 	// Instance-level query-time config, set by the route layer after Open (same package).
 	syn     *SynonymConfig
 	synDict map[string][]string
@@ -186,7 +196,7 @@ func (m *Manager) Open(instanceID, namespace string, stemming bool) (*Store, err
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, stemming: stemming}, nil
+	return &Store{db: db, namespace: namespace, stemming: stemming}, nil
 }
 
 // ApplyConfig threads the instance's query-time config (the synonym dictionary incl.
@@ -299,7 +309,7 @@ func (s *Store) ListIndexes(q string, limit int, cursor string) ([]map[string]an
 		if err := rows.Scan(&name, &created); err != nil {
 			return nil, false, "", err
 		}
-		out = append(out, map[string]any{"name": name, "namespace": "", "created_at": created})
+		out = append(out, map[string]any{"name": name, "namespace": s.namespace, "created_at": created})
 		names = append(names, name)
 		createds = append(createds, created)
 	}

@@ -212,7 +212,7 @@ function renderDSTab(name, holder) {
       try {
         const doc = { data: parseJSONField(data.value, {}) };
         if (key.value.trim()) doc.key = key.value.trim();
-        const res = await jPost(base() + "/documents", { documents: [doc] });
+        const res = await jPost(url("/documents"), { documents: [doc] });
         toast("saved key " + res.keys[0]); data.value = ""; key.value = "";
       } catch (e) { toast(e.message, true); }
     } }, "Insert / upsert");
@@ -270,23 +270,43 @@ function renderDocs(out, docs, base, reload, meta) {
 }
 
 // ================= SEARCH =================
-const srState = { instId: null, index: "" };
+// ns null = not chosen yet: the first render opens the default namespace if it holds an
+// index, else the first one that does, so an app that only writes to namespaces is not blank.
+const srState = { instId: null, ns: null, index: "" };
+// Every search browser call names its namespace in the query string ("" = the default one).
+const srURL = (path) => `/admin/search/${srState.instId}${path}?namespace=${encodeURIComponent(srState.ns)}`;
 views.search = async () => {
   main.append(h("h1", {}, "Search"));
-  main.append(await instancePicker("search", (id) => { srState.instId = id; renderSearch(); }, srState.instId));
+  main.append(await instancePicker("search", (id) => { srState.instId = id; srState.ns = null; srState.index = ""; renderSearch(); }, srState.instId));
   main.append(h("div", { id: "sr-holder" }));
   if (srState.instId) renderSearch();
 };
 async function renderSearch() {
   const holder = $("#sr-holder"); if (!holder) return; holder.innerHTML = "";
+  // Namespace: the ones holding an index, or type a new one to insert into.
+  let namespaces = [];
+  try { ({ namespaces } = await jGet(`/admin/search/${srState.instId}/namespaces`)); } catch {}
+  if (srState.ns === null) srState.ns = namespaces.includes("") ? "" : (namespaces[0] ?? "");
+  if (!namespaces.includes(srState.ns)) namespaces.unshift(srState.ns);
+  const nsSel = h("select", {});
+  const nsInput = h("input", { placeholder: "namespace (empty = default)", class: "flex1", value: srState.ns });
+  const pickNs = (ns) => { srState.ns = ns; srState.index = ""; renderSearch(); };
+  nsSel.addEventListener("change", () => pickNs(nsSel.value));
+  nsInput.addEventListener("change", () => pickNs(nsInput.value.trim()));
+  for (const ns of namespaces) nsSel.append(h("option", { value: ns }, ns === "" ? "(default)" : ns));
+  nsSel.value = srState.ns;
+
   const indexSel = h("select", {});
   const indexInput = h("input", { placeholder: "index name", class: "flex1", value: srState.index, onchange: (e) => { srState.index = e.target.value; } });
   indexSel.addEventListener("change", () => { if (indexSel.value) { srState.index = indexSel.value; indexInput.value = indexSel.value; } });
+  indexSel.append(h("option", { value: "" }, "— pick index —"));
   try {
-    const { indexes } = await jGet(`/admin/search/${srState.instId}/indexes`);
-    indexSel.append(h("option", { value: "" }, "— pick index —"));
+    const { indexes } = await jGet(srURL("/indexes") + "&limit=100");
     for (const i of indexes) indexSel.append(h("option", { value: i.name }, i.name));
-  } catch {}
+    if (!indexes.length) indexSel.options[0].textContent = "— no indexes in this namespace —";
+  } catch (e) { toast(e.message, true); }
+  holder.append(h("div", { class: "row" },
+    h("div", { class: "flex1" }, h("label", {}, "Namespace"), h("div", { class: "row" }, nsSel, nsInput))));
   holder.append(h("div", { class: "row" },
     h("div", { class: "flex1" }, h("label", {}, "Index"), h("div", { class: "row" }, indexSel, indexInput))));
 
@@ -296,7 +316,7 @@ async function renderSearch() {
 }
 function renderSearchTab(name, holder) {
   const body = holder.querySelector(".subtab-body"); body.innerHTML = "";
-  const base = () => `/admin/search/${srState.instId}/indexes/${encodeURIComponent(srState.index)}`;
+  const url = (path) => srURL(`/indexes/${encodeURIComponent(srState.index)}${path}`);
   const needIx = () => { if (!srState.index) { toast("pick an index", true); return false; } return true; };
 
   if (name === "Search") {
@@ -308,7 +328,7 @@ function renderSearchTab(name, holder) {
       try {
         const req = { query: q.value, limit: 25 };
         if (facets.value.trim()) req.facet_discover = parseInt(facets.value);
-        const res = await jPost(base() + "/search", req);
+        const res = await jPost(url("/search"), req);
         out.innerHTML = "";
         out.append(h("div", { class: "muted", style: "margin:6px 0" }, `${res.total_hits}${res.total_hits_exact ? "" : "+"} hits`));
         if (res.facets && res.facets.length) out.append(h("pre", {}, "facets: " + JSON.stringify(res.facets, null, 2)));
@@ -319,7 +339,7 @@ function renderSearchTab(name, holder) {
             h("td", { class: "mono" }, r.id),
             h("td", { class: "mono" }, String(r.rank)),
             h("td", {}, h("pre", { style: "margin:0;max-height:160px" }, JSON.stringify(r.document, null, 2))),
-            h("td", {}, h("button", { class: "btn danger sm", onclick: async () => { await jPost(base() + "/documents/delete", { ids: [r.id] }); toast("deleted"); run.click(); } }, "Delete"))
+            h("td", {}, h("button", { class: "btn danger sm", onclick: async () => { await jPost(url("/documents/delete"), { ids: [r.id] }); toast("deleted"); run.click(); } }, "Delete"))
           ));
         }
         t.append(tb);
@@ -333,7 +353,7 @@ function renderSearchTab(name, holder) {
     const doc = h("textarea", { style: "min-height:200px", placeholder: '{\n  "id": "m1",\n  "fields": [\n    {"name":"title","type":"text","value":"Up in the Air"},\n    {"name":"genre","type":"atom","value":"drama"},\n    {"name":"rating","type":"number","value":4}\n  ],\n  "facets": [{"name":"genre","type":"atom","value":"drama"}]\n}' });
     const run = h("button", { class: "btn", onclick: async () => {
       if (!needIx()) return;
-      try { const res = await jPost(base() + "/documents", { documents: [parseJSONField(doc.value, {})] }); toast("saved " + res.ids[0]); }
+      try { const res = await jPost(url("/documents"), { documents: [parseJSONField(doc.value, {})] }); toast("saved " + res.ids[0]); }
       catch (e) { toast(e.message, true); }
     } }, "Put document");
     body.append(h("label", {}, "document (JSON)"), doc, h("div", { class: "row", style: "margin-top:8px" }, run));

@@ -17,7 +17,7 @@ docker run --rm -p 127.0.0.1:9191:9191 ghcr.io/altlimit/altengine
 |---|---|
 | `latest` | The newest release. |
 | `0.2` | The newest `0.2.x` release. |
-| `0.2.40` | Exactly that release. Pin this in CI. |
+| `0.2.41` | Exactly that release. Pin this in CI. |
 
 - [How it behaves in a container](#how-it-behaves-in-a-container)
 - [Samples](#samples): [app + emulator](#app--emulator), [in-memory](#in-memory-for-tests-and-ci),
@@ -92,7 +92,7 @@ no volume.
 ```yaml
 services:
   altengine:
-    image: ghcr.io/altlimit/altengine:0.2.40   # pin a version in CI
+    image: ghcr.io/altlimit/altengine:0.2.41   # pin a version in CI
     command: [dev, --host, 0.0.0.0, --memory]
     ports:
       - "127.0.0.1:9191:9191"
@@ -278,7 +278,7 @@ Names are matched exactly: there is no wildcard, and `emulator.example.com` is n
 ```yaml
 services:
   altengine:
-    image: ghcr.io/altlimit/altengine:0.2.40
+    image: ghcr.io/altlimit/altengine:0.2.41
     command:
       - dev
       - --host
@@ -360,7 +360,7 @@ site. 2525 is SMTP, with `--smtp`.
 **Verify an image** with its signed build provenance:
 
 ```bash
-gh attestation verify oci://ghcr.io/altlimit/altengine:0.2.40 --repo altlimit/altengine
+gh attestation verify oci://ghcr.io/altlimit/altengine:0.2.41 --repo altlimit/altengine
 ```
 
 **Build it yourself** from the repository root: `docker build -t altengine cli/`.
