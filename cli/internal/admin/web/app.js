@@ -967,7 +967,8 @@ function mailSettings(body, info) {
   const inboundCap = num(s.inboundDailyCap);
   const sendCap = num(s.dailySendCap, "organization cap");
   const rateLimit = num(s.rateLimit, "no limit");
-  const keepRaw = checkbox("Keep the raw .eml", s.keepRaw);
+  const keepRaw = checkbox("Keep the original message (.eml)", s.keepRaw);
+  const keepAttachments = checkbox("Keep attachments", s.keepAttachments !== false);
   const optNum = (el) => (el.value.trim() === "" ? null : Number(el.value));
 
   const routes = JSON.parse(JSON.stringify(info.config.routes || []));
@@ -1021,6 +1022,7 @@ function mailSettings(body, info) {
       settings: {
         rateLimit: optNum(rateLimit), region: s.region, acceptMode: acceptMode.value, inboundDailyCap: optNum(inboundCap),
         retentionDays: optNum(retention), sendMode: sendMode.value, dailySendCap: optNum(sendCap), keepRaw: keepRaw.cb.checked,
+        keepAttachments: keepAttachments.cb.checked,
       },
       routes,
     };
@@ -1033,7 +1035,10 @@ function mailSettings(body, info) {
     h("div", { class: "card" }, h("h2", { style: "margin-top:0" }, "Settings"),
       h("div", { class: "row" }, field("Accept mail for", acceptMode), field("Send mode", sendMode), field("Retention (days, 1–90)", retention)),
       h("div", { class: "row" }, field("Inbound per day (max 5000)", inboundCap), field("Sends per day (blank: org cap)", sendCap), field("Rate limit (req/min, blank: none)", rateLimit)),
-      h("div", { style: "margin-top:8px" }, keepRaw.el),
+      h("div", { style: "margin-top:8px" }, keepAttachments.el, keepRaw.el),
+      h("p", { class: "muted", style: "font-size:12px" }, info.file_store
+        ? `Files are kept in the blob instance ${info.file_store.name} until their message expires.`
+        : "Nothing is kept until you choose a file store below. Attachments are still listed."),
       h("p", { class: "muted", style: "font-size:12px" }, `Region: ${s.region} (fixed at creation).`)),
     h("h2", {}, "Routes"),
     h("p", { class: "muted" }, "The first route whose every condition holds runs its actions."),
@@ -1042,6 +1047,27 @@ function mailSettings(body, info) {
       h("button", { class: "btn ghost", type: "button", onclick: () => { if (routes.length >= 20) { toast("at most 20 routes", true); return; } routes.push({ match: {}, do: [{ function: "" }] }); drawRoutes(); } }, "+ Route"),
       save),
     result));
+
+  // The file store: which blob instance keeps attachments and raw messages. Its own route, not part
+  // of the config PUT, as hosted.
+  const storeSel = h("select", { id: "mb-file-store" }, h("option", { value: "" }, "None — attachments are listed, not stored"));
+  jGet("/admin/blob").then(({ instances }) => {
+    for (const b of instances || []) storeSel.append(h("option", { value: b.id, ...(info.file_store && info.file_store.id === b.id ? { selected: "" } : {}) }, b.name));
+  }).catch((e) => toast(e.message, true));
+  const setStore = async (body) => {
+    try {
+      const r = await jPut(`/admin/mailbox/${mbState.instId}/file-store`, body);
+      toast(r.file_store ? `files are kept in ${r.file_store.name}` : "files are no longer kept");
+      info.file_store = r.file_store;
+      body.create && location.reload();
+    } catch (e) { toast(e.message, true); }
+  };
+  body.append(h("div", { class: "card" }, h("h2", { style: "margin-top:0" }, "File store"),
+    h("p", { class: "muted", style: "font-size:12px" }, "A blob instance that keeps this mailbox's attachments and, if turned on, original messages. Each file is a private object there, deleted when its message expires. Changing it affects new mail only."),
+    h("div", { class: "row" },
+      field("File store", storeSel),
+      h("button", { class: "btn ghost", type: "button", style: "align-self:end", onclick: () => setStore({ blob_instance_id: storeSel.value || null }) }, "Use this store"),
+      info.file_store ? null : h("button", { class: "btn ghost", type: "button", style: "align-self:end", onclick: () => setStore({ create: true }) }, `Create ${info.name}-files`))));
 
   // The webhook signing secret.
   const secretOut = h("pre", { "aria-live": "polite" }, "hidden");

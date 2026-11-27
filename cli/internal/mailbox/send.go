@@ -368,8 +368,13 @@ func (s *Service) Send(inst *control.Instance, input map[string]any) (*Summary, 
 	}
 	log.Printf("[mailbox] %s sent %s from %s to %s (%d attachment(s)): %s", inst.Name, id, fromAddr, strings.Join(append(append([]string{}, to...), cc...), ","), len(parts), status)
 
-	// A copy of what was sent, so the Sent message lists its attachments like a received one. The
-	// mail has already gone: a part that cannot be stored is listed as such, not a failed send.
+	// A copy of what was sent, so the Sent message lists its attachments like a received one — kept
+	// in the mailbox's file store when it has one (files.go). The mail has already gone: a part that
+	// cannot be stored is listed as such, not a failed send.
+	var fs *fileStore
+	if len(parts) > 0 && st.KeepAttachments {
+		fs = s.resolveFileStore(inst)
+	}
 	attachments := make([]Attachment, 0, len(parts))
 	var storedBytes, size int64
 	var keys []string
@@ -383,15 +388,22 @@ func (s *Service) Send(inst *control.Instance, input map[string]any) (*Summary, 
 			cid = &v
 		}
 		a := Attachment{Idx: idx, Filename: &fn, ContentType: ct, Size: int64(len(p.Bytes)), ContentID: cid, Disposition: &disp}
-		key := AttachmentKey(id, idx)
-		if err := s.store.PutBytes(inst.ID, key, p.Bytes); err != nil {
-			log.Printf("[mailbox] storing sent attachment %s failed: %v", key, err)
-			why := "not stored"
+		switch {
+		case fs == nil:
+			// No file store: listed, not stored.
+		case a.Size > fs.cfg.MaxObjectBytes:
+			why := "over the file store's object limit"
 			a.Rejected = &why
-		} else {
-			a.Key = key
-			keys = append(keys, key)
-			storedBytes += a.Size
+		default:
+			key, err := s.putFile(fs, FileName(inst.Name, id, idx, &fn), ct, p.Bytes, map[string]any{"mailbox": inst.Name, "message": id, "part": idx})
+			if err != nil {
+				log.Printf("[mailbox] storing sent attachment %s/%d failed: %v", id, idx, err)
+				why := "not stored"
+				a.Rejected = &why
+			} else {
+				a.Key = key
+				keys = append(keys, key)
+			}
 		}
 		size += a.Size
 		attachments = append(attachments, a)
@@ -413,7 +425,7 @@ func (s *Service) Send(inst *control.Instance, input map[string]any) (*Summary, 
 	}, nil)
 	if err != nil {
 		// The bytes would otherwise sit with no row naming them until the instance is deleted.
-		s.store.deleteBytes(inst.ID, keys)
+		s.store.removeFiles(inst.ID, keys)
 		return nil, err
 	}
 	return &sum, nil

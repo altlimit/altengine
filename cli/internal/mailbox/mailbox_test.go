@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
+	"github.com/altlimit/altengine/cli/internal/blob"
 	"github.com/altlimit/altengine/cli/internal/channel"
 	"github.com/altlimit/altengine/cli/internal/common"
 	"github.com/altlimit/altengine/cli/internal/control"
@@ -25,13 +26,15 @@ import (
 // --- fixtures ----------------------------------------------------------------------------------
 
 type world struct {
-	reg  *control.Registry
-	svc  *Service
-	auth *auth.Store
-	mux  *http.ServeMux
-	hub  *channel.Hub
-	mu   sync.Mutex
-	fnIn []fnCall
+	reg *control.Registry
+	svc *Service
+	// blobs is the blob store a mailbox's file store lives in.
+	blobs *blob.Store
+	auth  *auth.Store
+	mux   *http.ServeMux
+	hub   *channel.Hub
+	mu    sync.Mutex
+	fnIn  []fnCall
 	// fnStatus is what the fake function answers.
 	fnStatus int
 }
@@ -60,14 +63,40 @@ func newWorld(t *testing.T, dir string) *world {
 		w.mu.Unlock()
 		rw.WriteHeader(status)
 	})
-	w.svc = NewService(reg, NewStore(dir), w.mux, w.hub, Options{})
+	w.blobs = blob.NewStore(dir)
+	w.svc = NewService(reg, NewStore(dir), w.mux, w.hub, Options{}).WithFiles(w.blobs)
 	w.auth = auth.NewStore(true)
 	NewHandler(reg, w.auth, w.svc).Register(w.mux)
 	reg.OnDelete("mailbox", w.svc.Drop)
+	reg.OnDelete("blob", w.blobs.Drop)
+	reg.OnBeforeDelete("blob", w.svc.GuardBlobDelete)
 	return w
 }
 
+// create makes a mailbox that keeps its files: pointed at a `<name>-files` blob instance, with
+// keepRaw on unless cfg says otherwise. createBare makes one with no file store, as a new one is.
 func (w *world) create(t *testing.T, name string, cfg map[string]any) *control.Instance {
+	t.Helper()
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	st, _ := cfg["settings"].(map[string]any)
+	if st == nil {
+		st = map[string]any{}
+	}
+	if _, set := st["keepRaw"]; !set {
+		st["keepRaw"] = true
+	}
+	cfg["settings"] = st
+	in := w.createBare(t, name, cfg)
+	w.reg.GetOrCreate("blob", name+"-files")
+	if _, err := w.svc.SetFileStore(in, name+"-files"); err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+func (w *world) createBare(t *testing.T, name string, cfg map[string]any) *control.Instance {
 	t.Helper()
 	in, err := w.reg.Create("mailbox", name)
 	if err != nil {
@@ -184,7 +213,7 @@ func TestAddresses(t *testing.T) {
 
 func TestConfig(t *testing.T) {
 	c := ParseConfig(map[string]any{})
-	if c.Settings.AcceptMode != "any" || c.Settings.SendMode != "reply" || c.Settings.RetentionDays != 7 || !c.Settings.KeepRaw || len(c.Routes) != 0 {
+	if c.Settings.AcceptMode != "any" || c.Settings.SendMode != "reply" || c.Settings.RetentionDays != 7 || c.Settings.KeepRaw || !c.Settings.KeepAttachments || len(c.Routes) != 0 {
 		t.Fatalf("defaults = %+v", c)
 	}
 	if err := ValidateConfig(DefaultConfigMap()); err != nil {
@@ -799,6 +828,15 @@ func TestV1Surface(t *testing.T) {
 	if code != 200 || info["address"] != "acme@mail.localhost" || info["acceptMode"] != "any" {
 		t.Fatalf("info = %d %v", code, info)
 	}
+	// Keep its files, raw copy included.
+	acme := w.reg.Get("mailbox", "acme")
+	w.reg.GetOrCreate("blob", "acme-files")
+	if _, err := w.svc.SetFileStore(acme, "acme-files"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.reg.SaveConfig(acme, map[string]any{"settings": map[string]any{"keepRaw": true}}); err != nil {
+		t.Fatal(err)
+	}
 	// An instance whose name cannot be a slug has no address, but still takes inject.
 	_, odd := w.do(t, "GET", "/v1/mailbox/My_Box", nil)
 	if odd["address"] != nil || odd["domain"] != "mail.localhost" {
@@ -950,5 +988,81 @@ func TestSMTPListener(t *testing.T) {
 	// The client stuffs the leading dot; the listener must take it back off.
 	if !strings.HasPrefix(*rec.Text, ".leading dot") || strings.HasPrefix(*rec.Text, "..") {
 		t.Fatalf("dot-stuffing not undone: %q", *rec.Text)
+	}
+}
+
+// --- the file store ------------------------------------------------------------------------------
+
+func TestNoFileStoreKeepsNoFiles(t *testing.T) {
+	w := newWorld(t, "")
+	in := w.createBare(t, "acme", map[string]any{"settings": map[string]any{"keepRaw": true}})
+	m, err := w.svc.DeliverLocal(in, "help", "x@y.com", mimeMsg("jane@example.com", "s", "b", map[string][]byte{"a.pdf": []byte("PDF")}), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := m.Attachments[0]
+	if m.RawKey != "" || a.Key != "" || a.Rejected != nil || m.AttachmentCount != 1 {
+		t.Fatalf("with no store: raw=%q attachment=%+v count=%d", m.RawKey, a, m.AttachmentCount)
+	}
+	code, out := w.do(t, "GET", "/v1/mailbox/acme/messages/"+m.ID+"/attachments/0", nil)
+	if code != 404 || !strings.Contains(fmt.Sprint(out), "file store") {
+		t.Fatalf("download = %d %v", code, out)
+	}
+}
+
+func TestFileStoreLifecycle(t *testing.T) {
+	w := newWorld(t, "")
+	in := w.create(t, "acme", nil)
+	store := w.reg.Get("blob", "acme-files")
+	m, err := w.svc.DeliverLocal(in, "help", "x@y.com", mimeMsg("jane@example.com", "s", "b", map[string][]byte{"a.pdf": []byte("PDF")}), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(m.RawKey, "blob/"+store.ID+"/") || !strings.HasPrefix(m.Attachments[0].Key, "blob/"+store.ID+"/") {
+		t.Fatalf("keys = %q %q", m.RawKey, m.Attachments[0].Key)
+	}
+	if recs, _ := w.blobs.List(store.ID, "", 10, ""); len(recs) != 2 {
+		t.Fatalf("store objects = %d", len(recs))
+	}
+	code, info := w.do(t, "GET", "/admin/mailbox/"+in.ID+"/info", nil)
+	if code != 200 || info["file_store"].(map[string]any)["name"] != "acme-files" {
+		t.Fatalf("info = %d %v", code, info)
+	}
+
+	// The store will not go while the mailbox names it.
+	if _, err := w.reg.DeleteInstanceChecked("blob", store.ID); err == nil || !strings.Contains(err.Error(), "keeps the files of mailbox 'acme'") {
+		t.Fatalf("blob delete = %v", err)
+	}
+	// Deleting the mailbox takes its files out of the store and leaves the store.
+	if ok, err := w.reg.DeleteInstanceChecked("mailbox", in.ID); !ok || err != nil {
+		t.Fatalf("mailbox delete = %v %v", ok, err)
+	}
+	if recs, _ := w.blobs.List(store.ID, "", 10, ""); len(recs) != 0 {
+		t.Fatalf("files outlived their mailbox: %d", len(recs))
+	}
+	if w.reg.Get("blob", "acme-files") == nil {
+		t.Fatal("the store went with the mailbox")
+	}
+	if ok, err := w.reg.DeleteInstanceChecked("blob", store.ID); !ok || err != nil {
+		t.Fatalf("blob delete once unused = %v %v", ok, err)
+	}
+}
+
+func TestSetFileStoreRoute(t *testing.T) {
+	w := newWorld(t, "")
+	in := w.createBare(t, "acme", nil)
+	code, out := w.do(t, "PUT", "/admin/mailbox/"+in.ID+"/file-store", strings.NewReader(`{"create":true}`))
+	if code != 200 || out["file_store"].(map[string]any)["name"] != "acme-files" {
+		t.Fatalf("create = %d %v", code, out)
+	}
+	code, out = w.do(t, "PUT", "/admin/mailbox/"+in.ID+"/file-store", strings.NewReader(`{"blob_instance_id":null}`))
+	if code != 200 || out["file_store"] != nil {
+		t.Fatalf("none = %d %v", code, out)
+	}
+	if id, _ := w.svc.store.FileStore(in.ID); id != "" {
+		t.Fatalf("still pointed at %q", id)
+	}
+	if code, _ = w.do(t, "PUT", "/admin/mailbox/"+in.ID+"/file-store", strings.NewReader(`{"blob_instance_id":"nope"}`)); code != 404 {
+		t.Fatalf("unknown store = %d", code)
 	}
 }

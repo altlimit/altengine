@@ -184,13 +184,21 @@ func TestSentAttachmentsAreStoredAndListed(t *testing.T) {
 	if status != 200 || string(body) != pdf || !strings.HasPrefix(disp, "attachment;") {
 		t.Fatalf("download = %d %q %q", status, body, disp)
 	}
-	// Stored bytes count them; deleting the message deletes them.
-	if _, stored, _ := w.svc.store.Stats(in.ID); stored != int64(len(pdf)+len("PNG")) {
-		t.Errorf("stored bytes = %d", stored)
+	// They are objects in the file store — blob's bytes, not the mailbox's — and deleting the
+	// message deletes them, rows and all.
+	if _, stored, _ := w.svc.store.Stats(in.ID); stored != 0 {
+		t.Errorf("mailbox stored bytes = %d, want 0", stored)
+	}
+	store := w.reg.Get("blob", "acme-files")
+	if recs, _ := w.blobs.List(store.ID, "acme-"+id, 10, ""); len(recs) != 2 || recs[0].Public {
+		t.Fatalf("file store objects = %+v", recs)
+	}
+	if a0["blobId"] == nil {
+		t.Error("a stored attachment names its blob object")
 	}
 	w.do(t, "DELETE", "/v1/mailbox/acme/messages/"+id, nil)
-	if _, ok := w.svc.store.Bytes(in.ID, AttachmentKey(id, 0)); ok {
-		t.Error("attachment bytes outlived their message")
+	if recs, _ := w.blobs.List(store.ID, "", 10, ""); len(recs) != 0 {
+		t.Errorf("attachments outlived their message: %+v", recs)
 	}
 }
 

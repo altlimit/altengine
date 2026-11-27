@@ -31,7 +31,7 @@
     "get_instance_config", "list_instances", "patch_instance_config",
     "mailbox_create_address", "mailbox_delete_message", "mailbox_get_message", "mailbox_info",
     "mailbox_keep_message", "mailbox_list_addresses", "mailbox_list_messages", "mailbox_reply",
-    "mailbox_reveal_webhook_secret", "mailbox_rotate_webhook_secret", "mailbox_send",
+    "mailbox_reveal_webhook_secret", "mailbox_rotate_webhook_secret", "mailbox_send", "mailbox_set_file_store",
     "mailbox_wait_for_message",
     "search_delete_documents", "search_get_documents", "search_get_schema", "search_list_indexes",
     "search_put_documents", "search_query",

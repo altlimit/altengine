@@ -91,7 +91,12 @@ func (s *Service) SetLoopback(v bool) { s.loopback.Store(v) }
 func (s *Service) Wait() { s.wg.Wait() }
 
 // Drop is the instance-delete hook: every message, file and key the instance holds.
-func (s *Service) Drop(instanceID string) { s.store.Drop(instanceID) }
+// Files in its file store go first — the message rows are the only handle on them — and the store
+// itself stays: it is a blob instance the user owns.
+func (s *Service) Drop(instanceID string) {
+	s.store.releaseFiles(instanceID)
+	s.store.Drop(instanceID)
+}
 
 // addressInfo is how an instance's addresses look: domain, main address and pattern. The address
 // and pattern are null when the instance's name is not a valid slug.

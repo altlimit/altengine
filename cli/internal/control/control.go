@@ -104,6 +104,8 @@ type Registry struct {
 	keys  map[string]*APIKey   // key: id
 	path  string               // persistence file ("" = memory only)
 	drops map[string][]func(instanceID string)
+	// guards refuse a delete before anything is dropped: a blob instance a mailbox keeps its files in.
+	guards map[string][]func(instanceID string) error
 
 	validators map[string][]func(in *Instance, next, before map[string]any) error
 	saved      map[string][]func(in *Instance, before map[string]any)
@@ -120,6 +122,7 @@ func New(dir string) (*Registry, error) {
 		insts:      map[string]*Instance{},
 		keys:       map[string]*APIKey{},
 		drops:      map[string][]func(string){},
+		guards:     map[string][]func(string) error{},
 		validators: map[string][]func(*Instance, map[string]any, map[string]any) error{},
 		saved:      map[string][]func(*Instance, map[string]any){},
 	}
@@ -435,6 +438,28 @@ func (r *Registry) OnDelete(service string, drop func(instanceID string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.drops[service] = append(r.drops[service], drop)
+}
+
+// OnBeforeDelete registers a check that can refuse deleting one of a service's instances — one
+// another service still depends on. Checked by DeleteInstanceChecked, before anything is dropped.
+func (r *Registry) OnBeforeDelete(service string, check func(instanceID string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guards[service] = append(r.guards[service], check)
+}
+
+// DeleteInstanceChecked is DeleteInstance after every OnBeforeDelete check has passed. Every
+// surface that deletes an instance calls this one.
+func (r *Registry) DeleteInstanceChecked(service, id string) (bool, error) {
+	r.mu.RLock()
+	guards := append([]func(string) error{}, r.guards[service]...)
+	r.mu.RUnlock()
+	for _, g := range guards {
+		if err := g(id); err != nil {
+			return false, err
+		}
+	}
+	return r.DeleteInstance(service, id), nil
 }
 
 // ConfigSnapshot returns a shallow copy of an instance's config, which — unlike Config() — the

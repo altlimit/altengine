@@ -252,8 +252,23 @@ func (s *Service) Ingest(inst *control.Instance, to Local, envelopeFrom string, 
 	verified := SenderVerified(append([]string{stamp}, e.AuthResults...), from.Address, s.domain)
 	stored := append([]byte("Authentication-Results: "+stamp+"\r\n"), raw...)
 
+	// Where its files go, if anywhere (files.go). Resolved first, so each attachment says whether
+	// it will be stored.
+	var fs *fileStore
+	if cfg.Settings.KeepRaw || cfg.Settings.KeepAttachments {
+		fs = s.resolveFileStore(inst)
+	}
+	keepFiles := fs != nil && cfg.Settings.KeepAttachments
+	meta := func(part any) map[string]any {
+		return map[string]any{"mailbox": inst.Name, "message": id, "part": part}
+	}
+	var written []string
+	fail := func(err error) (*Record, error) {
+		s.store.removeFiles(inst.ID, written)
+		return nil, err
+	}
+
 	attachments := make([]Attachment, 0, len(e.Attachments))
-	var storedBytes int64
 	for idx, a := range e.Attachments {
 		att := Attachment{
 			Idx:         idx,
@@ -270,23 +285,30 @@ func (s *Service) Ingest(inst *control.Instance, to Local, envelopeFrom string, 
 		case len(a.Content) > MaxAttachmentBytes:
 			r := "too large"
 			att.Rejected = &r
-		default:
-			att.Key = AttachmentKey(id, idx)
-			if err := s.store.PutBytes(inst.ID, att.Key, a.Content); err != nil {
-				return nil, err
+		case keepFiles && int64(len(a.Content)) > fs.cfg.MaxObjectBytes:
+			r := "over the file store's object limit"
+			att.Rejected = &r
+		case keepFiles:
+			key, err := s.putFile(fs, FileName(inst.Name, id, idx, att.Filename), att.ContentType, a.Content, meta(idx))
+			if err != nil {
+				return fail(err)
 			}
-			storedBytes += att.Size
+			att.Key = key
+			written = append(written, key)
 		}
 		attachments = append(attachments, att)
 	}
 	rawKey := ""
-	if cfg.Settings.KeepRaw {
-		rawKey = RawKey(id)
-		if err := s.store.PutBytes(inst.ID, rawKey, stored); err != nil {
-			return nil, err
+	if fs != nil && cfg.Settings.KeepRaw && int64(len(stored)) <= fs.cfg.MaxObjectBytes {
+		key, err := s.putFile(fs, FileName(inst.Name, id, -1, nil), "message/rfc822", stored, meta("raw"))
+		if err != nil {
+			return fail(err)
 		}
-		storedBytes += int64(len(stored))
+		rawKey = key
+		written = append(written, key)
 	}
+	// Nothing in the mailbox's own storage: the store's bytes are blob's.
+	var storedBytes int64
 	subject := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(e.Subject)
 	msg := NewMessage{
 		ID: id, Direction: "in", Local: to.Local, PlusTag: to.Tag, From: from,
@@ -309,7 +331,7 @@ func (s *Service) Ingest(inst *control.Instance, to Local, envelopeFrom string, 
 		}
 	}
 	if _, err := s.store.StoreMessage(inst.ID, msg, actions); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	rec, err := s.store.Get(inst.ID, id)
 	if err != nil || rec == nil {

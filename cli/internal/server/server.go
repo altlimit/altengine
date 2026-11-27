@@ -147,7 +147,7 @@ func New(opts Options) (*Server, error) {
 	mailSvc := mailbox.NewService(reg, mailbox.NewStore(opts.DataDir), mux, hub, mailbox.Options{
 		Domain: opts.MailDomain,
 		Base:   "http://" + opts.Addr,
-	}).WithQueues(taskSvc)
+	}).WithQueues(taskSvc).WithFiles(blobStore)
 	mailbox.NewHandler(reg, a, mailSvc).Register(mux)
 
 	// Tasks, after functions and channels: a queue delivers to a function (dispatched into this
@@ -190,6 +190,8 @@ func New(opts Options) (*Server, error) {
 	reg.OnDelete("search", srMgr.DropInstance)
 	reg.OnDelete("auth", idMgr.Drop)
 	reg.OnDelete("blob", blobStore.Drop)
+	// A blob instance a mailbox keeps its files in is refused, as hosted.
+	reg.OnBeforeDelete("blob", mailSvc.GuardBlobDelete)
 	reg.OnDelete("mailbox", mailSvc.Drop)
 	reg.OnDelete("tasks", taskSvc.Drop)
 

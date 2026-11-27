@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/altlimit/altengine/cli/internal/auth"
+	"github.com/altlimit/altengine/cli/internal/blob"
 	"github.com/altlimit/altengine/cli/internal/channel"
 	"github.com/altlimit/altengine/cli/internal/control"
 	"github.com/altlimit/altengine/cli/internal/mailbox"
@@ -27,7 +28,7 @@ func newMailboxServer(t *testing.T) (*http.ServeMux, *control.Registry, *mailbox
 	a := auth.NewStore(true)
 	mux := http.NewServeMux()
 	NewHandler(reg, a, memStore(), mux).Register(mux)
-	svc := mailbox.NewService(reg, mailbox.NewStore(""), mux, channel.NewHub(), mailbox.Options{})
+	svc := mailbox.NewService(reg, mailbox.NewStore(""), mux, channel.NewHub(), mailbox.Options{}).WithFiles(blob.NewStore(""))
 	mailbox.NewHandler(reg, a, svc).Register(mux)
 	return mux, reg, svc
 }
@@ -112,6 +113,11 @@ func TestMailboxBindingAttachmentsAndKeep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := reg.SaveConfig(in, map[string]any{"settings": map[string]any{"sendMode": "any"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Sent attachments are kept in the mailbox's file store.
+	reg.GetOrCreate("blob", "desk-files")
+	if _, err := svc.SetFileStore(in, "desk-files"); err != nil {
 		t.Fatal(err)
 	}
 	deployFn(t, mux, "mailer", `export default { async fetch(request, env) {

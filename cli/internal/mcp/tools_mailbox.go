@@ -215,7 +215,7 @@ func init() {
 			name:  "mailbox_info",
 			title: "Mailbox addresses and settings",
 			description: "The mailbox's main address and the pattern of every other one — <slug>.<anything>@<domain>, any name you make up — " +
-				"plus whether unregistered names are accepted, the send mode and how long mail is kept.",
+				"plus whether unregistered names are accepted, the send mode, how long mail is kept, and which blob instance (if any) keeps its attachments and raw messages.",
 			required:    []string{"instance"},
 			props:       map[string]any{"instance": instanceArg},
 			annotations: readOnly,
@@ -228,9 +228,28 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
+				// Files: kept only in a file store (a blob instance); with none, attachments are
+				// listed and not stored.
+				in, err := h.instanceOf("mailbox", argString(args, "instance"))
+				if err != nil {
+					return nil, err
+				}
+				adm, err := h.serveInternal(r, http.MethodGet, "/admin/mailbox/"+url.PathEscape(in.ID)+"/info", nil)
+				if err != nil {
+					return nil, err
+				}
+				var store any
+				if fs, ok := adm["file_store"].(map[string]any); ok {
+					store = fs["name"]
+				}
+				settings := map[string]any{}
+				if c, ok := adm["config"].(map[string]any); ok {
+					settings, _ = c["settings"].(map[string]any)
+				}
 				return map[string]any{
 					"instance": res["name"], "domain": res["domain"], "address": res["address"], "pattern": res["pattern"],
 					"acceptMode": res["acceptMode"], "sendMode": res["sendMode"], "retentionDays": res["retentionDays"],
+					"fileStore": store, "keepAttachments": settings["keepAttachments"], "keepRaw": settings["keepRaw"],
 					// Always null locally: the hosted send cut-off reacts to bounces and complaints,
 					// and no mail leaves the emulator.
 					"sendPaused": res["sendPaused"],
@@ -511,6 +530,43 @@ func init() {
 			},
 		},
 		tool{
+			name:  "mailbox_set_file_store",
+			title: "Choose where attachments are kept",
+			description: "Point the mailbox at a blob instance in this organization that keeps its attachments (and raw .eml copies when the mailbox's keepRaw setting is on), " +
+				"or at none with `blob: null`. Files are ordinary private objects there, billed at blob's rates and removed when their message expires. " +
+				"Only mail from now on is affected; files already kept stay where they are.",
+			required: []string{"instance", "blob"},
+			props: map[string]any{
+				"instance": instanceArg,
+				"blob":     map[string]any{"type": []string{"string", "null"}, "description": "Blob instance name, or null to keep no files."},
+			},
+			annotations: map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+			run: func(h *Handler, r *http.Request, args map[string]any) (any, error) {
+				in, err := h.instanceOf("mailbox", argString(args, "instance"))
+				if err != nil {
+					return nil, err
+				}
+				var target any
+				if b := argString(args, "blob"); b != "" {
+					bi, err := h.instanceOf("blob", b)
+					if err != nil {
+						return nil, err
+					}
+					target = bi.ID
+				}
+				res, err := h.serveInternal(r, http.MethodPut, "/admin/mailbox/"+url.PathEscape(in.ID)+"/file-store", map[string]any{"blob_instance_id": target})
+				if err != nil {
+					return nil, err
+				}
+				var store any
+				if fs, ok := res["file_store"].(map[string]any); ok {
+					store = fs["name"]
+				}
+				st := mailboxSettings(in)
+				return map[string]any{"instance": in.Name, "fileStore": store, "keepAttachments": st["keepAttachments"], "keepRaw": st["keepRaw"]}, nil
+			},
+		},
+		tool{
 			name:  "mailbox_reveal_webhook_secret",
 			title: "Reveal the webhook signing secret",
 			description: "Return the secret this mailbox signs its webhook route deliveries with, so a receiver can verify them. Each delivery carries " +
@@ -556,4 +612,13 @@ func init() {
 			},
 		},
 	)
+}
+
+// mailboxSettings is an instance's stored settings object (empty when there is none).
+func mailboxSettings(in interface{ Config() map[string]any }) map[string]any {
+	st, _ := in.Config()["settings"].(map[string]any)
+	if st == nil {
+		st = map[string]any{}
+	}
+	return st
 }

@@ -104,10 +104,12 @@ func origin(r *http.Request) string {
 
 func boolQuery(v string) bool { return v == "1" || v == "true" }
 
-// publicAttachment is an attachment as the API returns it: no storage key, whether it is stored.
+// publicAttachment is an attachment as the API returns it: no storage key, whether it is stored,
+// and its object id in the mailbox's file store, for a caller that would rather use blob.
 type publicAttachment struct {
 	Attachment
-	Stored bool `json:"stored"`
+	Stored bool    `json:"stored"`
+	BlobID *string `json:"blobId"`
 }
 
 // PublicMessage is a message as the API returns it: no storage keys.
@@ -121,6 +123,7 @@ type PublicMessage struct {
 	AuthResults   *string            `json:"authResults"`
 	Deliveries    []Delivery         `json:"deliveries"`
 	HasRaw        bool               `json:"hasRaw"`
+	RawBlobID     *string            `json:"rawBlobId"`
 	Attachments   []publicAttachment `json:"attachments"`
 }
 
@@ -129,13 +132,14 @@ func Public(m *Record) PublicMessage {
 	out := PublicMessage{
 		Summary: m.Summary, Text: m.Text, HTML: m.HTML, TextTruncated: m.TextTruncated, HTMLTruncated: m.HTMLTruncated,
 		References: m.References, AuthResults: m.AuthResults, Deliveries: m.Deliveries, HasRaw: m.RawKey != "",
+		RawBlobID:   BlobIDOf(m.RawKey),
 		Attachments: make([]publicAttachment, 0, len(m.Attachments)),
 	}
 	if out.Deliveries == nil {
 		out.Deliveries = []Delivery{}
 	}
 	for _, a := range m.Attachments {
-		out.Attachments = append(out.Attachments, publicAttachment{Attachment: a, Stored: a.Key != ""})
+		out.Attachments = append(out.Attachments, publicAttachment{Attachment: a, Stored: a.Key != "", BlobID: BlobIDOf(a.Key)})
 	}
 	return out
 }
@@ -231,7 +235,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 	out := map[string]any{"message": Public(m)}
 	if boolQuery(r.URL.Query().Get("raw")) {
 		if m.RawKey == "" {
-			return common.NotFound("the raw message was not kept (settings.keepRaw)")
+			return common.NotFound("the raw message was not kept — it needs a file store and settings.keepRaw")
 		}
 		out["rawUrl"] = h.svc.signedURL(origin(r), inst.ID, m.ID, "raw", downloadTTL)
 		out["expiresAt"] = time.Now().Add(downloadTTL).UnixMilli()
@@ -262,11 +266,10 @@ func (h *Handler) attachment(w http.ResponseWriter, r *http.Request) error {
 		return common.NotFound("attachment not found")
 	}
 	if a.Key == "" {
-		why := ""
 		if a.Rejected != nil {
-			why = " (" + *a.Rejected + ")"
+			return common.NotFound("attachment was not stored (" + *a.Rejected + ")")
 		}
-		return common.NotFound("attachment was not stored" + why)
+		return common.NotFound("attachment was not stored — that needs a file store and settings.keepAttachments")
 	}
 	common.WriteJSON(w, 200, map[string]any{
 		"url":         h.svc.signedURL(origin(r), inst.ID, m.ID, strconv.Itoa(a.Idx), downloadTTL),
@@ -639,6 +642,7 @@ func (h *Handler) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+a+"/addresses", common.Wrap(h.adminAddresses))
 	mux.HandleFunc("POST "+a+"/addresses", common.Wrap(h.adminPutAddress))
 	mux.HandleFunc("DELETE "+a+"/addresses/{local}", common.Wrap(h.adminDisableAddress))
+	mux.HandleFunc("PUT "+a+"/file-store", common.Wrap(h.adminSetFileStore))
 	mux.HandleFunc("POST "+a+"/webhook-secret/reveal", common.Wrap(h.adminRevealSecret))
 	mux.HandleFunc("POST "+a+"/webhook-secret/rotate", common.Wrap(h.adminRotateSecret))
 	mux.HandleFunc("GET /admin/mailbox-settings", common.Wrap(h.adminSettings))
@@ -670,10 +674,58 @@ func (h *Handler) adminInfo(w http.ResponseWriter, r *http.Request) error {
 	out["id"], out["name"], out["slug"] = inst.ID, inst.Name, nilIfEmpty(SlugOf(inst.Name))
 	out["config"] = ParseConfig(inst.Config())
 	out["message_count"], out["stored_bytes"] = n, b
+	out["file_store"] = fileStoreJSON(h.svc.FileStoreInstance(inst))
 	out["loopback"] = h.svc.Loopback()
 	out["org_sends_per_day"] = OrgSendsPerDay
 	out["send_paused"] = nil // never locally: see info
 	common.WriteJSON(w, 200, out)
+	return nil
+}
+
+func fileStoreJSON(b *control.Instance) any {
+	if b == nil {
+		return nil
+	}
+	return map[string]any{"id": b.ID, "name": b.Name}
+}
+
+// adminSetFileStore points the mailbox at a blob instance for its files, as hosted:
+// {"blob_instance_id": "<id or name>" | null} or {"create": true} for "<mailbox>-files".
+func (h *Handler) adminSetFileStore(w http.ResponseWriter, r *http.Request) error {
+	inst, err := h.adminInst(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		BlobInstanceID *string `json:"blob_instance_id"`
+		Create         bool    `json:"create"`
+	}
+	if err := common.ReadJSON(r, &body); err != nil {
+		return err
+	}
+	name := ""
+	switch {
+	case body.Create:
+		b, err := h.reg.Create("blob", inst.Name+"-files")
+		if err != nil {
+			return err
+		}
+		name = b.Name
+	case body.BlobInstanceID != nil && *body.BlobInstanceID != "":
+		b := h.reg.GetByID("blob", *body.BlobInstanceID)
+		if b == nil {
+			b = h.reg.Get("blob", *body.BlobInstanceID)
+		}
+		if b == nil {
+			return common.NotFound("blob instance not found")
+		}
+		name = b.Name
+	}
+	set, err := h.svc.SetFileStore(inst, name)
+	if err != nil {
+		return err
+	}
+	common.WriteJSON(w, 200, map[string]any{"file_store": fileStoreJSON(set)})
 	return nil
 }
 

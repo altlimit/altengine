@@ -25,8 +25,8 @@ import (
 // The store holds, per mailbox instance, every message it has received or sent, the addresses
 // that carry a setting, the day's counters, what each trigger did, and the instance's webhook
 // signing key — one SQLite database per instance, like the hosted per-instance store. The BYTES
-// (the raw .eml and every attachment) are files beside the database, or memory without a data
-// directory. Bodies are inline up to BodyMax each, as hosted.
+// (the raw .eml when kept, and every stored attachment) are objects in the mailbox's file store, a
+// blob instance (files.go). Bodies are inline up to BodyMax each, as hosted.
 
 const (
 	// BodyMax is the inline body cap per part, in UTF-16 code units as hosted.
@@ -267,6 +267,8 @@ type Store struct {
 	// counters serializes the read-then-write of a day counter. A single writer makes the cap a
 	// bound under concurrent deliveries, as the hosted single-threaded object does.
 	counters sync.Mutex
+	// files is the blob store file stores live in (files.go); nil keeps no files.
+	files BlobFiles
 }
 
 // NewStore opens the store. dir "" keeps everything in memory.
@@ -368,10 +370,17 @@ func (s *Store) PutBytes(instanceID, key string, b []byte) error {
 	return common.WriteFileAtomic(p, b, common.DataFilePerm)
 }
 
-// Bytes reads one object's bytes.
+// Bytes reads one object's bytes: from the file store for a `blob/…` key, else from beside the
+// database (a file written before file stores).
 func (s *Store) Bytes(instanceID, key string) ([]byte, bool) {
 	if key == "" {
 		return nil, false
+	}
+	if sid, id, ok := parseBlobKey(key); ok {
+		if s.files == nil {
+			return nil, false
+		}
+		return s.files.Bytes(sid, id)
 	}
 	if s.memory() {
 		s.mu.Lock()
@@ -784,7 +793,7 @@ func (s *Store) Remove(instanceID string, ids []string) (int, error) {
 			keys = append(keys, k.String)
 		}
 		rows.Close()
-		s.deleteBytes(instanceID, keys)
+		s.removeFiles(instanceID, keys)
 		for _, q := range []string{`DELETE FROM attachment WHERE message_id = ?`, `DELETE FROM delivery WHERE message_id = ?`, `DELETE FROM message WHERE id = ?`} {
 			if _, err := db.Exec(q, id); err != nil {
 				return removed, err

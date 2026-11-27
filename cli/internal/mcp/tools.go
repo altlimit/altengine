@@ -538,7 +538,9 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				h.reg.DeleteInstance(service, in.ID)
+				if _, err := h.reg.DeleteInstanceChecked(service, in.ID); err != nil {
+					return nil, err
+				}
 				return map[string]any{"service": service, "deleted": true, "id": in.ID, "name": in.Name}, nil
 			},
 		},

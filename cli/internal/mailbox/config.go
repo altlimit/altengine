@@ -37,7 +37,10 @@ type Settings struct {
 	RetentionDays   int64  `json:"retentionDays"`
 	SendMode        string `json:"sendMode"`     // off | reply | any
 	DailySendCap    *int64 `json:"dailySendCap"` // nil = only the org's cap
-	KeepRaw         bool   `json:"keepRaw"`
+	// KeepRaw keeps the .eml in the file store. Opt-in, and nothing without a file store.
+	KeepRaw bool `json:"keepRaw"`
+	// KeepAttachments keeps attachments in the file store; with none set they are listed only.
+	KeepAttachments bool `json:"keepAttachments"`
 }
 
 // RouteMatch: every given field must hold. Globs are case-insensitive, `*` and `?`.
@@ -84,7 +87,7 @@ func DefaultSettings() Settings {
 		InboundDailyCap: InboundDailyCeiling,
 		RetentionDays:   DefaultRetentionDays,
 		SendMode:        "reply",
-		KeepRaw:         true,
+		KeepAttachments: true,
 	}
 }
 
@@ -119,6 +122,7 @@ func settingsMap(s Settings) map[string]any {
 		"rateLimit": rl, "region": s.Region, "acceptMode": s.AcceptMode,
 		"inboundDailyCap": s.InboundDailyCap, "retentionDays": s.RetentionDays,
 		"sendMode": s.SendMode, "dailySendCap": cap, "keepRaw": s.KeepRaw,
+		"keepAttachments": s.KeepAttachments,
 	}
 }
 
@@ -183,7 +187,8 @@ func ParseConfig(raw map[string]any) Config {
 		if n, ok := intIn(o["dailySendCap"], 0, maxSafeInt); ok {
 			s.DailySendCap = &n
 		}
-		s.KeepRaw = o["keepRaw"] != false
+		s.KeepRaw = o["keepRaw"] == true
+		s.KeepAttachments = o["keepAttachments"] != false
 	}
 	routes, err := ValidateRoutes(raw["routes"])
 	if err != nil {
@@ -251,7 +256,13 @@ func validateSettings(input any) (Settings, error) {
 			return s, common.BadRequest("keepRaw must be a boolean")
 		}
 	}
-	s.KeepRaw = o["keepRaw"] != false
+	if v := o["keepAttachments"]; v != nil {
+		if _, ok := v.(bool); !ok {
+			return s, common.BadRequest("keepAttachments must be a boolean")
+		}
+	}
+	s.KeepRaw = o["keepRaw"] == true
+	s.KeepAttachments = o["keepAttachments"] != false
 	if v := o["rateLimit"]; v != nil {
 		n, ok := common.Int(v)
 		if !ok || n < 1 {

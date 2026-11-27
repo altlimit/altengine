@@ -5,12 +5,6 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
-### Emulator
-
-- Search refuses a put holding a document whose JSON is over 1 MiB, with `400
-  DOCUMENT_TOO_LARGE` naming the document's id and position, as hosted. Nothing in that
-  request is written.
-
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
@@ -45,6 +39,26 @@ SDK commit that a release will carry.
   `protocols`), not in the URL; a token response with only `ws_url` is still opened as before.
   An explicit `url` / `URL` option now sends the token as a subprotocol too. The token response
   types gain `ws_endpoint` and `protocols`; `ws_url` is deprecated.
+
+## v0.2.42 — 2026-11-27
+
+### Emulator
+
+- Mailbox keeps attachments and raw messages in a blob instance you choose, its **file store**,
+  as hosted. Set it in the console's mailbox Settings (or create `<mailbox>-files` there), with
+  `PUT /admin/mailbox/{id}/file-store`, or with the new MCP tool `mailbox_set_file_store`.
+  Each file is a private object in that blob instance, named `<mailbox>-<message>…`, and is
+  deleted when its message expires or the mailbox is deleted. The blob instance itself stays.
+  A blob instance a mailbox keeps its files in cannot be deleted.
+- With no file store, attachments are listed (name, type, size, `stored: false`) and not
+  stored, and no raw message is kept. A mailbox starts with none.
+- `keepRaw` is off by default. The new `keepAttachments` setting is on by default.
+- Messages give each stored file's `blobId` (`rawBlobId` for the raw message), so a function
+  can read it through `env.blob`. `mailbox_info` reports `fileStore`, `keepAttachments` and
+  `keepRaw`.
+- Search refuses a put holding a document whose JSON is over 1 MiB, with `400
+  DOCUMENT_TOO_LARGE` naming the document's id and position, as hosted. Nothing in that
+  request is written.
 
 ## v0.2.41 — 2026-11-27
 

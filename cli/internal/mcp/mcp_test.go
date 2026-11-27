@@ -129,6 +129,7 @@ var hostedTools = map[string][]string{
 	"mailbox_list_messages":         {"instance", "to", "direction", "unread", "limit", "cursor"},
 	"mailbox_reply":                 {"instance", "id", "from", "fromName", "to", "cc", "subject", "text", "html", "attachments"},
 	"mailbox_reveal_webhook_secret": {"instance"},
+	"mailbox_set_file_store":        {"instance", "blob"},
 	"mailbox_rotate_webhook_secret": {"instance", "confirm"},
 	"mailbox_send":                  {"instance", "from", "fromName", "to", "cc", "subject", "text", "html", "attachments"},
 	"mailbox_wait_for_message":      {"instance", "after", "to", "from", "subject", "timeoutSeconds", "extract"},
