@@ -82,6 +82,9 @@ func (s *Store) Put(indexName string, docs []Document) ([]string, error) {
 	if len(docs) > maxDocsPerBatch {
 		return nil, common.BadRequest(fmt.Sprintf("too many documents (max %d)", maxDocsPerBatch))
 	}
+	if err := checkDocSizes(docs); err != nil {
+		return nil, err
+	}
 	ix, err := s.ensureIndex(indexName)
 	if err != nil {
 		return nil, err
@@ -394,4 +397,21 @@ func (s *Store) DeleteDocs(indexName string, ids []string) (int, error) {
 		return 0, err
 	}
 	return total, nil
+}
+
+// checkDocSizes refuses the whole put when one document's JSON is over maxDocBytes,
+// naming it by id and position, as the hosted service does.
+func checkDocSizes(docs []Document) error {
+	for i, d := range docs {
+		b, err := json.Marshal(d)
+		if err != nil || len(b) <= maxDocBytes {
+			continue
+		}
+		which := fmt.Sprintf("document at position %d", i)
+		if d.ID != "" {
+			which = fmt.Sprintf("document '%s' (position %d)", d.ID, i)
+		}
+		return common.NewError(400, fmt.Sprintf("%s is %d bytes, over the %d-byte (1 MiB) per-document limit", which, len(b), maxDocBytes), "DOCUMENT_TOO_LARGE")
+	}
+	return nil
 }

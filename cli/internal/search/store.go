@@ -27,6 +27,7 @@ const (
 	maxDocsPerBatch = 200
 	maxIDsPerDelete = 200
 	maxAtomBytes    = 500
+	maxDocBytes     = 1 << 20 // one document's JSON (App Engine parity: 1 MB)
 	// rank default epoch: seconds since 2011-01-01Z.
 	rankEpoch = 1293840000
 )

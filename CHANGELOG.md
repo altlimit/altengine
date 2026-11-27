@@ -5,6 +5,12 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ## Unreleased
 
+### Emulator
+
+- Search refuses a put holding a document whose JSON is over 1 MiB, with `400
+  DOCUMENT_TOO_LARGE` naming the document's id and position, as hosted. Nothing in that
+  request is written.
+
 ### SDKs
 
 No SDK has been published to a package registry yet; these are the changes since the first
