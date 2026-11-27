@@ -23,6 +23,23 @@ async function inject(to: string, raw: string): Promise<void> {
   if (res.status !== 201) throw new Error(`inject: ${res.status} ${await res.text()}`);
 }
 
+/** Give the mailbox a file store (a new `<instance>-files` blob instance) and keep raw messages,
+ *  through the emulator's console routes — files are only kept in one, as hosted. */
+async function keepFiles(): Promise<void> {
+  await mb.info(); // the instance exists once it is first used
+  for (const [path, body] of [
+    [`/admin/mailbox/${instance}/file-store`, { create: true }],
+    [`/admin/mailbox/${instance}/config`, { config: { settings: { keepRaw: true } } }],
+  ] as const) {
+    const res = await fetch(`${baseUrl()}${path}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${apiKey()}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 200) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+  }
+}
+
 const mail = (subject: string) =>
   `From: Jane <jane@example.com>\r\nTo: x@example.com\r\nSubject: ${subject}\r\nMessage-ID: <${uniq("m")}@example.com>\r\n\r\nUse 482913 to sign in.\r\n`;
 
@@ -40,6 +57,7 @@ describe("the instance", () => {
 describe("receiving, replying and keeping", () => {
   it("waits for mail, reads it, answers it with an attachment, and keeps it", async () => {
     if (!isEmulator()) return;
+    await keepFiles();
     // Parked BEFORE the mail exists, as a caller handing out an address would.
     const waiting = mb.wait({ after: "now", to: "support", timeoutSeconds: 10 });
     await new Promise((r) => setTimeout(r, 200));
