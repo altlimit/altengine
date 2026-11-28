@@ -29,8 +29,8 @@ Everything is overridable, nothing is required:
 - `WithHTTPClient`, `WithTimeout`, `WithRetry` — transport tuning
 
 Retryable failures (429 with `Retry-After`, 502/503/504, network errors) are
-retried up to 3 times with jittered backoff — except transactions and
-publishes, which are never auto-retried. API failures are `*APIError` with
+retried up to 3 times with jittered backoff. Transactions, publishes and datastore puts
+that request any server-generated key are sent once. API failures are `*APIError` with
 `Code`, `Status`, `Details`, and `RetryAfter`; match with `errors.As`.
 
 ## Datastore
