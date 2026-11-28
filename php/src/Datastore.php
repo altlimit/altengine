@@ -37,10 +37,18 @@ class Datastore
      */
     public function put(string $collection, array $documents): array
     {
+        $allKeysProvided = true;
+        foreach ($documents as $document) {
+            if (!isset($document['key'])) {
+                $allKeysProvided = false;
+                break;
+            }
+        }
         $res = $this->http->request(
             'POST',
             "{$this->ns}/col/" . Http::seg($collection) . '/documents',
             body: ['documents' => $documents],
+            retry: $allKeysProvided,
         );
         return $res['keys'];
     }

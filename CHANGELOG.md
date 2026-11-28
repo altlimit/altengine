@@ -7,8 +7,8 @@ Changes that affect how the CLI, the emulator or an SDK is used. Releases are ta
 
 ### SDKs
 
-No SDK has been published to a package registry yet; these are the changes since the first
-SDK commit that a release will carry.
+- JS, Python and PHP skip automatic retries for datastore puts that contain a server-generated key.
+- PHP requires Guzzle 7.15.2 or later in the 7.x series.
 
 - Search sort by an atom field takes a string default: `default?: number | string` in JS, and
   `SortSpec.DefaultText` in Go (sent as `default`; set at most one of it and `Default`).

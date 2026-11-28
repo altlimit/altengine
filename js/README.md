@@ -5,12 +5,33 @@ managed **datastore**, **search**, realtime **channels**, **blob** storage,
 **containers**, **mailboxes** and **task queues** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
-**Not published to npm yet** — `npm i @altengine/sdk` 404s today. Use it from a clone of this
-repository until it is:
+Install a registry release with `npm install @altengine/sdk`. To install from source instead, run
 
 ```bash
 git clone https://github.com/altlimit/altengine
 cd altengine/js && npm install && npm run build
+```
+
+## Your first datastore write
+
+From a checkout, build the SDK as shown above and start the emulator with
+`altengine dev` in a second terminal. Run the example from the `js` directory:
+
+```bash
+ALTENGINE_URL=http://127.0.0.1:9191 ALTENGINE_API_KEY=dev ALTENGINE_DATASTORE=demo node examples/first-write.mjs
+```
+
+It prints `first-write Hello from AltEngine` after reading back the document.
+Rerunning it updates the same key in the `sdk-quickstart` namespace.
+
+To run against hosted AltEngine, create a datastore instance and grant a project
+API key read and write access to it. Set `ALTENGINE_DATASTORE` to the instance
+name and supply `ALTENGINE_API_KEY` through your server's secret configuration.
+Leave `ALTENGINE_URL` unset to use the production endpoint. From a server-side
+Node project with the release installed, run the same program:
+
+```bash
+node node_modules/@altengine/sdk/examples/first-write.mjs
 ```
 
 ## Setup
@@ -35,7 +56,7 @@ const local = new AltEngine({ dev: true, apiKey: "dev" });        // emulator
 ```
 
 Retryable failures (429 with `Retry-After`, 502/503/504, network errors) are retried
-up to 3 times with jittered backoff — except transactions and publishes, which are
+up to 3 times with jittered backoff — except transactions, publishes and datastore puts with server-generated keys, which are
 never auto-retried. Errors throw `AltEngineError` with `code`, `status`, `details`,
 and `retryAfter`.
 

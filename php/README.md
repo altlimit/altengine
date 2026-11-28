@@ -8,8 +8,7 @@ It covers those three services only, and for channels it mints tokens and publis
 no socket subscriber). Auth, blob, containers and automation have clients in the JS SDK; from
 PHP, call their REST API with the same API key.
 
-**Not published to Packagist yet** — `composer require altlimit/altengine` 404s today. Use it
-from a clone of this repository until it is:
+Install a registry release with `composer require altlimit/altengine`. To install from source instead, run
 
 ```bash
 git clone https://github.com/altlimit/altengine
@@ -36,7 +35,7 @@ Everything is overridable, nothing is required:
 Requests and responses are **wire-verbatim arrays** — what the REST API
 documents is exactly what you pass and get back. Retryable failures (429 with
 `Retry-After`, 502/503/504, network errors) are retried up to 3 times with
-jittered backoff — except transactions and publishes, which are never
+jittered backoff — except transactions, publishes and datastore puts with server-generated keys, which are never
 auto-retried. Errors throw `AltEngineError` with `errorCode`, `status`,
 `details`, and `retryAfter`.
 

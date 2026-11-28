@@ -15,7 +15,7 @@
     },
     "require": {
         "php": ">=8.1",
-        "guzzlehttp/guzzle": "^7.5",
+        "guzzlehttp/guzzle": "^7.15.2",
         "ext-json": "*"
     },
     "require-dev": {
@@ -30,6 +30,9 @@
         "psr-4": {
             "AltEngine\\Tests\\": "tests/"
         }
+    },
+    "archive": {
+        "exclude": ["/vendor", "/composer.lock", "/.phpunit.cache", "/.phpunit.result.cache"]
     },
     "scripts": {
         "test": "phpunit"

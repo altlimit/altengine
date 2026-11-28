@@ -9,10 +9,10 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`); deploys functions, sites and automation scripts | `alt install altlimit/altengine` |
 | [`docker/`](docker/) | The emulator as a container image, with docker compose samples | `docker pull ghcr.io/altlimit/altengine` |
-| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | from this repo — see below |
+| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | see SDK README |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
-| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | from this repo — see below |
-| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | from this repo — see below |
+| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | see SDK README |
+| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | see SDK README |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
 What each SDK covers today (✓ = a client for that service; functions and static sites are
@@ -32,9 +32,7 @@ deployed with the CLI and called over plain HTTP):
 
 For a service an SDK does not cover, call its REST API directly with the same API key.
 
-**The JavaScript, Python and PHP SDKs are not on npm, PyPI or Packagist yet** — `npm i
-@altengine/sdk`, `pip install altengine` and `composer require altlimit/altengine` all 404. Each
-SDK's README has the command that installs it from this repository instead.
+Each SDK's README includes its registry package name and source installation instructions.
 
 ## Quick start
 
@@ -55,7 +53,9 @@ what else is not emulated.
 The emulator is unauthenticated by design and binds localhost for that reason — see
 [SECURITY.md](SECURITY.md) before changing `--host`.
 
-Talk to it with the SDK (any non-empty API key works against the emulator):
+Follow [Your first datastore write](js/README.md#your-first-datastore-write) to write and read back a document locally and run the same program against a hosted instance.
+
+Talk to the emulator with the SDK (any non-empty API key works locally):
 
 ```ts
 import { AltEngine, f } from "@altengine/sdk";
@@ -175,6 +175,8 @@ and a model that has not read them will confidently invent Lucene or SQL instead
   prefix — and `go get github.com/altlimit/altengine/go@vX.Y.Z` resolves to it.
 - **JS SDK**: push a `js/vX.Y.Z` tag matching `js/package.json` to publish
   `@altengine/sdk` to npm.
+- **Python SDK**: push a `python/vX.Y.Z` tag matching `python/pyproject.toml` to publish to PyPI.
+- **PHP SDK**: push a `php/vX.Y.Z` tag to mirror the version to [altengine-php](https://github.com/altlimit/altengine-php) for Composer.
 
 ## Security
 

@@ -47,6 +47,7 @@ export class DatastoreClient {
   async put<T>(collection: string, documents: PutDocument<T>[]): Promise<{ keys: string[] }> {
     return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/documents`, {
       body: { documents },
+      retry: documents.every((doc) => doc.key != null) ? undefined : false,
     });
   }
 

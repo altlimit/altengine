@@ -7,8 +7,7 @@ Built on `httpx` (sync + async); the WebSocket subscriber uses `websockets`.
 It covers those three services only. Auth, blob, containers and automation have clients in the
 JS SDK; from Python, call their REST API with the same API key.
 
-**Not published to PyPI yet** — `pip install altengine` 404s today. Install it from this
-repository until it is:
+Install a registry release with `pip install altengine`. To install from source instead, run
 
 ```bash
 # HTTP clients
@@ -45,7 +44,7 @@ async with AsyncAltEngine(api_key="ae_...") as ae:
 Requests and responses are **wire-verbatim dicts** — what the REST API
 documents is exactly what you pass and get back. Retryable failures (429 with
 `Retry-After`, 502/503/504, network errors) are retried up to 3 times with
-jittered backoff — except transactions and publishes, which are never
+jittered backoff — except transactions, publishes and datastore puts with server-generated keys, which are never
 auto-retried. Errors raise `AltEngineError` with `code`, `status`, `details`,
 and `retry_after`.
 

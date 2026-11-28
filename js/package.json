@@ -1,6 +1,6 @@
 {
   "name": "@altengine/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official JavaScript/TypeScript SDK for altengine — datastore, search, realtime channels, end-user auth, blob storage, and containers.",
   "license": "MIT",
   "repository": {
@@ -59,7 +59,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "examples/first-write.mjs"
   ],
   "sideEffects": false,
   "engines": {

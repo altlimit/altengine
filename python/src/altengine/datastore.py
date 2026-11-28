@@ -33,8 +33,10 @@ class DatastoreClient:
     def put(self, collection: str, documents: Sequence[Document]) -> List[str]:
         """Upsert up to 500 documents (``{"key": ..., "data": {...}}``; omit
         ``key`` for auto-id). Returns their keys in order."""
+        docs = list(documents)
         res = self._http.request(
-            "POST", f"{self._ns}/col/{seg(collection)}/documents", body={"documents": list(documents)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents",
+            body={"documents": docs}, retry=all(doc.get("key") is not None for doc in docs),
         )
         return res["keys"]
 
@@ -138,8 +140,10 @@ class AsyncDatastoreClient:
         return AsyncDatastoreClient(self._http, self.instance, namespace)
 
     async def put(self, collection: str, documents: Sequence[Document]) -> List[str]:
+        docs = list(documents)
         res = await self._http.request(
-            "POST", f"{self._ns}/col/{seg(collection)}/documents", body={"documents": list(documents)}
+            "POST", f"{self._ns}/col/{seg(collection)}/documents",
+            body={"documents": docs}, retry=all(doc.get("key") is not None for doc in docs),
         )
         return res["keys"]
 

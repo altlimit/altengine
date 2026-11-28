@@ -1,9 +1,5 @@
-# Packagist can't point at a monorepo subfolder, so pushes to main that touch
-# php/ are subtree-split and mirrored to altlimit/altengine-php (the repo
-# Packagist watches). Tags php/vX.Y.Z are mirrored as plain vX.Y.Z.
-#
-# Requires the PHP_MIRROR_TOKEN secret: a fine-grained PAT with contents:write
-# on altlimit/altengine-php. The job no-ops (with a notice) until it's set.
+# Split php/ into the standalone Composer repository. Its write-enabled deploy
+# key is stored in PHP_MIRROR_DEPLOY_KEY on the source repository.
 name: Mirror PHP SDK
 
 on:
@@ -17,30 +13,29 @@ permissions:
 
 jobs:
   mirror:
-    name: Subtree split → altlimit/altengine-php
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Split and push
         env:
-          TOKEN: ${{ secrets.PHP_MIRROR_TOKEN }}
+          DEPLOY_KEY: ${{ secrets.PHP_MIRROR_DEPLOY_KEY }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::notice::PHP_MIRROR_TOKEN not set — skipping Packagist mirror"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          SPLIT_SHA="$(git subtree split --prefix=php HEAD)"
-          REMOTE="https://x-access-token:${TOKEN}@github.com/altlimit/altengine-php.git"
-          git push "$REMOTE" "$SPLIT_SHA:refs/heads/main" --force
+          set -eu
+          umask 077
+          key="$RUNNER_TEMP/php-mirror-key"
+          hosts="$RUNNER_TEMP/php-mirror-known-hosts"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$hosts"
+          export GIT_SSH_COMMAND="ssh -i '$key' -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$hosts'"
+          split=$(git subtree split --prefix=php HEAD)
           case "$GITHUB_REF" in
-            refs/tags/php/v*)
-              VERSION="${GITHUB_REF#refs/tags/php/}"
-              git tag -f "$VERSION" "$SPLIT_SHA"
-              git push "$REMOTE" "refs/tags/$VERSION" --force
-              ;;
+            refs/heads/main) dest=refs/heads/main ;;
+            refs/tags/php/v*) dest="refs/tags/${GITHUB_REF#refs/tags/php/}" ;;
+            *) exit 1 ;;
           esac
+          git push git@github.com:altlimit/altengine-php.git "$split:$dest"

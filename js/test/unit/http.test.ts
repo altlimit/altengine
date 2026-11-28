@@ -48,6 +48,16 @@ describe("transport", () => {
     expect(calls).toBe(2);
   });
 
+  it("retries datastore puts only when every key is supplied", async () => {
+    const fetchMock = vi.fn(async () => json(503, { error: { code: "UNAVAILABLE" } }));
+    const db = client(fetchMock, { maxAttempts: 2, baseDelayMs: 0 }).datastore("app");
+    await expect(db.put("todos", [{ key: 0, data: {} }, { data: {} }])).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockClear();
+    await expect(db.put("todos", [{ key: 0, data: {} }])).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does NOT retry transactions", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async () => {
