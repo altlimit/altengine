@@ -5,7 +5,13 @@ managed **datastore**, **search**, realtime **channels**, **blob** storage,
 **containers**, **mailboxes** and **task queues** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
-Install a registry release with `npm install @altengine/sdk`. To install from source instead, run
+Install the tagged GitHub release in your project:
+
+```bash
+npm install https://github.com/altlimit/altengine/releases/download/js%2Fv0.1.1/altengine-sdk-0.1.1.tgz
+```
+
+The registry package name is `@altengine/sdk`. To install from the development checkout, run
 
 ```bash
 git clone https://github.com/altlimit/altengine

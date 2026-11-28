@@ -7,7 +7,13 @@ Built on `httpx` (sync + async); the WebSocket subscriber uses `websockets`.
 It covers those three services only. Auth, blob, containers and automation have clients in the
 JS SDK; from Python, call their REST API with the same API key.
 
-Install a registry release with `pip install altengine`. To install from source instead, run
+Install the tagged GitHub release in your project:
+
+```bash
+pip install https://github.com/altlimit/altengine/releases/download/python%2Fv0.1.0/altengine-0.1.0-py3-none-any.whl
+```
+
+The registry package name is `altengine`. To install from the development checkout, run
 
 ```bash
 # HTTP clients

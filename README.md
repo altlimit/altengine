@@ -9,10 +9,10 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`); deploys functions, sites and automation scripts | `alt install altlimit/altengine` |
 | [`docker/`](docker/) | The emulator as a container image, with docker compose samples | `docker pull ghcr.io/altlimit/altengine` |
-| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | see SDK README |
+| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | [release](https://github.com/altlimit/altengine/releases/tag/js/v0.1.1) · [install instructions](js/README.md) |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
-| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | see SDK README |
-| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | see SDK README |
+| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | [release](https://github.com/altlimit/altengine/releases/tag/python/v0.1.0) · [install instructions](python/README.md) |
+| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | [release](https://github.com/altlimit/altengine/releases/tag/php/v0.1.0) · [install instructions](php/README.md) |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
 What each SDK covers today (✓ = a client for that service; functions and static sites are
