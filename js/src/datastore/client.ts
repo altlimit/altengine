@@ -45,6 +45,10 @@ export class DatastoreClient {
 
   /** Upsert up to 500 documents; returns their keys in order. */
   async put<T>(collection: string, documents: PutDocument<T>[]): Promise<{ keys: string[] }> {
+    // JSON serializes NaN and infinities as null, which would allocate an unintended key.
+    for (const { key } of documents) {
+      if (typeof key === "number" && !Number.isFinite(key)) throw new TypeError("document key must be a finite number or string");
+    }
     return this.http.request("POST", `${this.nsBase}/col/${seg(collection)}/documents`, {
       body: { documents },
       retry: documents.every((doc) => doc.key != null) ? undefined : false,

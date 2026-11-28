@@ -89,3 +89,43 @@ func TestRetriesAServiceUnavailable(t *testing.T) {
 		t.Fatalf("err %v after %d calls, want success on the 2nd", err, s.calls.Load())
 	}
 }
+
+func TestPutMultiAfterLostResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		keys      []any
+		wantCalls int32
+	}{
+		{"generated", []any{nil}, 1},
+		{"mixed", []any{"known", nil}, 1},
+		{"typed nil", []any{(*string)(nil)}, 1},
+		{"explicit", []any{0, "known"}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					conn.Close() // The write arrived, but its response never did.
+					return
+				}
+				_, _ = w.Write([]byte(`{"keys":["0","known"]}`))
+			}))
+			defer srv.Close()
+			c := altengine.New(altengine.WithBaseURL(srv.URL), altengine.WithAPIKey("k"),
+				altengine.WithRetry(altengine.Retry{MaxAttempts: 2, BaseDelay: time.Millisecond}))
+			var docs []altengine.PutDocument
+			for _, key := range tc.keys {
+				docs = append(docs, altengine.PutDocument{Key: key, Data: "value"})
+			}
+			_, err := c.Datastore("app").PutMulti(context.Background(), "things", docs)
+			if calls.Load() != tc.wantCalls || (err == nil) != (tc.wantCalls == 2) {
+				t.Fatalf("got %d calls, err %v", calls.Load(), err)
+			}
+		})
+	}
+}

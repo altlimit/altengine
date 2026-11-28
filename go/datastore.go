@@ -257,10 +257,22 @@ func (d *Datastore) PutMulti(ctx context.Context, collection string, documents [
 	var out struct {
 		Keys []string `json:"keys"`
 	}
+	// Only explicit scalar keys are safe to replay. A nil or custom JSON value
+	// can encode as null, asking the server to allocate a new key on every attempt.
+	noRetry := false
+	for _, doc := range documents {
+		switch doc.Key.(type) {
+		case string, json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			continue
+		}
+		noRetry = true
+		break
+	}
 	err := d.http.do(ctx, request{
-		method: "POST",
-		path:   d.nsBase + "/col/" + seg(collection) + "/documents",
-		body:   map[string]any{"documents": documents},
+		noRetry: noRetry,
+		method:  "POST",
+		path:    d.nsBase + "/col/" + seg(collection) + "/documents",
+		body:    map[string]any{"documents": documents},
 	}, &out)
 	return out.Keys, err
 }

@@ -58,6 +58,15 @@ describe("transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects non-finite keys before JSON can turn them into generated keys", async () => {
+    const send = vi.fn(async () => json(200, { keys: [] }));
+    const db = client(send).datastore("app");
+    for (const key of [NaN, Infinity, -Infinity]) {
+      await expect(db.put("todos", [{ key: "valid", data: {} }, { key, data: {} }])).rejects.toThrow("finite");
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("does NOT retry transactions", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async () => {

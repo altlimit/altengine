@@ -26,6 +26,7 @@ Shared payloads live in `fixtures/` so every language exercises identical data.
 ## Datastore
 
 - [ ] put → get roundtrip (auto-id and explicit key; numeric key ≡ decimal string)
+- [ ] After a successful write with a lost response, a batch containing any generated key is sent once; a batch with only explicit keys may retry. Include a mixed batch and numeric key zero.
 - [ ] bulk get (POST documents/get) returns found docs, omits missing on the wire; SDKs map to order-preserving nulls
 - [ ] delete → get returns null (single-doc get is SDK sugar over the batch
       endpoint — the wire has no single-document route)
