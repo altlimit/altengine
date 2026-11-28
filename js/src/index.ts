@@ -1,8 +1,8 @@
-/** @altengine/sdk — official JavaScript/TypeScript SDK for altengine
+/** @altenginenet/sdk — official JavaScript/TypeScript SDK for altengine
  * (https://www.altengine.net).
  *
  * ```ts
- * import { AltEngine, f } from "@altengine/sdk";
+ * import { AltEngine, f } from "@altenginenet/sdk";
  *
  * const ae = new AltEngine({ apiKey: "ae_..." });      // production api.altengine.net
  * // const ae = new AltEngine({ dev: true, apiKey: "dev" }); // local `altengine dev`
@@ -17,11 +17,11 @@
  * const { token, ws_endpoint, protocols } = await ch.createToken({ channels: ["room:1"] });
  * ```
  *
- * For the browser WebSocket subscriber, import from `@altengine/sdk/channel`.
- * For client-side sign-in with no backend of your own, see `@altengine/sdk/auth`:
+ * For the browser WebSocket subscriber, import from `@altenginenet/sdk/channel`.
+ * For client-side sign-in with no backend of your own, see `@altenginenet/sdk/auth`:
  *
  * ```ts
- * import { AuthClient } from "@altengine/sdk/auth";
+ * import { AuthClient } from "@altenginenet/sdk/auth";
  *
  * const auth = new AuthClient({ instance: "myapp-auth" });
  * await auth.signIn("alice@example.com", "hunter2");
@@ -97,7 +97,7 @@ export class AltEngine {
   /** Client for an auth instance — end-user sign-up/sign-in and identity tokens.
    * Shares this client's API origin but never its API key (auth endpoints are
    * public; the end user's own credentials are the trust boundary). For browser
-   * apps, import `AuthClient` from `@altengine/sdk/auth` directly instead. */
+   * apps, import `AuthClient` from `@altenginenet/sdk/auth` directly instead. */
   auth(instance: string): AuthClient {
     return new AuthClient({ instance, baseUrl: this.http.baseUrl });
   }
@@ -149,5 +149,5 @@ export * from "./tasks/types.js";
 export { ChannelClient } from "./channel/client.js";
 export * from "./channel/types.js";
 
-// Also exported from the browser-safe `@altengine/sdk/channel` subpath.
+// Also exported from the browser-safe `@altenginenet/sdk/channel` subpath.
 export { ChannelSocket, type ChannelSocketOptions, type SocketState, type SocketToken } from "./channel/socket.js";

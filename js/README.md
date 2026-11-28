@@ -1,17 +1,17 @@
-# @altengine/sdk
+# @altenginenet/sdk
 
 Official JavaScript/TypeScript SDK for [altengine](https://www.altengine.net) —
 managed **datastore**, **search**, realtime **channels**, **blob** storage,
 **containers**, **mailboxes** and **task queues** behind one API key. Zero dependencies, fetch-based, works in
 Node ≥20, browsers, and edge runtimes.
 
-Install the tagged GitHub release in your project:
+Install the SDK in your project:
 
 ```bash
-npm install https://github.com/altlimit/altengine/releases/download/js%2Fv0.1.1/altengine-sdk-0.1.1.tgz
+npm install @altenginenet/sdk
 ```
 
-The registry package name is `@altengine/sdk`. To install from the development checkout, run
+To install from the development checkout, run
 
 ```bash
 git clone https://github.com/altlimit/altengine
@@ -37,13 +37,13 @@ Leave `ALTENGINE_URL` unset to use the production endpoint. From a server-side
 Node project with the release installed, run the same program:
 
 ```bash
-node node_modules/@altengine/sdk/examples/first-write.mjs
+node node_modules/@altenginenet/sdk/examples/first-write.mjs
 ```
 
 ## Setup
 
 ```ts
-import { AltEngine } from "@altengine/sdk";
+import { AltEngine } from "@altenginenet/sdk";
 
 const ae = new AltEngine({ apiKey: "ae_..." });   // production: https://api.altengine.net
 ```
@@ -110,7 +110,7 @@ await db.indexes.create("todos", { fields: ["owner", "created:desc"] });
 Full-text search with typed fields, facets, snippets, sorting, and cursors.
 
 ```ts
-import { f, facet } from "@altengine/sdk";
+import { f, facet } from "@altenginenet/sdk";
 
 const idx = ae.search("myapp").index("products");
 
@@ -155,7 +155,7 @@ Browser side — hand the page a token from your backend and subscribe over
 WebSocket (auto-reconnect, resubscribe, keepalive):
 
 ```ts
-import { ChannelSocket } from "@altengine/sdk/channel";
+import { ChannelSocket } from "@altenginenet/sdk/channel";
 
 const sock = new ChannelSocket({
   getToken: () => fetch("/api/channel-token").then((r) => r.json()), // the token response: { token, ws_endpoint, protocols, … }
@@ -165,7 +165,7 @@ await sock.connect();
 await sock.subscribe(["room:2"]);
 ```
 
-The `@altengine/sdk/channel` subpath contains no API-key code — safe to bundle
+The `@altenginenet/sdk/channel` subpath contains no API-key code — safe to bundle
 into client apps.
 
 ## Automation
@@ -201,7 +201,7 @@ A run's completion webhook is signed with the instance's webhook signing secret
 (`whsec_…`, shown to an organization owner). Verify it against the raw body:
 
 ```ts
-import { verifyWebhook } from "@altengine/sdk";
+import { verifyWebhook } from "@altenginenet/sdk";
 
 const ok = await verifyWebhook({
   secret: process.env.ALTENGINE_WEBHOOK_SECRET!,
@@ -253,7 +253,7 @@ that received the bytes, so a `get` straight after an upload reads `ready`.
 A container job that was given a store reads it from its own environment:
 
 ```ts
-import { blobFromJobEnv } from "@altengine/sdk";
+import { blobFromJobEnv } from "@altenginenet/sdk";
 
 const out = blobFromJobEnv();          // AE_BLOB_URL + AE_BLOB_TOKEN
 await out.put("result.csv", csv, { contentType: "text/csv" });
@@ -387,8 +387,8 @@ rules on the auth instance decide what each user may read and write, which is wh
 makes it safe to hold that token in a browser.
 
 ```ts
-import { AuthClient } from "@altengine/sdk/auth";
-import { AltEngine } from "@altengine/sdk";
+import { AuthClient } from "@altenginenet/sdk/auth";
+import { AltEngine } from "@altenginenet/sdk";
 
 const auth = new AuthClient({ instance: "myapp-auth" });
 
@@ -413,7 +413,7 @@ one-time code), `passwordResetStart`/`passwordResetVerify`, `me`, `refresh`, and
 
 The session persists in `localStorage` by default; pass `storage: memoryStorage()`
 (or your own `TokenStorage`) to change that. Like the channel subpath,
-`@altengine/sdk/auth` contains no API-key code.
+`@altenginenet/sdk/auth` contains no API-key code.
 
 > An org API key is a **backend** credential — never ship one to a browser. That
 > is why passing `auth` takes precedence over `apiKey`.

@@ -56,7 +56,7 @@ function constantTimeEqual(a: string, b: string): boolean {
  * True when the webhook was signed with `secret` and its timestamp is within `toleranceMs` of now.
  *
  * ```ts
- * import { verifyWebhook } from "@altengine/sdk";
+ * import { verifyWebhook } from "@altenginenet/sdk";
  *
  * const ok = await verifyWebhook({
  *   secret: process.env.ALTENGINE_WEBHOOK_SECRET!,

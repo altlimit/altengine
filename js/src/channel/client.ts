@@ -3,7 +3,7 @@ import type { PresenceResponse, TokenRequest, TokenResponse } from "./types.js";
 
 /** Server-side client for one channel instance (API-key auth): mint subscriber
  * tokens, publish over HTTP, and read presence. For the browser/edge WebSocket
- * subscriber, use `ChannelSocket` from `@altengine/sdk/channel`. */
+ * subscriber, use `ChannelSocket` from `@altenginenet/sdk/channel`. */
 export class ChannelClient {
   readonly instance: string;
   private readonly http: Http;

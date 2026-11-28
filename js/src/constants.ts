@@ -1,7 +1,7 @@
 /** Side-effect-free constants and path helpers shared by every client.
  *
  * These live apart from `http.ts` on purpose: the browser-safe entry points
- * (`@altengine/sdk/auth`, `@altengine/sdk/channel`) need the base URLs and path
+ * (`@altenginenet/sdk/auth`, `@altenginenet/sdk/channel`) need the base URLs and path
  * encoders but must NOT pull in the API-key transport, which is a backend
  * credential path that has no business in a browser bundle. */
 

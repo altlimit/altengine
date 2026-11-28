@@ -6,11 +6,11 @@
  * decide what that user may read and write.
  *
  * Deliberately self-contained and API-key-free (like `ChannelSocket`) so it is
- * safe to ship to a browser — see the `@altengine/sdk/auth` subpath export.
+ * safe to ship to a browser — see the `@altenginenet/sdk/auth` subpath export.
  *
  * ```ts
- * import { AuthClient } from "@altengine/sdk/auth";
- * import { AltEngine } from "@altengine/sdk";
+ * import { AuthClient } from "@altenginenet/sdk/auth";
+ * import { AltEngine } from "@altenginenet/sdk";
  *
  * const auth = new AuthClient({ instance: "myapp-auth" });
  * await auth.signIn("alice@example.com", "hunter2");

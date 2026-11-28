@@ -7,7 +7,7 @@ namespace AltEngine;
 /**
  * Server-side client for one channel instance (API-key auth): mint subscriber
  * tokens, publish over HTTP, and read presence. Browser/edge WebSocket
- * subscribers should use `@altengine/sdk/channel` (JS) with a token minted
+ * subscribers should use `@altenginenet/sdk/channel` (JS) with a token minted
  * here — this SDK does not open WebSockets.
  */
 class Channel

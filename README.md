@@ -9,7 +9,7 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 |---|---|---|
 | [`cli/`](cli/) | Local emulator + admin console (`altengine dev`); deploys functions, sites and automation scripts | `alt install altlimit/altengine` |
 | [`docker/`](docker/) | The emulator as a container image, with docker compose samples | `docker pull ghcr.io/altlimit/altengine` |
-| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | [release](https://github.com/altlimit/altengine/releases/tag/js/v0.1.1) · [install instructions](js/README.md) |
+| [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | `npm install @altenginenet/sdk` · [install instructions](js/README.md) |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
 | [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | [release](https://github.com/altlimit/altengine/releases/tag/python/v0.1.0) · [install instructions](python/README.md) |
 | [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | `composer require altlimit/altengine` · [Packagist](https://packagist.org/packages/altlimit/altengine) |
@@ -58,7 +58,7 @@ Follow [Your first datastore write](js/README.md#your-first-datastore-write) to 
 Talk to the emulator with the SDK (any non-empty API key works locally):
 
 ```ts
-import { AltEngine, f } from "@altengine/sdk";
+import { AltEngine, f } from "@altenginenet/sdk";
 
 const ae = new AltEngine({ dev: true, apiKey: "dev" }); // local emulator
 
@@ -174,7 +174,7 @@ and a model that has not read them will confidently invent Lucene or SQL instead
 - **Go SDK**: push a `go/vX.Y.Z` tag — Go finds a module in a subdirectory by a tag with that
   prefix — and `go get github.com/altlimit/altengine/go@vX.Y.Z` resolves to it.
 - **JS SDK**: push a `js/vX.Y.Z` tag matching `js/package.json` to publish
-  `@altengine/sdk` to npm.
+  `@altenginenet/sdk` to npm.
 - **Python SDK**: push a `python/vX.Y.Z` tag matching `python/pyproject.toml` to publish to PyPI.
 - **PHP SDK**: push a `php/vX.Y.Z` tag to mirror the version to [altengine-php](https://github.com/altlimit/altengine-php) for Composer.
 

@@ -1,4 +1,4 @@
-import { AltEngine } from "@altengine/sdk";
+import { AltEngine } from "@altenginenet/sdk";
 
 const instance = process.env.ALTENGINE_DATASTORE;
 if (!instance) throw new Error("Set ALTENGINE_DATASTORE to your datastore instance name.");

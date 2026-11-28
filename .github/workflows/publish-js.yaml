@@ -1,4 +1,4 @@
-# Publish @altengine/sdk to npm when a js/vX.Y.Z tag is pushed. The tag must match
+# Publish @altenginenet/sdk to npm when a js/vX.Y.Z tag is pushed. The tag must match
 # js/package.json's version. Uses npm provenance (OIDC) — requires the package to
 # allow publishing from this repo/workflow on npmjs.com.
 name: Publish JS SDK
