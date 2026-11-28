@@ -11,7 +11,7 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 | [`docker/`](docker/) | The emulator as a container image, with docker compose samples | `docker pull ghcr.io/altlimit/altengine` |
 | [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | `npm install @altenginenet/sdk` · [install instructions](js/README.md) |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
-| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | [release](https://github.com/altlimit/altengine/releases/tag/python/v0.1.0) · [install instructions](python/README.md) |
+| [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | `pip install altengine` · [PyPI](https://pypi.org/project/altengine/) |
 | [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | `composer require altlimit/altengine` · [Packagist](https://packagist.org/packages/altlimit/altengine) |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
