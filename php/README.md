@@ -8,14 +8,13 @@ It covers those three services only, and for channels it mints tokens and publis
 no socket subscriber). Auth, blob, containers and automation have clients in the JS SDK; from
 PHP, call their REST API with the same API key.
 
-Install the tagged GitHub release in your project:
+Install [altlimit/altengine from Packagist](https://packagist.org/packages/altlimit/altengine):
 
 ```bash
-composer config repositories.altengine vcs https://github.com/altlimit/altengine-php
-composer require altlimit/altengine:0.1.0
+composer require altlimit/altengine:^0.1.0
 ```
 
-The registry package name is `altlimit/altengine`. To install from the development checkout, run
+To install from the development checkout, run
 
 ```bash
 git clone https://github.com/altlimit/altengine

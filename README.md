@@ -12,7 +12,7 @@ Developer tooling and SDKs for [altengine](https://console.altengine.net) — ma
 | [`js/`](js/) | JavaScript/TypeScript SDK (Node, browsers, edge) | [release](https://github.com/altlimit/altengine/releases/tag/js/v0.1.1) · [install instructions](js/README.md) |
 | [`go/`](go/) | Go SDK (stdlib HTTP + `coder/websocket`) | `go get github.com/altlimit/altengine/go` |
 | [`python/`](python/) | Python SDK (sync + async, `httpx`/`websockets`) | [release](https://github.com/altlimit/altengine/releases/tag/python/v0.1.0) · [install instructions](python/README.md) |
-| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | [release](https://github.com/altlimit/altengine/releases/tag/php/v0.1.0) · [install instructions](php/README.md) |
+| [`php/`](php/) | PHP SDK (Guzzle; channel tokens/publish, no WS) | `composer require altlimit/altengine` · [Packagist](https://packagist.org/packages/altlimit/altengine) |
 | [`conformance/`](conformance/) | Cross-SDK conformance scenarios + shared fixtures | — |
 
 What each SDK covers today (✓ = a client for that service; functions and static sites are
